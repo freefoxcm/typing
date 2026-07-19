@@ -1,0 +1,5 @@
+services:
+  kidtype:
+    build:
+      dockerfile: Dockerfile.local
+

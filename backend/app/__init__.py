@@ -1,0 +1,2 @@
+"""KidType backend package."""
+
