@@ -90,7 +90,7 @@ export function PracticePage() {
     }
   }, [advancePrompt, current])
 
-  const onKeyDown = (event: React.KeyboardEvent) => {
+  const onKeyDown = (event: KeyboardEvent) => {
     if (!current) return
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -99,7 +99,7 @@ export function PracticePage() {
     }
     if (runState === 'paused' || runState === 'saving' || runState === 'complete') return
     const expected = current.content[charIndex]
-    const actual = keyToCharacter(event.nativeEvent, expected)
+    const actual = keyToCharacter(event, expected)
     if (actual === null) return
     event.preventDefault()
     const now = performance.now()
@@ -136,6 +136,20 @@ export function PracticePage() {
     }
   }
 
+  useEffect(() => {
+    if (runState !== 'ready' || !current) return
+    const captureFirstKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || (event.target instanceof Node && surfaceRef.current?.contains(event.target))) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest('button, a, input, select, textarea, [contenteditable="true"]')) return
+      if (keyToCharacter(event, current.content[charIndex]) === null) return
+      onKeyDown(event)
+      surfaceRef.current?.focus()
+    }
+    window.addEventListener('keydown', captureFirstKey)
+    return () => window.removeEventListener('keydown', captureFirstKey)
+  }, [charIndex, current, errors, runState])
+
   if (!lesson || !current) return <div className="page"><p className={message ? 'notice error' : 'notice'}>{message || '正在准备练习…'}</p></div>
   const expected = current.content[charIndex] ?? ''
   const showHints = hints && runState !== 'complete'
@@ -162,11 +176,11 @@ export function PracticePage() {
             ref={surfaceRef}
             className={`typing-surface ${flash ? 'wrong' : ''} ${runState === 'paused' ? 'paused' : ''}`}
             tabIndex={0}
-            onKeyDown={onKeyDown}
+            onKeyDown={(event) => onKeyDown(event.nativeEvent)}
             aria-label="打字练习区域"
           >
             <pre className="prompt-text"><span className="typed">{current.content.slice(0, charIndex)}</span>{expected && <span className="current-char">{expected}</span>}<span>{current.content.slice(charIndex + 1)}</span></pre>
-            {runState === 'ready' && <div className="surface-message">点击这里，然后开始打字</div>}
+            {runState === 'ready' && <div className="surface-message">直接按第一个字符开始计时</div>}
             {runState === 'paused' && <div className="surface-message"><Pause /> 已暂停，按 Esc 或点击“继续”</div>}
             {runState === 'saving' && <div className="surface-message">正在保存成绩…</div>}
             {runState === 'complete' && result && <div className="result-pop"><strong>完成得很棒！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><button onClick={advancePrompt}>下一条</button></div>}
