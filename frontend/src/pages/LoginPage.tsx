@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { KeyRound, Keyboard, ShieldCheck, UserRound } from 'lucide-react'
+import { Eye, KeyRound, Keyboard, ShieldCheck, UserRound } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api, jsonBody } from '../api'
 import { SiteFooter } from '../components/SiteFooter'
@@ -10,6 +10,7 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
   const [mode, setMode] = useState<'child' | 'admin'>('child')
   const [name, setName] = useState('')
   const [pin, setPin] = useState('')
+  const [showPin, setShowPin] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -19,6 +20,7 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
     setMode(nextMode)
     setName('')
     setPin('')
+    setShowPin(false)
     setUsername('')
     setPassword('')
     setError('')
@@ -59,7 +61,7 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
           {mode === 'child' ? (
             <>
               <label>学生姓名<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" placeholder="请输入姓名" required /></label>
-              <label>输入 PIN<div className="input-icon"><KeyRound /><input inputMode="numeric" pattern="\d{4,6}" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="off" placeholder="4–6 位数字" required /></div></label>
+              <label>输入 PIN<div className="input-icon"><KeyRound /><input type={showPin ? 'text' : 'password'} inputMode="numeric" pattern="\d{4,6}" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="off" placeholder="4–6 位数字" required /><button className="pin-visibility-toggle" type="button" aria-label="按住显示 PIN" aria-pressed={showPin} onPointerDown={() => setShowPin(true)} onPointerUp={() => setShowPin(false)} onPointerLeave={() => setShowPin(false)} onPointerCancel={() => setShowPin(false)} onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') setShowPin(true) }} onKeyUp={() => setShowPin(false)} onBlur={() => setShowPin(false)}><Eye aria-hidden="true" /></button></div></label>
             </>
           ) : (
             <>
