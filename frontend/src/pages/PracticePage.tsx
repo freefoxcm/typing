@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Eye, EyeOff, Pause, Play, RotateCcw } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { api, jsonBody } from '../api'
+import { FingerGuide } from '../components/FingerGuide'
 import { VirtualKeyboard } from '../components/VirtualKeyboard'
 import { calculateStats, errorsToList, keyToCharacter, shuffleBag } from '../typing'
 import type { AttemptResult, LessonDetail, Prompt } from '../types'
@@ -137,6 +138,7 @@ export function PracticePage() {
 
   if (!lesson || !current) return <div className="page"><p className={message ? 'notice error' : 'notice'}>{message || '正在准备练习…'}</p></div>
   const expected = current.content[charIndex] ?? ''
+  const showHints = hints && runState !== 'complete'
   return (
     <div className="practice-page">
       <header className="practice-header">
@@ -148,30 +150,34 @@ export function PracticePage() {
           <button onClick={resetPrompt} className="ghost"><RotateCcw /> 重练</button>
         </div>
       </header>
-      <div className="metric-strip">
-        <div><span>速度</span><strong>{liveStats.cpm}</strong><small>字符/分钟</small></div>
-        <div><span>准确率</span><strong>{liveStats.accuracy.toFixed(1)}%</strong></div>
-        <div><span>错误</span><strong className={totalErrors ? 'danger' : ''}>{totalErrors}</strong><small>次</small></div>
-        <div><span>时间</span><strong>{(elapsed / 1000).toFixed(1)}</strong><small>秒</small></div>
-      </div>
-      <div
-        ref={surfaceRef}
-        className={`typing-surface ${flash ? 'wrong' : ''} ${runState === 'paused' ? 'paused' : ''}`}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        aria-label="打字练习区域"
-      >
-        <pre className="prompt-text"><span className="typed">{current.content.slice(0, charIndex)}</span>{expected && <span className="current-char">{expected}</span>}<span>{current.content.slice(charIndex + 1)}</span></pre>
-        {runState === 'ready' && <div className="surface-message">点击这里，然后开始打字</div>}
-        {runState === 'paused' && <div className="surface-message"><Pause /> 已暂停，按 Esc 或点击“继续”</div>}
-        {runState === 'saving' && <div className="surface-message">正在保存成绩…</div>}
-        {runState === 'complete' && result && <div className="result-pop"><strong>完成得很棒！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><button onClick={advancePrompt}>下一条</button></div>}
+      <div className={`practice-stage ${showHints ? 'with-finger-guide' : ''}`}>
+        <div className="practice-main">
+          <div className="metric-strip">
+            <div><span>速度</span><strong>{liveStats.cpm}</strong><small>字符/分钟</small></div>
+            <div><span>准确率</span><strong>{liveStats.accuracy.toFixed(1)}%</strong></div>
+            <div><span>错误</span><strong className={totalErrors ? 'danger' : ''}>{totalErrors}</strong><small>次</small></div>
+            <div><span>时间</span><strong>{(elapsed / 1000).toFixed(1)}</strong><small>秒</small></div>
+          </div>
+          <div
+            ref={surfaceRef}
+            className={`typing-surface ${flash ? 'wrong' : ''} ${runState === 'paused' ? 'paused' : ''}`}
+            tabIndex={0}
+            onKeyDown={onKeyDown}
+            aria-label="打字练习区域"
+          >
+            <pre className="prompt-text"><span className="typed">{current.content.slice(0, charIndex)}</span>{expected && <span className="current-char">{expected}</span>}<span>{current.content.slice(charIndex + 1)}</span></pre>
+            {runState === 'ready' && <div className="surface-message">点击这里，然后开始打字</div>}
+            {runState === 'paused' && <div className="surface-message"><Pause /> 已暂停，按 Esc 或点击“继续”</div>}
+            {runState === 'saving' && <div className="surface-message">正在保存成绩…</div>}
+            {runState === 'complete' && result && <div className="result-pop"><strong>完成得很棒！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><button onClick={advancePrompt}>下一条</button></div>}
+          </div>
+        </div>
+        {showHints && <FingerGuide expected={expected} />}
       </div>
       {message && <p className="notice error">{message}</p>}
       <div className="bag-progress"><span>本轮进度 {bagIndex + 1} / {bag.length}</span><div><i style={{ width: `${((bagIndex + 1) / bag.length) * 100}%` }} /></div></div>
-      <VirtualKeyboard expected={expected} visible={hints && runState !== 'complete'} />
+      <VirtualKeyboard expected={expected} visible={showHints} />
       <p className="keyboard-tip">提示：按 Esc 可暂停。错误按键不会前进，找到正确键后继续。</p>
     </div>
   )
 }
-
