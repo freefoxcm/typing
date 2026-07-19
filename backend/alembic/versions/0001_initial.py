@@ -1,4 +1,4 @@
-"""Initial KidType schema."""
+"""Initial application schema."""
 from alembic import op
 import sqlalchemy as sa
 
@@ -38,4 +38,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in ["attempt_errors", "practice_attempts", "prompts", "lessons", "courses", "auth_sessions", "child_profiles", "admins"]:
         op.drop_table(table)
-

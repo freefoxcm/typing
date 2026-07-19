@@ -1,2 +1,1 @@
-"""KidType backend package."""
-
+"""码力全开 backend package."""

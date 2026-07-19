@@ -2,6 +2,7 @@ import { Keyboard, LogOut, Shield } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { Me } from '../types'
+import { SiteFooter } from './SiteFooter'
 
 export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   const navigate = useNavigate()
@@ -13,7 +14,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <Link className="brand" to={me.role === 'admin' ? '/admin' : '/'}><Keyboard /> 小小键盘手</Link>
+        <Link className="brand" to={me.role === 'admin' ? '/admin' : '/'}><Keyboard /> 码力全开</Link>
         <nav>
           {me.role === 'admin' && <Link to="/admin"><Shield size={17} /> 管理后台</Link>}
           <span className="user-chip">{me.name}</span>
@@ -21,7 +22,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
         </nav>
       </header>
       <main>{children}</main>
+      <SiteFooter />
     </div>
   )
 }
-
