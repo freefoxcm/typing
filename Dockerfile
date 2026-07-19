@@ -1,7 +1,9 @@
 FROM node:22-alpine AS frontend-build
+ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com/
+ENV NODE_OPTIONS=--max-old-space-size=4096
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
