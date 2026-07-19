@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "courses": [
+    {
+      "title": "Python 初级练习",
+      "description": "从基本输出开始，逐步练习变量、判断、循环、容器和函数。",
+      "sort_order": 0,
+      "active": true,
+      "lessons": [
+        {
+          "title": "01 基本输出",
+          "description": "熟悉 print、引号、数字和简单表达式。",
+          "sort_order": 0,
+          "active": true,
+          "prompts": [
+            {"content": "print(\"Hello, Python!\")", "sort_order": 0, "active": true},
+            {"content": "print('Welcome to coding!')", "sort_order": 1, "active": true},
+            {"content": "print(2 + 3)", "sort_order": 2, "active": true},
+            {"content": "print(10 - 4)", "sort_order": 3, "active": true},
+            {"content": "print(6 * 7)", "sort_order": 4, "active": true},
+            {"content": "print(20 / 5)", "sort_order": 5, "active": true},
+            {"content": "print(17 // 3)", "sort_order": 6, "active": true},
+            {"content": "print(2 ** 8)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "02 变量与计算",
+          "description": "练习变量赋值、算术运算和交换变量。",
+          "sort_order": 1,
+          "active": true,
+          "prompts": [
+            {"content": "name = \"Alice\"\nprint(name)", "sort_order": 0, "active": true},
+            {"content": "age = 10\nprint(age)", "sort_order": 1, "active": true},
+            {"content": "width = 8\nheight = 5\narea = width * height\nprint(area)", "sort_order": 2, "active": true},
+            {"content": "price = 12.5\ncount = 4\ntotal = price * count\nprint(total)", "sort_order": 3, "active": true},
+            {"content": "seconds = 125\nminutes = seconds // 60\nrest = seconds % 60\nprint(minutes, rest)", "sort_order": 4, "active": true},
+            {"content": "celsius = 25\nfahrenheit = celsius * 9 / 5 + 32\nprint(fahrenheit)", "sort_order": 5, "active": true},
+            {"content": "a = 3\nb = 7\na, b = b, a\nprint(a, b)", "sort_order": 6, "active": true},
+            {"content": "score = 80\nscore += 5\nprint(score)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "03 字符串",
+          "description": "练习字符串拼接、索引、切片和常用方法。",
+          "sort_order": 2,
+          "active": true,
+          "prompts": [
+            {"content": "first = \"Hello\"\nsecond = \"World\"\nprint(first + \" \" + second)", "sort_order": 0, "active": true},
+            {"content": "word = \"python\"\nprint(word[0])\nprint(word[-1])", "sort_order": 1, "active": true},
+            {"content": "text = \"abcdef\"\nprint(text[1:4])", "sort_order": 2, "active": true},
+            {"content": "message = \"hello\"\nprint(message.upper())", "sort_order": 3, "active": true},
+            {"content": "name = \"  Bob  \"\nprint(name.strip())", "sort_order": 4, "active": true},
+            {"content": "sentence = \"I like cats\"\nprint(sentence.replace(\"cats\", \"dogs\"))", "sort_order": 5, "active": true},
+            {"content": "colors = \"red,green,blue\"\nprint(colors.split(\",\"))", "sort_order": 6, "active": true},
+            {"content": "name = \"Mia\"\nage = 9\nprint(f\"{name} is {age} years old.\")", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "04 输入与类型转换",
+          "description": "练习 input、int、float 和简单的交互程序。",
+          "sort_order": 3,
+          "active": true,
+          "prompts": [
+            {"content": "name = input(\"Your name: \")\nprint(\"Hello,\", name)", "sort_order": 0, "active": true},
+            {"content": "age = int(input(\"Your age: \"))\nprint(age + 1)", "sort_order": 1, "active": true},
+            {"content": "a = int(input(\"First number: \"))\nb = int(input(\"Second number: \"))\nprint(a + b)", "sort_order": 2, "active": true},
+            {"content": "length = float(input(\"Length: \"))\nwidth = float(input(\"Width: \"))\nprint(length * width)", "sort_order": 3, "active": true},
+            {"content": "minutes = int(input(\"Minutes: \"))\nprint(minutes * 60)", "sort_order": 4, "active": true},
+            {"content": "birth_year = int(input(\"Birth year: \"))\nprint(2026 - birth_year)", "sort_order": 5, "active": true},
+            {"content": "text = input(\"Say something: \")\nprint(len(text))", "sort_order": 6, "active": true},
+            {"content": "word = input(\"Word: \")\nprint(word[::-1])", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "05 条件判断",
+          "description": "练习比较运算、if、elif、else 和逻辑运算。",
+          "sort_order": 4,
+          "active": true,
+          "prompts": [
+            {"content": "number = 8\nif number > 0:\n\tprint(\"positive\")", "sort_order": 0, "active": true},
+            {"content": "number = 7\nif number % 2 == 0:\n\tprint(\"even\")\nelse:\n\tprint(\"odd\")", "sort_order": 1, "active": true},
+            {"content": "age = 16\nif age >= 18:\n\tprint(\"adult\")\nelse:\n\tprint(\"minor\")", "sort_order": 2, "active": true},
+            {"content": "score = 85\nif score >= 90:\n\tprint(\"A\")\nelif score >= 80:\n\tprint(\"B\")\nelse:\n\tprint(\"C\")", "sort_order": 3, "active": true},
+            {"content": "a = 12\nb = 9\nif a > b:\n\tprint(a)\nelse:\n\tprint(b)", "sort_order": 4, "active": true},
+            {"content": "username = \"guest\"\nif username == \"admin\":\n\tprint(\"Welcome\")\nelse:\n\tprint(\"Access denied\")", "sort_order": 5, "active": true},
+            {"content": "temperature = 22\nif temperature >= 18 and temperature <= 26:\n\tprint(\"comfortable\")", "sort_order": 6, "active": true},
+            {"content": "day = \"Sunday\"\nif day == \"Saturday\" or day == \"Sunday\":\n\tprint(\"weekend\")", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "06 for 循环",
+          "description": "练习 range、字符串遍历、累加和嵌套循环。",
+          "sort_order": 5,
+          "active": true,
+          "prompts": [
+            {"content": "for i in range(5):\n\tprint(i)", "sort_order": 0, "active": true},
+            {"content": "for i in range(1, 6):\n\tprint(i)", "sort_order": 1, "active": true},
+            {"content": "for i in range(2, 11, 2):\n\tprint(i)", "sort_order": 2, "active": true},
+            {"content": "for letter in \"Python\":\n\tprint(letter)", "sort_order": 3, "active": true},
+            {"content": "total = 0\nfor number in range(1, 11):\n\ttotal += number\nprint(total)", "sort_order": 4, "active": true},
+            {"content": "for i in range(5, 0, -1):\n\tprint(i)\nprint(\"Go!\")", "sort_order": 5, "active": true},
+            {"content": "number = 3\nfor i in range(1, 10):\n\tprint(number, \"x\", i, \"=\", number * i)", "sort_order": 6, "active": true},
+            {"content": "for row in range(3):\n\tfor col in range(4):\n\t\tprint(row, col)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "07 while 循环",
+          "description": "练习计数、条件控制、break 和 continue。",
+          "sort_order": 6,
+          "active": true,
+          "prompts": [
+            {"content": "count = 1\nwhile count <= 5:\n\tprint(count)\n\tcount += 1", "sort_order": 0, "active": true},
+            {"content": "count = 5\nwhile count > 0:\n\tprint(count)\n\tcount -= 1", "sort_order": 1, "active": true},
+            {"content": "number = 1\nwhile number < 100:\n\tnumber *= 2\nprint(number)", "sort_order": 2, "active": true},
+            {"content": "total = 0\nnumber = 1\nwhile number <= 10:\n\ttotal += number\n\tnumber += 1\nprint(total)", "sort_order": 3, "active": true},
+            {"content": "while True:\n\tword = input(\"Type quit: \")\n\tif word == \"quit\":\n\t\tbreak", "sort_order": 4, "active": true},
+            {"content": "number = 0\nwhile number < 10:\n\tnumber += 1\n\tif number % 2 == 0:\n\t\tcontinue\n\tprint(number)", "sort_order": 5, "active": true},
+            {"content": "password = \"\"\nwhile password != \"python\":\n\tpassword = input(\"Password: \")\nprint(\"Correct!\")", "sort_order": 6, "active": true},
+            {"content": "value = 81\nsteps = 0\nwhile value > 1:\n\tvalue //= 3\n\tsteps += 1\nprint(steps)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "08 列表与元组",
+          "description": "练习创建、读取、修改、遍历和统计序列。",
+          "sort_order": 7,
+          "active": true,
+          "prompts": [
+            {"content": "colors = [\"red\", \"green\", \"blue\"]\nprint(colors)", "sort_order": 0, "active": true},
+            {"content": "fruits = [\"apple\", \"banana\", \"orange\"]\nprint(fruits[0])", "sort_order": 1, "active": true},
+            {"content": "numbers = [1, 2, 3]\nnumbers.append(4)\nprint(numbers)", "sort_order": 2, "active": true},
+            {"content": "animals = [\"cat\", \"dog\", \"bird\"]\nanimals[1] = \"fox\"\nprint(animals)", "sort_order": 3, "active": true},
+            {"content": "numbers = [5, 2, 8, 1]\nnumbers.sort()\nprint(numbers)", "sort_order": 4, "active": true},
+            {"content": "scores = [80, 95, 72, 88]\nprint(sum(scores))\nprint(max(scores))", "sort_order": 5, "active": true},
+            {"content": "names = [\"Amy\", \"Ben\", \"Cara\"]\nfor name in names:\n\tprint(\"Hello,\", name)", "sort_order": 6, "active": true},
+            {"content": "point = (3, 5)\nx, y = point\nprint(x + y)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "09 字典与集合",
+          "description": "练习键值对、字典遍历和集合去重。",
+          "sort_order": 8,
+          "active": true,
+          "prompts": [
+            {"content": "person = {\"name\": \"Alice\", \"age\": 10}\nprint(person)", "sort_order": 0, "active": true},
+            {"content": "student = {\"name\": \"Leo\", \"score\": 92}\nprint(student[\"score\"])", "sort_order": 1, "active": true},
+            {"content": "car = {\"brand\": \"Ford\"}\ncar[\"year\"] = 2024\nprint(car)", "sort_order": 2, "active": true},
+            {"content": "prices = {\"apple\": 3, \"banana\": 2}\nprint(prices.get(\"orange\", 0))", "sort_order": 3, "active": true},
+            {"content": "scores = {\"Amy\": 90, \"Ben\": 85}\nfor name, score in scores.items():\n\tprint(name, score)", "sort_order": 4, "active": true},
+            {"content": "letters = {\"a\", \"b\", \"c\"}\nletters.add(\"d\")\nprint(letters)", "sort_order": 5, "active": true},
+            {"content": "numbers = [1, 2, 2, 3, 3, 3]\nunique = set(numbers)\nprint(unique)", "sort_order": 6, "active": true},
+            {"content": "a = {1, 2, 3}\nb = {3, 4, 5}\nprint(a & b)\nprint(a | b)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "10 函数入门",
+          "description": "练习定义函数、参数、返回值和默认参数。",
+          "sort_order": 9,
+          "active": true,
+          "prompts": [
+            {"content": "def say_hello():\n\tprint(\"Hello!\")\n\nsay_hello()", "sort_order": 0, "active": true},
+            {"content": "def greet(name):\n\tprint(\"Hello,\", name)\n\ngreet(\"Alice\")", "sort_order": 1, "active": true},
+            {"content": "def add(a, b):\n\treturn a + b\n\nprint(add(3, 5))", "sort_order": 2, "active": true},
+            {"content": "def square(number):\n\treturn number * number\n\nprint(square(6))", "sort_order": 3, "active": true},
+            {"content": "def is_even(number):\n\treturn number % 2 == 0\n\nprint(is_even(8))", "sort_order": 4, "active": true},
+            {"content": "def greet(name=\"friend\"):\n\treturn f\"Hello, {name}!\"\n\nprint(greet())", "sort_order": 5, "active": true},
+            {"content": "def larger(a, b):\n\tif a > b:\n\t\treturn a\n\treturn b\n\nprint(larger(7, 4))", "sort_order": 6, "active": true},
+            {"content": "def average(numbers):\n\treturn sum(numbers) / len(numbers)\n\nprint(average([80, 90, 100]))", "sort_order": 7, "active": true}
+          ]
+        }
+      ]
+    }
+  ]
+}

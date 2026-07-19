@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "courses": [
+    {
+      "title": "英文字母基础输入",
+      "description": "从基准键开始，逐步练习上排、下排、大小写和常见英文单词。",
+      "sort_order": 0,
+      "active": true,
+      "lessons": [
+        {
+          "title": "01 左手基准键",
+          "description": "练习左手基准键 a、s、d、f。",
+          "sort_order": 0,
+          "active": true,
+          "prompts": [
+            {"content": "aaa sss ddd fff", "sort_order": 0, "active": true},
+            {"content": "as as as as", "sort_order": 1, "active": true},
+            {"content": "df df df df", "sort_order": 2, "active": true},
+            {"content": "asdf asdf asdf", "sort_order": 3, "active": true},
+            {"content": "fdsa fdsa fdsa", "sort_order": 4, "active": true},
+            {"content": "sad dad fad", "sort_order": 5, "active": true},
+            {"content": "ads add sass", "sort_order": 6, "active": true},
+            {"content": "a sad dad adds sass", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "02 右手基准键",
+          "description": "练习右手基准键 j、k、l 和分号。",
+          "sort_order": 1,
+          "active": true,
+          "prompts": [
+            {"content": "jjj kkk lll ;;;", "sort_order": 0, "active": true},
+            {"content": "jk jk jk jk", "sort_order": 1, "active": true},
+            {"content": "l; l; l; l;", "sort_order": 2, "active": true},
+            {"content": "jkl; jkl; jkl;", "sort_order": 3, "active": true},
+            {"content": ";lkj ;lkj ;lkj", "sort_order": 4, "active": true},
+            {"content": "jak lad fall", "sort_order": 5, "active": true},
+            {"content": "ask flask salad", "sort_order": 6, "active": true},
+            {"content": "a lad asks; a lass falls", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "03 上排字母",
+          "description": "练习 q、w、e、r、t、y、u、i、o、p。",
+          "sort_order": 2,
+          "active": true,
+          "prompts": [
+            {"content": "qqq www eee rrr ttt", "sort_order": 0, "active": true},
+            {"content": "yyy uuu iii ooo ppp", "sort_order": 1, "active": true},
+            {"content": "qwert qwert qwert", "sort_order": 2, "active": true},
+            {"content": "yuiop yuiop yuiop", "sort_order": 3, "active": true},
+            {"content": "we were there", "sort_order": 4, "active": true},
+            {"content": "type your query", "sort_order": 5, "active": true},
+            {"content": "quiet power writer", "sort_order": 6, "active": true},
+            {"content": "write it out; type it right", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "04 上排与基准排",
+          "description": "组合练习上排字母和基准排字母。",
+          "sort_order": 3,
+          "active": true,
+          "prompts": [
+            {"content": "red fed read", "sort_order": 0, "active": true},
+            {"content": "try dry sky", "sort_order": 1, "active": true},
+            {"content": "oil pool loop", "sort_order": 2, "active": true},
+            {"content": "quite quiet quote", "sort_order": 3, "active": true},
+            {"content": "first last after", "sort_order": 4, "active": true},
+            {"content": "please type slowly", "sort_order": 5, "active": true},
+            {"content": "read a short story", "sort_order": 6, "active": true},
+            {"content": "practice every day for skill", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "05 下排字母",
+          "description": "练习 z、x、c、v、b、n、m，并与其他字母组合。",
+          "sort_order": 4,
+          "active": true,
+          "prompts": [
+            {"content": "zzz xxx ccc vvv", "sort_order": 0, "active": true},
+            {"content": "bbb nnn mmm", "sort_order": 1, "active": true},
+            {"content": "zxcv zxcv zxcv", "sort_order": 2, "active": true},
+            {"content": "bnm bnm bnm", "sort_order": 3, "active": true},
+            {"content": "mix box van", "sort_order": 4, "active": true},
+            {"content": "name zone cabin", "sort_order": 5, "active": true},
+            {"content": "move back next", "sort_order": 6, "active": true},
+            {"content": "a brown fox can jump", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "06 全字母组合",
+          "description": "练习完整字母表和覆盖多种按键的短句。",
+          "sort_order": 5,
+          "active": true,
+          "prompts": [
+            {"content": "abcdefghijklmnopqrstuvwxyz", "sort_order": 0, "active": true},
+            {"content": "zyxwvutsrqponmlkjihgfedcba", "sort_order": 1, "active": true},
+            {"content": "abc def ghi jkl mno pqr stu vwx yz", "sort_order": 2, "active": true},
+            {"content": "the quick brown fox", "sort_order": 3, "active": true},
+            {"content": "jumps over the lazy dog", "sort_order": 4, "active": true},
+            {"content": "pack my box with five dozen jugs", "sort_order": 5, "active": true},
+            {"content": "bright stars glow above quiet fields", "sort_order": 6, "active": true},
+            {"content": "small steps build fast and accurate typing", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "07 大写字母",
+          "description": "配合 Shift 键练习首字母大写和连续大写。",
+          "sort_order": 6,
+          "active": true,
+          "prompts": [
+            {"content": "Aa Bb Cc Dd Ee", "sort_order": 0, "active": true},
+            {"content": "Ff Gg Hh Ii Jj", "sort_order": 1, "active": true},
+            {"content": "Kk Ll Mm Nn Oo", "sort_order": 2, "active": true},
+            {"content": "Pp Qq Rr Ss Tt", "sort_order": 3, "active": true},
+            {"content": "Uu Vv Ww Xx Yy Zz", "sort_order": 4, "active": true},
+            {"content": "Alice Bob Carol David", "sort_order": 5, "active": true},
+            {"content": "Python Is Fun", "sort_order": 6, "active": true},
+            {"content": "HELLO Python WORLD", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "08 常用英文单词",
+          "description": "用常见短词和短句巩固字母输入。",
+          "sort_order": 7,
+          "active": true,
+          "prompts": [
+            {"content": "the of and to in", "sort_order": 0, "active": true},
+            {"content": "is you that it he", "sort_order": 1, "active": true},
+            {"content": "was for on are as", "sort_order": 2, "active": true},
+            {"content": "with his they I at", "sort_order": 3, "active": true},
+            {"content": "be this have from or", "sort_order": 4, "active": true},
+            {"content": "one had by word but", "sort_order": 5, "active": true},
+            {"content": "we can learn new things", "sort_order": 6, "active": true},
+            {"content": "good habits make practice easier", "sort_order": 7, "active": true}
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Python 关键字练习",
+      "description": "练习 Python 3.12 的保留关键字、软关键字和常见代码结构。",
+      "sort_order": 1,
+      "active": true,
+      "lessons": [
+        {
+          "title": "01 布尔值与逻辑",
+          "description": "练习 True、False、None、and、or、not、is、in。",
+          "sort_order": 0,
+          "active": true,
+          "prompts": [
+            {"content": "True False None", "sort_order": 0, "active": true},
+            {"content": "and or not", "sort_order": 1, "active": true},
+            {"content": "is in", "sort_order": 2, "active": true},
+            {"content": "ready = True\nprint(ready)", "sort_order": 3, "active": true},
+            {"content": "value = None\nprint(value is None)", "sort_order": 4, "active": true},
+            {"content": "age = 12\nprint(age >= 8 and age <= 18)", "sort_order": 5, "active": true},
+            {"content": "name = \"Ada\"\nprint(\"A\" in name)", "sort_order": 6, "active": true},
+            {"content": "finished = False\nprint(not finished)", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "02 条件与断言",
+          "description": "练习 if、elif、else、pass 和 assert。",
+          "sort_order": 1,
+          "active": true,
+          "prompts": [
+            {"content": "if elif else", "sort_order": 0, "active": true},
+            {"content": "pass assert", "sort_order": 1, "active": true},
+            {"content": "if score >= 60:\n\tprint(\"pass\")", "sort_order": 2, "active": true},
+            {"content": "if number > 0:\n\tprint(\"positive\")\nelse:\n\tprint(\"not positive\")", "sort_order": 3, "active": true},
+            {"content": "if score >= 90:\n\tgrade = \"A\"\nelif score >= 80:\n\tgrade = \"B\"\nelse:\n\tgrade = \"C\"", "sort_order": 4, "active": true},
+            {"content": "if debug:\n\tpass", "sort_order": 5, "active": true},
+            {"content": "assert total >= 0", "sort_order": 6, "active": true},
+            {"content": "assert name, \"name is required\"", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "03 循环关键字",
+          "description": "练习 for、while、break 和 continue。",
+          "sort_order": 2,
+          "active": true,
+          "prompts": [
+            {"content": "for while break continue", "sort_order": 0, "active": true},
+            {"content": "for item in items:\n\tprint(item)", "sort_order": 1, "active": true},
+            {"content": "for number in range(5):\n\tprint(number)", "sort_order": 2, "active": true},
+            {"content": "while count < 10:\n\tcount += 1", "sort_order": 3, "active": true},
+            {"content": "while True:\n\tbreak", "sort_order": 4, "active": true},
+            {"content": "for number in range(10):\n\tif number == 5:\n\t\tbreak", "sort_order": 5, "active": true},
+            {"content": "for number in range(10):\n\tif number % 2 == 0:\n\t\tcontinue\n\tprint(number)", "sort_order": 6, "active": true},
+            {"content": "while value:\n\tvalue -= 1\nelse:\n\tprint(\"done\")", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "04 函数关键字",
+          "description": "练习 def、return、lambda 和 yield。",
+          "sort_order": 3,
+          "active": true,
+          "prompts": [
+            {"content": "def return lambda yield", "sort_order": 0, "active": true},
+            {"content": "def hello():\n\treturn \"Hello\"", "sort_order": 1, "active": true},
+            {"content": "def add(a, b):\n\treturn a + b", "sort_order": 2, "active": true},
+            {"content": "square = lambda x: x * x", "sort_order": 3, "active": true},
+            {"content": "numbers = list(map(lambda x: x + 1, range(5)))", "sort_order": 4, "active": true},
+            {"content": "def count_up(limit):\n\tfor number in range(limit):\n\t\tyield number", "sort_order": 5, "active": true},
+            {"content": "def first(items):\n\tif not items:\n\t\treturn None\n\treturn items[0]", "sort_order": 6, "active": true},
+            {"content": "def greet(name=\"friend\"):\n\treturn f\"Hello, {name}!\"", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "05 导入与作用域",
+          "description": "练习 import、from、as、global、nonlocal 和 del。",
+          "sort_order": 4,
+          "active": true,
+          "prompts": [
+            {"content": "import from as", "sort_order": 0, "active": true},
+            {"content": "global nonlocal del", "sort_order": 1, "active": true},
+            {"content": "import math\nprint(math.sqrt(16))", "sort_order": 2, "active": true},
+            {"content": "from math import pi\nprint(pi)", "sort_order": 3, "active": true},
+            {"content": "import statistics as stats", "sort_order": 4, "active": true},
+            {"content": "count = 0\ndef update():\n\tglobal count\n\tcount += 1", "sort_order": 5, "active": true},
+            {"content": "def outer():\n\tvalue = 1\n\tdef inner():\n\t\tnonlocal value\n\t\tvalue += 1", "sort_order": 6, "active": true},
+            {"content": "items = [1, 2, 3]\ndel items[0]", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "06 类与上下文",
+          "description": "练习 class 和 with。",
+          "sort_order": 5,
+          "active": true,
+          "prompts": [
+            {"content": "class with", "sort_order": 0, "active": true},
+            {"content": "class Dog:\n\tpass", "sort_order": 1, "active": true},
+            {"content": "class Person:\n\tdef __init__(self, name):\n\t\tself.name = name", "sort_order": 2, "active": true},
+            {"content": "class Counter:\n\tvalue = 0\n\tdef add(self):\n\t\tself.value += 1", "sort_order": 3, "active": true},
+            {"content": "with open(\"notes.txt\") as file:\n\ttext = file.read()", "sort_order": 4, "active": true},
+            {"content": "with open(\"log.txt\", \"w\") as file:\n\tfile.write(\"done\")", "sort_order": 5, "active": true},
+            {"content": "class Animal:\n\tdef speak(self):\n\t\treturn \"sound\"", "sort_order": 6, "active": true},
+            {"content": "class Cat(Animal):\n\tdef speak(self):\n\t\treturn \"meow\"", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "07 异常处理",
+          "description": "练习 try、except、finally 和 raise。",
+          "sort_order": 6,
+          "active": true,
+          "prompts": [
+            {"content": "try except finally raise", "sort_order": 0, "active": true},
+            {"content": "try:\n\tnumber = int(text)\nexcept ValueError:\n\tprint(\"invalid number\")", "sort_order": 1, "active": true},
+            {"content": "try:\n\tresult = 10 / value\nexcept ZeroDivisionError:\n\tresult = 0", "sort_order": 2, "active": true},
+            {"content": "try:\n\tfile = open(\"data.txt\")\nfinally:\n\tprint(\"finished\")", "sort_order": 3, "active": true},
+            {"content": "if age < 0:\n\traise ValueError(\"age cannot be negative\")", "sort_order": 4, "active": true},
+            {"content": "try:\n\tvalue = items[index]\nexcept IndexError as error:\n\tprint(error)", "sort_order": 5, "active": true},
+            {"content": "try:\n\tresult = calculate()\nexcept Exception:\n\tresult = None", "sort_order": 6, "active": true},
+            {"content": "def divide(a, b):\n\tif b == 0:\n\t\traise ZeroDivisionError\n\treturn a / b", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "08 异步关键字",
+          "description": "练习 async 和 await 的常见写法。",
+          "sort_order": 7,
+          "active": true,
+          "prompts": [
+            {"content": "async await", "sort_order": 0, "active": true},
+            {"content": "async def main():\n\tpass", "sort_order": 1, "active": true},
+            {"content": "async def load_data():\n\treturn await fetch_data()", "sort_order": 2, "active": true},
+            {"content": "async def pause():\n\tawait asyncio.sleep(1)", "sort_order": 3, "active": true},
+            {"content": "async def greet(name):\n\tawait asyncio.sleep(1)\n\tprint(\"Hello,\", name)", "sort_order": 4, "active": true},
+            {"content": "async with lock:\n\tawait update_data()", "sort_order": 5, "active": true},
+            {"content": "async for item in stream:\n\tprint(item)", "sort_order": 6, "active": true},
+            {"content": "result = await calculate_async()", "sort_order": 7, "active": true}
+          ]
+        },
+        {
+          "title": "09 模式匹配与软关键字",
+          "description": "练习 match、case、下划线通配符和 type。",
+          "sort_order": 8,
+          "active": true,
+          "prompts": [
+            {"content": "match case _ type", "sort_order": 0, "active": true},
+            {"content": "match status:\n\tcase 200:\n\t\tprint(\"ok\")", "sort_order": 1, "active": true},
+            {"content": "match value:\n\tcase 0:\n\t\tprint(\"zero\")\n\tcase _:\n\t\tprint(\"other\")", "sort_order": 2, "active": true},
+            {"content": "match point:\n\tcase (0, 0):\n\t\tprint(\"origin\")", "sort_order": 3, "active": true},
+            {"content": "match command:\n\tcase [\"go\", direction]:\n\t\tprint(direction)", "sort_order": 4, "active": true},
+            {"content": "match color:\n\tcase \"red\" | \"blue\":\n\t\tprint(\"primary\")", "sort_order": 5, "active": true},
+            {"content": "type Point = tuple[int, int]", "sort_order": 6, "active": true},
+            {"content": "type StringList = list[str]", "sort_order": 7, "active": true}
+          ]
+        }
+      ]
+    }
+  ]
+}
