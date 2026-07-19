@@ -1,6 +1,7 @@
 import { handGuideForCharacter } from '../keyboard'
 import type { HandFinger } from '../keyboard'
 import { errorLabel } from '../typing'
+import handsImage from '../assets/finger-guide-hands.webp'
 
 export function FingerGuide({ expected }: { expected: string }) {
   const guide = handGuideForCharacter(expected)
@@ -12,9 +13,9 @@ export function FingerGuide({ expected }: { expected: string }) {
     : `下一键 ${keyLabel}，暂无对应指法`
 
   const fingerClass = (finger: HandFinger) => {
-    if (primary.has(finger)) return 'finger-shape is-primary'
-    if (modifier.has(finger)) return 'finger-shape is-modifier'
-    return 'finger-shape'
+    if (primary.has(finger)) return 'finger-hotspot is-primary'
+    if (modifier.has(finger)) return 'finger-hotspot is-modifier'
+    return 'finger-hotspot'
   }
 
   return (
@@ -25,28 +26,25 @@ export function FingerGuide({ expected }: { expected: string }) {
         <kbd>{keyLabel}</kbd>
       </div>
       <p className="finger-guide-instruction" aria-live="polite">{announcement}</p>
-      <svg className="hands-diagram" viewBox="0 0 360 235" aria-hidden="true">
-        <g className="hand-illustration left-hand">
-          <path className="hand-palm" d="M46 101 C46 86 57 76 72 76 H126 C143 76 154 89 154 106 V173 C154 194 137 208 116 208 H75 C56 208 42 194 42 175 Z" />
-          <rect className={fingerClass('l5')} x="18" y="67" width="26" height="91" rx="13" transform="rotate(-9 31 112)" />
-          <rect className={fingerClass('l4')} x="48" y="35" width="27" height="113" rx="13.5" transform="rotate(-3 61 91)" />
-          <rect className={fingerClass('l3')} x="79" y="20" width="28" height="128" rx="14" />
-          <rect className={fingerClass('l2')} x="111" y="38" width="28" height="111" rx="14" transform="rotate(3 125 93)" />
-          <path className={fingerClass('l1')} d="M48 137 C40 125 30 118 20 122 C9 126 8 139 16 149 L55 193 C64 203 80 199 83 187 C85 181 82 175 78 170 Z" />
-        </g>
+      <div className="hands-illustration" aria-hidden="true">
+        <svg className="hands-diagram" viewBox="0 0 768 512">
+          <image href={handsImage} width="768" height="512" />
+          <g className="finger-hotspots">
+            <path data-finger="l5" className={fingerClass('l5')} d="M99 130 C96 175 101 220 115 254" />
+            <path data-finger="l4" className={fingerClass('l4')} d="M155 70 C154 126 153 181 157 221" />
+            <path data-finger="l3" className={fingerClass('l3')} d="M206 44 C205 110 204 177 207 221" />
+            <path data-finger="l2" className={fingerClass('l2')} d="M263 69 C259 126 251 181 244 222" />
+            <path data-finger="l1" className={fingerClass('l1')} d="M338 205 C327 224 316 246 307 269" />
 
-        <g className="hand-illustration right-hand">
-          <path className="hand-palm" d="M314 101 C314 86 303 76 288 76 H234 C217 76 206 89 206 106 V173 C206 194 223 208 244 208 H285 C304 208 318 194 318 175 Z" />
-          <rect className={fingerClass('r5')} x="316" y="67" width="26" height="91" rx="13" transform="rotate(9 329 112)" />
-          <rect className={fingerClass('r4')} x="285" y="35" width="27" height="113" rx="13.5" transform="rotate(3 298 91)" />
-          <rect className={fingerClass('r3')} x="253" y="20" width="28" height="128" rx="14" />
-          <rect className={fingerClass('r2')} x="221" y="38" width="28" height="111" rx="14" transform="rotate(-3 235 93)" />
-          <path className={fingerClass('r1')} d="M312 137 C320 125 330 118 340 122 C351 126 352 139 344 149 L305 193 C296 203 280 199 277 187 C275 181 278 175 282 170 Z" />
-        </g>
-
-        <text className="hand-label" x="94" y="228" textAnchor="middle">左手</text>
-        <text className="hand-label" x="266" y="228" textAnchor="middle">右手</text>
-      </svg>
+            <path data-finger="r1" className={fingerClass('r1')} d="M430 205 C441 224 452 246 461 269" />
+            <path data-finger="r2" className={fingerClass('r2')} d="M505 69 C509 126 517 181 524 222" />
+            <path data-finger="r3" className={fingerClass('r3')} d="M562 44 C563 110 564 177 561 221" />
+            <path data-finger="r4" className={fingerClass('r4')} d="M613 70 C614 126 615 181 611 221" />
+            <path data-finger="r5" className={fingerClass('r5')} d="M669 130 C672 175 667 220 653 254" />
+          </g>
+        </svg>
+        <div className="hand-labels"><span>左手</span><span>右手</span></div>
+      </div>
       <div className="finger-guide-legend" aria-hidden="true">
         <span><i className="legend-primary" />目标手指</span>
         {guide?.modifier.length ? <span><i className="legend-modifier" />Shift 手指</span> : null}
