@@ -1,0 +1,31 @@
+services:
+  kidtype:
+    build:
+      context: .
+      dockerfile: Dockerfile.cn
+      args:
+        NPM_REGISTRY: https://registry.npmmirror.com/
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
+    image: kidtype:local
+    container_name: kidtype
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: sqlite:////data/typing.db
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env 中设置 ADMIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET:?请在 .env 中设置 SESSION_SECRET}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-*}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      AUTO_CREATE_SCHEMA: "false"
+    volumes:
+      - kidtype_data:/data
+
+volumes:
+  kidtype_data:
+    name: kidtype_data
+
