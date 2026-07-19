@@ -32,6 +32,22 @@ describe('LoginPage', () => {
     expect(screen.getByLabelText('密码')).toHaveValue('')
   })
 
+  it('masks the PIN by default and only reveals it while the eye button is held', () => {
+    renderLogin()
+    const pin = screen.getByLabelText('输入 PIN')
+    const reveal = screen.getByRole('button', { name: '按住显示 PIN' })
+
+    expect(pin).toHaveAttribute('type', 'password')
+    fireEvent.pointerDown(reveal)
+    expect(pin).toHaveAttribute('type', 'text')
+    fireEvent.pointerUp(reveal)
+    expect(pin).toHaveAttribute('type', 'password')
+
+    fireEvent.pointerDown(reveal)
+    fireEvent.pointerLeave(reveal)
+    expect(pin).toHaveAttribute('type', 'password')
+  })
+
   it('clears credentials whenever the login mode changes', () => {
     renderLogin()
     fireEvent.change(screen.getByLabelText('学生姓名'), { target: { value: '小宇' } })
