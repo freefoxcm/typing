@@ -9,8 +9,13 @@ class AdminLogin(BaseModel):
 
 
 class ChildLogin(BaseModel):
-    child_id: int
+    name: str = Field(min_length=1, max_length=80)
     pin: str = Field(pattern=r"^\d{4,6}$")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ChildCreate(BaseModel):
@@ -73,4 +78,3 @@ class ImportRequest(BaseModel):
     content: str = Field(min_length=1, max_length=5_000_000)
     mode: str = Field(default="append", pattern=r"^(append|replace)$")
     target_lesson_id: int | None = None
-

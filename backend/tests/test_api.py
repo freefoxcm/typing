@@ -39,7 +39,7 @@ def test_child_practice_and_report_flow(tmp_path):
         assert created.status_code == 201
         child_id = created.json()['id']
         client.post('/api/auth/logout')
-        logged_in = client.post('/api/auth/child/login', json={'child_id': child_id, 'pin': '1234'})
+        logged_in = client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'})
         assert logged_in.status_code == 200
         courses = client.get('/api/library/courses').json()
         lesson_id = courses[0]['lessons'][0]['id']
@@ -58,6 +58,33 @@ def test_child_practice_and_report_flow(tmp_path):
         assert report['weak_keys'][0] == {'char': 'f', 'count': 2}
 
 
+def test_child_login_uses_name_without_exposing_roster(tmp_path):
+    with make_client(tmp_path) as client:
+        assert client.get('/api/auth/children').status_code == 404
+        admin_login(client)
+        created = client.post('/api/admin/children', json={'name': '小宇', 'pin': '1234', 'active': True})
+        assert created.status_code == 201
+        child_id = created.json()['id']
+        client.post('/api/auth/logout')
+
+        logged_in = client.post('/api/auth/child/login', json={'name': '  小宇  ', 'pin': '1234'})
+        assert logged_in.status_code == 200
+        assert logged_in.json()['name'] == '小宇'
+        client.post('/api/auth/logout')
+
+        wrong_pin = client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '5678'})
+        missing = client.post('/api/auth/child/login', json={'name': '小明', 'pin': '5678'})
+        assert wrong_pin.status_code == missing.status_code == 401
+        assert wrong_pin.json() == missing.json() == {'detail': '姓名或 PIN 不正确'}
+
+        admin_login(client)
+        assert client.patch(f'/api/admin/children/{child_id}', json={'active': False}).status_code == 200
+        client.post('/api/auth/logout')
+        inactive = client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'})
+        assert inactive.status_code == 401
+        assert inactive.json() == {'detail': '姓名或 PIN 不正确'}
+
+
 def test_import_is_transactional_and_visible(tmp_path):
     with make_client(tmp_path) as client:
         admin_login(client)
@@ -67,4 +94,3 @@ def test_import_is_transactional_and_visible(tmp_path):
         assert valid.status_code == 200
         library = client.get('/api/admin/library').json()
         assert any(course['title'] == 'New' for course in library)
-

@@ -58,6 +58,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def frontend(full_path: str):
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         index = dist / "index.html"
         if index.exists():
             return FileResponse(index)
