@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { KeyRound, Keyboard, ShieldCheck, UserRound } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { api, jsonBody } from '../api'
+import { SiteFooter } from '../components/SiteFooter'
 import type { Child, Me } from '../types'
 
 export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
@@ -44,7 +45,7 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
       <section className="login-hero">
         <div className="logo-bubble"><Keyboard size={42} /></div>
         <p className="eyebrow">每天一点点，手指更灵活</p>
-        <h1>小小键盘手</h1>
+        <h1>码力全开</h1>
         <p>专注英文与代码的打字练习。看准提示，用正确的手指，慢慢练出速度和准确率。</p>
         <div className="hero-keys" aria-hidden="true"><kbd>F</kbd><kbd>J</kbd><kbd>Space</kbd></div>
       </section>
@@ -72,7 +73,7 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
           <button className="primary wide" disabled={busy || (mode === 'child' && !childId)}>{busy ? '正在登录…' : '开始使用'}</button>
         </form>
       </section>
+      <SiteFooter />
     </div>
   )
 }
-

@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "KidType"
+    app_name: str = "码力全开"
     database_url: str = "sqlite:////data/typing.db"
     admin_username: str = "admin"
     admin_password: str = "change-me-now"
@@ -27,4 +27,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
