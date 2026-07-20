@@ -101,3 +101,13 @@ cd frontend && npm test && npm run build
 - JSON：根对象使用 `{"words":[...]}`，词条字段与 CSV 相同。
 
 同一单词集内的词条忽略大小写和多余空格去重。再次导入时，非空字段覆盖旧内容，空字段保留旧内容。
+
+## 开源许可
+
+除另有说明外，本项目采用 [GNU Affero General Public License v3.0 or later](LICENSE)（`AGPL-3.0-or-later`）许可。
+
+你可以使用、复制、修改和分发本项目，也可以用于商业用途，但必须遵守 AGPL-3.0-or-later 的条款。特别是，如果修改后的程序通过网络向用户提供服务，应当向这些用户提供该运行版本的完整对应源代码。
+
+`practice-data/us.json` 由 KTouch 课程数据转换而来，不适用本项目的默认许可；其来源、修改和许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+本项目按“原样”提供，不附带任何明示或默示担保。完整条款以 [LICENSE](LICENSE) 中的英文协议正文为准。
