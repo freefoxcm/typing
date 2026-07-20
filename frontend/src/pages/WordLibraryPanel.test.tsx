@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { api } from '../api'
 import type { WordSetSummary } from '../types'
-import { WordLibraryPanel } from './WordLibraryPanel'
+import { reorderWordSetList, saveWordSetOrder, WordLibraryPanel } from './WordLibraryPanel'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -54,6 +54,34 @@ describe('WordLibraryPanel', () => {
   })
 
   afterEach(() => vi.restoreAllMocks())
+
+  it('reorders word sets and saves their complete order', async () => {
+    const secondSet: WordSetSummary = { ...makeWordSets()[0], id: 8, title: '网络词汇', sort_order: 1 }
+    const original = [{ ...makeWordSets()[0], sort_order: 0 }, secondSet]
+    const reordered = reorderWordSetList(original, 8, 7)
+
+    expect(reordered.map((item) => item.id)).toEqual([8, 7])
+    expect(reordered.map((item) => item.sort_order)).toEqual([0, 1])
+    expect(reorderWordSetList(original, 99, 7)).toBe(original)
+
+    await saveWordSetOrder(reordered)
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/word-sets/order', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ word_set_ids: [8, 7] }),
+    }))
+  })
+
+  it('provides an accessible drag handle for each word set', async () => {
+    wordSets = [...makeWordSets(), { ...makeWordSets()[0], id: 8, title: '网络词汇', sort_order: 1 }]
+    render(<WordLibraryPanel />)
+
+    const firstHandle = await screen.findByRole('button', { name: '拖动单词集 编程词汇 调整顺序' })
+    expect(firstHandle).toBeEnabled()
+    expect(firstHandle).toHaveAttribute('title', expect.stringContaining('方向键移动'))
+    expect(screen.getByRole('button', { name: '拖动单词集 网络词汇 调整顺序' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '上移单词集 编程词汇' })).not.toBeInTheDocument()
+    expect(screen.getByText(/使用上下方向键移动/)).toBeInTheDocument()
+  })
 
   it('adds a word from its word-set card and expands the refreshed set', async () => {
     render(<WordLibraryPanel />)

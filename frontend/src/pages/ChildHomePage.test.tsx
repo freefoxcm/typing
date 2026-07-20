@@ -26,6 +26,9 @@ describe('ChildHomePage', () => {
     render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
 
     const firstCourse = await screen.findByRole('button', { name: '展开课程 入门课程' })
+    expect(screen.getByText('打字练习')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '循序渐进，练出速度' })).toBeInTheDocument()
+    expect(screen.getByText('从字母、符号到代码，准确地完成每一课。')).toBeInTheDocument()
     const secondCourse = screen.getByRole('button', { name: '展开课程 代码课程' })
     expect(firstCourse).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('字母练习')).not.toBeInTheDocument()
