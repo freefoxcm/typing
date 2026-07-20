@@ -8,7 +8,9 @@ import { FingerGuide } from './FingerGuide'
 import { VirtualKeyboard } from './VirtualKeyboard'
 
 export type PracticeRunnerItem = { id: number; content: string }
-type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'complete'
+type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'transitioning' | 'complete'
+const ITEM_TRANSITION_DELAY_MS = 1600
+const ROUND_TRANSITION_DELAY_MS = 5000
 
 export function PracticeRunner<T extends PracticeRunnerItem>({
   contextLabel,
@@ -42,6 +44,9 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const pauseRef = useRef<number | null>(null)
   const pausedTotalRef = useRef(0)
   const nextTimerRef = useRef<number | null>(null)
+  const roundCharsRef = useRef(0)
+  const roundErrorsRef = useRef(0)
+  const roundDurationRef = useRef(0)
   const current = bag[bagIndex]
   const totalErrors = useMemo(() => [...errors.values()].reduce((sum, count) => sum + count, 0), [errors])
   const liveStats = calculateStats(charIndex, totalErrors, elapsed)
@@ -70,6 +75,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
     else {
       const nextBag = shuffleBag(items)
       if (nextBag.length > 1 && nextBag[0].id === current.id) [nextBag[0], nextBag[1]] = [nextBag[1], nextBag[0]]
+      roundCharsRef.current = 0; roundErrorsRef.current = 0; roundDurationRef.current = 0
       setBag(nextBag); setBagIndex(0)
     }
     resetPrompt()
@@ -83,12 +89,22 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
         method: 'POST',
         ...jsonBody({ [saveIdKey]: current.id, duration_ms: Math.max(100, Math.round(duration)), errors: errorsToList(currentErrors) }),
       })
-      setResult(saved); setRunState('complete')
-      nextTimerRef.current = window.setTimeout(advancePrompt, 1600)
+      const nextChars = roundCharsRef.current + current.content.length
+      const nextErrors = roundErrorsRef.current + saved.errors
+      const nextDuration = roundDurationRef.current + saved.duration_ms
+      roundCharsRef.current = nextChars; roundErrorsRef.current = nextErrors; roundDurationRef.current = nextDuration
+      if (bagIndex + 1 === bag.length) {
+        const roundStats = calculateStats(nextChars, nextErrors, nextDuration)
+        setResult({ ...saved, ...roundStats, errors: nextErrors, duration_ms: nextDuration }); setRunState('complete')
+        nextTimerRef.current = window.setTimeout(advancePrompt, ROUND_TRANSITION_DELAY_MS)
+      } else {
+        setRunState('transitioning')
+        nextTimerRef.current = window.setTimeout(advancePrompt, ITEM_TRANSITION_DELAY_MS)
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '成绩保存失败'); setRunState('complete')
     }
-  }, [advancePrompt, current, saveIdKey, savePath])
+  }, [advancePrompt, bag.length, bagIndex, current, saveIdKey, savePath])
 
   const togglePause = () => {
     const now = performance.now()
@@ -102,7 +118,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const onKeyDown = (event: KeyboardEvent) => {
     if (!current) return
     if (event.key === 'Escape') { event.preventDefault(); togglePause(); return }
-    if (runState === 'paused' || runState === 'saving' || runState === 'complete') return
+    if (runState === 'paused' || runState === 'saving' || runState === 'transitioning' || runState === 'complete') return
     const expected = current.content[charIndex]
     const actual = keyToCharacter(event, expected)
     if (actual === null) return
@@ -144,7 +160,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
       <div><span>{contextLabel}</span><strong>{title}</strong></div>
       <div className="practice-actions">
         <button onClick={() => setHints((value) => !value)} className="ghost">{hints ? <EyeOff /> : <Eye />} {hints ? '隐藏提示' : '显示提示'}</button>
-        <button onClick={togglePause} className="ghost" disabled={runState === 'ready' || runState === 'complete' || runState === 'saving'}>{runState === 'paused' ? <Play /> : <Pause />} {runState === 'paused' ? '继续' : '暂停'}</button>
+        <button onClick={togglePause} className="ghost" disabled={runState === 'ready' || runState === 'complete' || runState === 'saving' || runState === 'transitioning'}>{runState === 'paused' ? <Play /> : <Pause />} {runState === 'paused' ? '继续' : '暂停'}</button>
         <button onClick={resetPrompt} className="ghost"><RotateCcw /> 重练</button>
       </div>
     </header>
@@ -162,7 +178,8 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
             {runState === 'ready' && <div className="surface-message">直接按第一个字符开始计时</div>}
             {runState === 'paused' && <div className="surface-message"><Pause /> 已暂停，按 Esc 或点击“继续”</div>}
             {runState === 'saving' && <div className="surface-message">正在保存成绩…</div>}
-            {runState === 'complete' && result && <div className="result-pop"><strong>完成得很棒！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><button onClick={advancePrompt}>下一条</button></div>}
+            {runState === 'transitioning' && <div className="surface-message">本条完成，准备下一条…</div>}
+            {runState === 'complete' && result && <div className="result-pop"><strong>本轮完成！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><small>5 秒后自动进入下一轮</small><button onClick={advancePrompt}>下一轮</button></div>}
           </div>
           {renderInfo && renderInfo(current)}
         </div>

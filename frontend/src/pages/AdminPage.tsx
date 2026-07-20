@@ -15,7 +15,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { BarChart3, BookOpen, ChevronDown, Download, FileUp, GripVertical, Languages, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import { errorLabel } from '../typing'
-import type { Child, Course, Lesson, Prompt, Report } from '../types'
+import type { Child, Course, Lesson, Prompt, Report, WordSetSummary } from '../types'
 import { WordLibraryPanel } from './WordLibraryPanel'
 
 type Tab = 'children' | 'library' | 'words' | 'import' | 'reports'
@@ -45,8 +45,8 @@ export function AdminPage() {
         <div><p className="eyebrow">管理中心</p><h1>内容与成长</h1></div>
         <nav>
           <button className={tab === 'children' ? 'active' : ''} onClick={() => setTab('children')}><Users />学生档案</button>
-          <button className={tab === 'library' ? 'active' : ''} onClick={() => setTab('library')}><BookOpen />课程词库</button>
-          <button className={tab === 'words' ? 'active' : ''} onClick={() => setTab('words')}><Languages />单词库</button>
+          <button className={tab === 'library' ? 'active' : ''} onClick={() => setTab('library')}><BookOpen />打字词库</button>
+          <button className={tab === 'words' ? 'active' : ''} onClick={() => setTab('words')}><Languages />单词词库</button>
           <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><FileUp />导入导出</button>
           <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}><BarChart3 />学习报告</button>
         </nav>
@@ -152,7 +152,7 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
     }
     setReordering(false)
   }
-  return <><header className="section-title"><div><p className="eyebrow">课程词库</p><h2>设计练习路径</h2><p>按课程、关卡、练习条目组织内容。</p></div></header>
+  return <><header className="section-title"><div><p className="eyebrow">打字词库</p><h2>设计练习路径</h2><p>按课程、关卡、练习条目组织内容。</p></div></header>
     <form className="inline-form card" onSubmit={createCourse}><label>课程名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建课程</button></form>
     <DndContext
       sensors={sensors}
@@ -189,14 +189,39 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
 
 function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: () => Promise<unknown>; action: AdminAction }) {
   const [format, setFormat] = useState('txt'); const [content, setContent] = useState(''); const [mode, setMode] = useState('append'); const [lessonId, setLessonId] = useState(''); const [preview, setPreview] = useState<any>(null)
+  const [wordSets, setWordSets] = useState<WordSetSummary[]>([]); const [wordSetsLoading, setWordSetsLoading] = useState(true); const [wordSetsError, setWordSetsError] = useState(''); const [wordSetId, setWordSetId] = useState('')
+  const [wordFormat, setWordFormat] = useState('txt'); const [wordContent, setWordContent] = useState(''); const [wordMode, setWordMode] = useState('append'); const [wordPreview, setWordPreview] = useState<any>(null)
   const lessons = courses.flatMap((course) => course.lessons)
   useEffect(() => { if (!lessonId && lessons[0]) setLessonId(String(lessons[0].id)) }, [lessonId, lessons])
+  useEffect(() => {
+    void api<WordSetSummary[]>('/api/admin/word-sets')
+      .then((items) => { setWordSets(items); setWordSetsError(''); setWordSetsLoading(false) })
+      .catch((error) => { setWordSetsError(error instanceof Error ? error.message : '单词集加载失败'); setWordSetsLoading(false) })
+  }, [])
+  useEffect(() => {
+    setWordSetId((current) => wordSets.some((item) => String(item.id) === current) ? current : (wordSets[0] ? String(wordSets[0].id) : ''))
+  }, [wordSets])
   const payload = { format, content, mode, target_lesson_id: format === 'txt' ? Number(lessonId) : null }
-  const readFile = async (file?: File) => { if (file) { setContent(await file.text()); const ext = file.name.split('.').pop()?.toLowerCase(); if (['txt', 'csv', 'json'].includes(ext ?? '')) setFormat(ext!) } }
+  const wordPayload = { word_set_id: Number(wordSetId), format: wordFormat, mode: wordMode, content: wordContent }
+  const readFile = async (file?: File) => { if (file) { setContent(await file.text()); setPreview(null); const ext = file.name.split('.').pop()?.toLowerCase(); if (['txt', 'csv', 'json'].includes(ext ?? '')) setFormat(ext!) } }
+  const readWordFile = async (file?: File) => { if (file) { setWordContent(await file.text()); setWordPreview(null); const ext = file.name.split('.').pop()?.toLowerCase(); if (['txt', 'csv', 'json'].includes(ext ?? '')) setWordFormat(ext!) } }
   const previewImport = () => void action(async () => setPreview(await api('/api/admin/import/preview', { method: 'POST', ...jsonBody(payload) })), '预览完成')
   const commit = () => { if (mode === 'replace' && !window.confirm('替换模式会删除目标范围内现有词库，确认继续？')) return; void action(() => api('/api/admin/import', { method: 'POST', ...jsonBody(payload) }), '导入完成', reload) }
-  return <><header className="section-title"><div><p className="eyebrow">导入与备份</p><h2>快速补充词库</h2><p>导入前先预览，确认无误后再写入。</p></div><a className="primary link-button" href="/api/admin/export"><Download />导出 JSON</a></header>
-    <div className="card import-card"><div className="import-grid"><label>格式<select value={format} onChange={(e) => { setFormat(e.target.value); setPreview(null) }}><option value="txt">TXT（每行一条）</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="append">追加</option><option value="replace">替换</option></select></label>{format === 'txt' && <label>目标关卡<select value={lessonId} onChange={(e) => setLessonId(e.target.value)}>{lessons.map((lesson) => <option value={lesson.id} key={lesson.id}>{lesson.title}</option>)}</select></label>}<label className="file-picker"><FileUp />选择文件<input type="file" accept=".txt,.csv,.json" onChange={(e) => void readFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea rows={14} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null) }} placeholder="粘贴内容，或选择文件…" /></label><div className="button-row"><button className="ghost" onClick={previewImport} disabled={!content}>预览导入</button><button className="primary" onClick={commit} disabled={!preview?.valid}>确认导入</button></div>{preview && <div className={preview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{preview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>{preview.course_count} 个课程 · {preview.lesson_count} 个关卡 · {preview.prompt_count} 条练习</p>{preview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>
+  const previewWordImport = () => void action(async () => setWordPreview(await api('/api/admin/word-import/preview', { method: 'POST', ...jsonBody(wordPayload) })), '预览完成')
+  const commitWordImport = () => {
+    if (wordMode === 'replace' && !window.confirm('替换模式会删除该单词集的现有词条，确认继续？')) return
+    void action(() => api('/api/admin/word-import', { method: 'POST', ...jsonBody(wordPayload) }), '单词导入完成').then((ok) => { if (ok) setWordPreview(null) })
+  }
+  return <><header className="section-title"><div><p className="eyebrow">导入导出</p><h2>迁移与备份词库</h2><p>导入前先预览，确认无误后再写入。</p></div></header>
+    <section className="transfer-section" aria-labelledby="typing-library-transfer"><header className="section-title"><div><p className="eyebrow">打字词库</p><h2 id="typing-library-transfer">导入课程与练习</h2></div><a className="primary link-button" href="/api/admin/export"><Download />导出打字词库</a></header>
+      <div className="card import-card"><div className="import-grid"><label>格式<select value={format} onChange={(e) => { setFormat(e.target.value); setPreview(null) }}><option value="txt">TXT（每行一条）</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="append">追加</option><option value="replace">替换</option></select></label>{format === 'txt' && <label>目标关卡<select value={lessonId} onChange={(e) => setLessonId(e.target.value)}>{lessons.map((lesson) => <option value={lesson.id} key={lesson.id}>{lesson.title}</option>)}</select></label>}<label className="file-picker"><FileUp />选择文件<input aria-label="选择打字词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="打字词库文件内容" rows={14} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null) }} placeholder="粘贴内容，或选择文件…" /></label><div className="button-row"><button className="ghost" onClick={previewImport} disabled={!content}>预览打字词库</button><button className="primary" onClick={commit} disabled={!preview?.valid}>导入打字词库</button></div>{preview && <div className={preview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{preview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>{preview.course_count} 个课程 · {preview.lesson_count} 个关卡 · {preview.prompt_count} 条练习</p>{preview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>
+    </section>
+    <section className="transfer-section" aria-labelledby="word-library-transfer"><header className="section-title"><div><p className="eyebrow">单词词库</p><h2 id="word-library-transfer">导入单词与释义</h2></div><a className="primary link-button" href="/api/admin/word-export"><Download />导出单词词库</a></header>
+      {wordSetsLoading && <div className="card transfer-empty"><p>正在加载单词集…</p></div>}
+      {!wordSetsLoading && wordSetsError && <p className="notice error">{wordSetsError}</p>}
+      {!wordSetsLoading && !wordSetsError && wordSets.length === 0 && <div className="card transfer-empty"><strong>暂无可导入的单词集</strong><p>请先在单词词库创建单词集。</p></div>}
+      {!wordSetsLoading && wordSets.length > 0 && <div className="card import-card"><div className="import-grid"><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{wordSets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>格式<select value={wordFormat} onChange={(e) => { setWordFormat(e.target.value); setWordPreview(null) }}><option value="txt">TXT</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={wordMode} onChange={(e) => setWordMode(e.target.value)}><option value="append">追加/更新</option><option value="replace">替换本集</option></select></label><label className="file-picker"><FileUp />选择文件<input aria-label="选择单词词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readWordFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="单词词库文件内容" rows={10} value={wordContent} onChange={(e) => { setWordContent(e.target.value); setWordPreview(null) }} placeholder={wordFormat === 'csv' ? 'word,phonetic,meaning_zh,technical_meaning_zh,active' : '粘贴内容，或选择文件…'} /></label><div className="button-row"><button className="ghost" onClick={previewWordImport} disabled={!wordContent}>预览单词词库</button><button className="primary" onClick={commitWordImport} disabled={!wordPreview?.valid}>导入单词词库</button></div>{wordPreview && <div className={wordPreview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{wordPreview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>共 {wordPreview.word_count} 词 · 新增 {wordPreview.created_count} · 更新 {wordPreview.updated_count} · 待补全 {wordPreview.queued_count}</p>{wordPreview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>}
+    </section>
   </>
 }
 
@@ -205,7 +230,7 @@ function ReportsPanel({ children, report, loadReport }: { children: Child[]; rep
   useEffect(() => { void loadReport(childId, days, mode) }, [childId, days, mode, loadReport])
   const query = `days=${days}&mode=${mode}${childId ? `&child_id=${childId}` : ''}`
   return <><header className="section-title"><div><p className="eyebrow">学习报告</p><h2>看见每天的进步</h2><p>速度、准确率和薄弱按键一目了然。</p></div><a className="ghost link-button" href={`/api/admin/reports/export.csv?${query}`}><Download />导出 CSV</a></header>
-    <div className="report-filters card"><label>学生<select value={childId} onChange={(e) => setChildId(e.target.value)}><option value="">全部学生</option>{children.map((child) => <option value={child.id} key={child.id}>{child.name}</option>)}</select></label><label>练习模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="all">全部模式</option><option value="course">课程练习</option><option value="word">单词练习</option></select></label><label>时间范围<select value={days} onChange={(e) => setDays(e.target.value)}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近一年</option></select></label></div>
+    <div className="report-filters card"><label>学生<select value={childId} onChange={(e) => setChildId(e.target.value)}><option value="">全部学生</option>{children.map((child) => <option value={child.id} key={child.id}>{child.name}</option>)}</select></label><label>练习模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="all">全部模式</option><option value="course">打字练习</option><option value="word">单词练习</option></select></label><label>时间范围<select value={days} onChange={(e) => setDays(e.target.value)}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近一年</option></select></label></div>
     {report && <><div className="report-metrics"><div><span>练习次数</span><strong>{report.attempt_count}</strong></div><div><span>练习分钟</span><strong>{report.practice_minutes}</strong></div><div><span>平均速度</span><strong>{report.average_cpm} <small>CPM</small></strong></div><div><span>整体准确率</span><strong>{report.accuracy}%</strong></div></div><div className="report-columns"><section className="card"><h3>薄弱按键</h3>{report.weak_keys.length ? report.weak_keys.map((item) => <div className="weak-row" key={item.char}><kbd>{errorLabel(item.char)}</kbd><div><i style={{ width: `${Math.max(8, item.count / report.weak_keys[0].count * 100)}%` }} /></div><span>{item.count} 次</span></div>) : <p className="muted">还没有错误记录，继续保持！</p>}</section><section className="card"><h3>最近练习</h3><div className="attempt-table">{report.attempts.slice(0, 12).map((item) => <div key={item.id}><time>{new Date(item.created_at).toLocaleDateString()}</time><strong>{item.cpm} CPM</strong><span>{item.mode === 'word' ? '单词' : '课程'} · {item.accuracy}%</span><span>{item.errors} 错</span></div>)}</div></section></div></>}
   </>
 }
