@@ -40,7 +40,9 @@ export function ChildHomePage({ me }: { me: Me }) {
           <Languages /><div className="grow"><h3>{item.title}</h3><p>{item.description || `${item.word_count} 个可练单词`}</p><span>{item.word_count} 词 · {item.attempts ? `已练 ${item.attempts} 次` : '尚未练习'}{item.best_cpm ? ` · 最佳 ${item.best_cpm} CPM` : ''}</span></div><ArrowRight />
         </Link>)}</div>
       </section>}
-      <div className="course-list">
+      {courses.length > 0 && <section className="typing-course-section">
+        <header className="section-title"><div><p className="eyebrow">打字练习</p><h2>循序渐进，练出速度</h2><p>从字母、符号到代码，准确地完成每一课。</p></div></header>
+        <div className="course-list">
         {courses.map((course, courseIndex) => {
           const courseExpanded = expandedCourses.has(course.id)
           const lessonsId = `student-course-${course.id}-lessons`
@@ -58,7 +60,8 @@ export function ChildHomePage({ me }: { me: Me }) {
           </section>
           )
         })}
-      </div>
+        </div>
+      </section>}
     </div>
   )
 }
