@@ -50,12 +50,12 @@ export function LoginPage({ onLogin }: { onLogin: (me: Me) => void }) {
         <p className="eyebrow">每天一点点，手指更灵活</p>
         <h1>码力全开</h1>
         <p>专注英文与代码的打字练习。看准提示，用正确的手指，慢慢练出速度和准确率。</p>
-        <div className="hero-keys" aria-hidden="true"><kbd>F</kbd><kbd>J</kbd><kbd>Space</kbd></div>
+        <div className="hero-keys" aria-hidden="true"><kbd>Y</kbd><kbd>L</kbd><kbd>Space</kbd></div>
       </section>
       <section className="login-card">
         <div className="login-tabs">
-          <button className={mode === 'child' ? 'active' : ''} onClick={() => switchMode('child')}><UserRound /> 孩子登录</button>
-          <button className={mode === 'admin' ? 'active' : ''} onClick={() => switchMode('admin')}><ShieldCheck /> 管理员</button>
+          <button className={mode === 'child' ? 'active' : ''} onClick={() => switchMode('child')}><UserRound /> 学生</button>
+          <button className={mode === 'admin' ? 'active' : ''} onClick={() => switchMode('admin')}><ShieldCheck /> 教师</button>
         </div>
         <form onSubmit={submit} autoComplete="off">
           {mode === 'child' ? (
