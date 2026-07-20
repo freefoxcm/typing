@@ -1,0 +1,1216 @@
+{
+  "version": 1,
+  "courses": [
+    {
+      "title": "English (US) (auto-generated)",
+      "description": "KTouch training file generated Sun Mar 11 09:59:58 2007\nPerl Script written by Steinar Theigmann and Håvard Frøiland.",
+      "sort_order": 0,
+      "active": true,
+      "lessons": [
+        {
+          "title": "j and f",
+          "description": "New characters: jf",
+          "sort_order": 0,
+          "active": true,
+          "prompts": [
+            {
+              "content": "fj j f j f f fj f fj fj ffj f fjf f f jj f fj jf jf fj jfj fjf",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "ffj ffj fj ff f f ff fj fj ffjj jjjf j f jj fj jj jfj ff f ff ff",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "fj ffj ff jfj jf jff ffj f ff ffj f fjf j fj ffj fj jj ffj jj f",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "jfj jff j ffj ffjj ff j f fjf ffj jff ffj jf ffj jff fj fj f f f",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "f fj jff ffj fjf f j j jf jf j jfj fjf fj ff fj jfj jfj fj jff",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "fj f ffjj f fjf ffj jfj ff j ff jf jjjf jf j jff jfj j f jj f jfj",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "fj j jff jfj jfj jff jf fj jj j j fjf j fj j fj j f j f ff j ffjj",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "j jfj ffjj jfj f jfj f fj f f f jfj j jf jfj fj j jf f fjf fjf",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "jf ff ff fjf fjf fjf jfj jjjf j f jf jfj f jjjf f ff ff jf f fj",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "ffj fj fj jf f ff jf f j j jfj f jff fj j f fjf f jfj jf f jfj jjjf",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "k and d",
+          "description": "New characters: kd",
+          "sort_order": 1,
+          "active": true,
+          "prompts": [
+            {
+              "content": "djd k djd k fdj k fdj k k jdd dd k kf dd k k dd k d fdfk k k kf",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "d kf fdfk k fdj k df jk jdd jkjd jjkk d k k d d d d k k d kf d",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "d dd k d jjd d d dkk jkjd k k k djd dkk kf fdj k fdfk k k fdj",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "k dkk d d df df df k k djd dd k d d d dd jdd d kf fdj k k d jkjd",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "k k k djd k d dd d jdd jjd d d d jdd d k k dd fdfk jjkk k fdfk",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "k d d fdfk jjkk kfd k k dd k k dkk jjd jjkk k kfd df kfd d d d",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "fdj df jdd k d jdd k d k k k jjkk dd d d k jk df k jjkk d k k k",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "jjkk d fdfk fdfk fdj d k d jjkk djd k k k k djd k d d d df k k djd",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "k kfd df k k k d k dd kfd df d kfd k k k kfd djd k k jk dd dd",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "df d d jk k kf jjd kf kf k df d k jkjd kf k jjd fdfk k k kfd d",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "l and s",
+          "description": "New characters: ls",
+          "sort_order": 2,
+          "active": true,
+          "prompts": [
+            {
+              "content": "s sl s fl skl s sl fl skl sfj l sk s sk ss s sfj jss l fs ss fs",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "sk jss sk s fl s l fs s fl jss sfj l s sk l sk s fs s ss l fl l",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "sf fl lll skl sfj sk dsk sk sfj ss sf l fl jssj fl l l jss sfj",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "sk sk s fl fl s jss s s s l fl jssj sl l l s fl sl l fs ss l fs",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "jss s dsk s jssj sk fs l l skl l fl l s l s s sl skl fl s s l skl",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "l fl s skl sk s l l jssj s sk s jss jss sfj sf sl sk s lll jssj",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "sl s s fl l lll fl l sk fl ss dsk fl fl fjjs l fl s s s l s jss",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "skl jss sfj l fl l sfj sfj skl l fl l sk fl fl sk ss l fs l sk l",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "sl fl skl l l sl s fl fjjs fjjs l fjjs l fl ss fl l sk s l l l",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "s s fjjs lll sk ss skl jssj skl fl l l skl fl l s dsk s s sl fl",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "c and a",
+          "description": "New characters: ca",
+          "sort_order": 3,
+          "active": true,
+          "prompts": [
+            {
+              "content": "sca clac asa cascad sa al sca ass clac slac cak da fla c la fa ja",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "fa salad ca daf addl fa scal slak facad al flask lass ac sass lack",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "sac a c sla sca addl saf c aa fla fad salsa ad fla ad a ladl als",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "c facad da fla call scal fla sac c al daff flas as ca all ak ac",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "sadl cas ala c sak c jackas ca af caff aa aa ja sa afa sla lac ca",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "fla fadd fa ja la faff sca sal alkal fals lac fla sass cas slas",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "al fa clack af flak flas fla as af ass ass fad alack c sadl ass",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "sack sca add sa c ja al lack cas cla cas add c las sa ac jacka sass",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "cla sca cla ja c sak alack slak slas dadd slack alkal la la ak jc",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "ass sa sas scal cas fa salaa las fad lack a dad c a sca ad la sla",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "n and t",
+          "description": "New characters: nt",
+          "sort_order": 4,
+          "active": true,
+          "prompts": [
+            {
+              "content": "snaffl dan attack fann na scant fast snack taff ank sna att snac candl",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "tattl tan tac na lan snaf jat staccat na t can fact an fann catcall",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "ta tattl sta nast task cast tan cantata can n lankl slan tall sanda",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "sna flank fact tank cat catcall t cantat latt landfal tal can stanc",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "na snak knac ta annal attac t san canca stall san caftan ta ct",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "t scandal flank last dankl nat cattl stat skat stal stak cact",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "candl fat ana ta flatlan t tal tatt scant flatca dandl staf slat castl",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "fan scantl sna snatc talk sna sna flank cast dandl n task tak lastl",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "alt fan landlad tal ta stan lank flan tal tast sand sta landfall",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "knac landfal cat ants landlad na sata salt caftan anall nat can lastl",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "i and v",
+          "description": "New characters: iv",
+          "sort_order": 5,
+          "active": true,
+          "prompts": [
+            {
+              "content": "cassi sic laddi affin canin flint inclinin vivain icil ni satinin",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "ci in cit divan finalis tankin sli instatin kil clinicall dis vill",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "vi lil caddis snifflin fit assail nif lanai kil addic lis ick dia",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "infantil satani kind nift jadin visitin stil idl littl si clinicia validat",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "ninn ti fil cavalcad sanit slackin catfis dinin astatin dadaist killin",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "fil sift vial sniffin fantasti lividl li invalid flick satinin di",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "affiancin dia finn inkin acidl final vannin tin itc italic instancin inla",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "insistin slavin vindictiv nai distall affianc ni stick ki sniff tid tilt",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "tacitl clannis jiltin failin ki stasi sanit fiddl savanna atil acclai",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "fiv satanicall lackadaisicall fascia ti sandin valis ai dids didacticall",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "m and e",
+          "description": "New characters: me",
+          "sort_order": 6,
+          "active": true,
+          "prompts": [
+            {
+              "content": "dividend lite salesladie vie decam dissect skie enema cancel feminist",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "insentienc decedent fiesta saltcella demiste title steadines scammin fancie",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "envie fee descent se incivilitie amide site demitass lesse animatedl",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "select latencie naive mantle milkmaid fiftie distinctivel seventeent",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "mainmas finickies distinctivel filme jestin assesse insiste slate skillet",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "lacke manana inte ma falsett mate dietetic entitlemen vesicle stales",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "divvie cleanin enlivenin seeke titte tendenc mistil mi lifelin accidental",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "steak skimme fantasie divest sveltes devianc mistines sassie jade",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "finenes titte dismantle mentalis inadvisedl fannie installe disinfectan",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "midden divisivenes acclaim mf settee svelt animatedl teatime devastate",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "h and r",
+          "description": "New characters: hr",
+          "sort_order": 7,
+          "active": true,
+          "prompts": [
+            {
+              "content": "dare testifier eradicate terminat trafficke hadin inferenc franti",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "reservedl chef lathere marr atria trait distres hearse trance varnis chattin",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "fifer irise intern merite clicker hesitanc rhiniti crackhead dishe",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "saddler rancidit mandrak rattl threade cardinall larc trisectin intrinsi",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "recreatin stridde ester carcas thirst rifte rascal thres drinke indiscriminatel",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "clarete iridescenc refile resen reelectin airlift tetherin invert resale",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "feathere enfranchisemen rehea earthie fetche thick firecracker interlinke",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "redelive ethnicall tidemar indiscreetl cracklin menhade mishandlin catche",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "ransack headline crest inerran teare cradle sincerit hater firt dinner",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "rent snickerin recklessnes sharer thatche relinin refac heatin reinstatemen",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "g and o",
+          "description": "New characters: go",
+          "sort_order": 8,
+          "active": true,
+          "prompts": [
+            {
+              "content": "overcook rotat comi reconfirmatio reregistratio nomad management forklift",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "storme socialisti shoestring conma iodide lading incontinentl fervo",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "sag gentl mo legitimatin sociologicall dominanc font regicid gallantl",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "migh elongatio nonsmokin integran demoni maroo comicalit toccata",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "fag infliction shatteringl coalfield cloc almight remoldin tanglin",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "fago gonorrhea evocatio dialing solderin ciggie collide monarchie",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "correctiona conciliatio hok roilin integrate cosmologie demonstrate throttle",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "glister avitaminosi noddle odditie chiffo mg solstice steroida conge",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "theor ammoni microcos histologica notifier favor chromaticall chromosoma",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "songste negotiator diagnostic nova glande hornie concavit interconnection",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "b and p",
+          "description": "New characters: bp",
+          "sort_order": 9,
+          "active": true,
+          "prompts": [
+            {
+              "content": "archbishop parliamentar calibe respel tiebac bon semipro retrospectiv transpir",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "paren snappil absconde nobodie grosbeak podiatr precooke misinterpretatio",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "parad establishin oppos liprea abrasiv dabbl seraph precookin kissabl",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "embarkin breadth airdroppin permeabilit plainsme aberran bonnies gallbladder",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "phaeto beepe packhors deciphermen plastere bloodthirstie cachepo vibration",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "sandblas preme soppie dispos preppe bookmarke neighbore heptagona toboggane",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "despondenc grabber blearil birdbath boast hellebor phonic blint escapemen",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "horrible topographicall portende replier seborrhe peste debark composin",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "trombonis ben bootblac resistibl rebor pikin barnacle pentacle trespasse",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "sparre photocopie dolphin plantin pictographi brittl bipartit potat",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "q and u",
+          "description": "New characters: qu",
+          "sort_order": 10,
+          "active": true,
+          "prompts": [
+            {
+              "content": "thoroughnes recrudescin tunefulnes rigorousnes imprimatu rounde capsule",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "breakou reintroduce contentiousnes bullfinche biennium augmenter nurse",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "busb curse quipste munificen beautifie thankfu instruct tranquill",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "stoup inundation undeservin fluf quarto purloinin quaho unheate cherub",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "guffa sufficien ridicule unequivocall redistribute fulsomel herculea",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "portentousnes shogun dangerou gutties samurai knuckl racquetbal babushka emolumen",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "cuboi epilogue frui puddl auctio aqueou quot squint velu abuse pluckil",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "therapeuticall renucleate turnoff busties accusa gustil pluckines neutral nonintellectua",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "uncannil outcropping custodian rutties guardednes platitude grubb mus",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "skunk impugn nonplussin nuptial untrouble flounc unchronicle bushe",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "w and n",
+          "description": "New characters: wn",
+          "sort_order": 11,
+          "active": true,
+          "prompts": [
+            {
+              "content": "weed rotundin kidnap compartment retakin enlighten adjurin sharin",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "propositione driftne entitlemen debunk peasantr canvas insurgenc nullifie",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "halfpennie middleweigh licensin outdistance sunburst whelmin supplicatin",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "brinines opalescen chardonna aw salutatorian envelo futon outpatien indulgentl",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "fascination blundere constitutionalist reedines endure wavie allianc rustines",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "numskul refrigeratin repartitionin bookworm snowie annihilate noisom",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "unbiassedl widemouthe phrenologica grandniec manipulation contorte airines",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "institutionall accompanist ranke precedenc tackin squanderin sanitarie conjunctiv",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "eastboun downwar monste inkblot sarong nattere cinematographe punchbag",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "retransmittin sawhorse engineer counterpoise wigwa wakefu genr brainstorm",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "c and x",
+          "description": "New characters: cx",
+          "sort_order": 12,
+          "active": true,
+          "prompts": [
+            {
+              "content": "cull continu spectroscopi captionin complete pronounce accumulatio",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "seraphicall misconstruin conservativenes scrabblin cosmeticia deficiencie",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "copiousl chican dissociativel pronouncin congenitall extende cementer",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "poleax attachment recombine compatibilitie colorles obscenes spamblock",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "cinchin agrochemica nonreciproca cleare coastlin crumblines insurrectio",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "discounte preconditionin relocke complexion destructibl crawlin corrode",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "decommissione sec percusse discograph beneficia couple pixel officialis affixe",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "lurchin rapprochemen raccoon incom nic doctorin ratche falsificatio",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "ethnicall obsolesce unpunctualit effulgenc lunchroo chaoticall sackful",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "shucke microelectroni watchtowe occurrin processe electrocardiograph",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "y and z",
+          "description": "New characters: yz",
+          "sort_order": 13,
+          "active": true,
+          "prompts": [
+            {
+              "content": "skylight syllabicatin secularize pygm amazo fizze overemphasize summariz",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "heavyse appetize metaphysicall fraye psychoanalyticall economizer bricklayer",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "mestizo yashmak yukk hygromete glamorizatio synthesi dillydall yup wheezil",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "psychedelic burglariz phyl polytheis ethy nylon delaye psychosomatic highboy",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "polynomiall hysteresi polymerase pyrimidine bowdleriz sterilize gazetteere",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "playtim initializatio haphazar legitimatiz buzzard plasticizin sizzle",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "emblazone zoolog anglicize rhyme dyestuff credenz ray squeezebo swiz stargaze",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "baptiz mobilize throwaway oversizin dynast harmonize sublaye metalize",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "humanizatio buckeye overspecialize graybeard magazine clearway yellow enjoyment",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "layere flywa mizzen baptize capsiz styluse glaz synonymou bellyach",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "大小写",
+          "description": "New characters: ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+          "sort_order": 14,
+          "active": true,
+          "prompts": [
+            {
+              "content": "I U Frann Iss V Sophe Ma Blanch Janissar Karl Equuleu Jech Dia",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "Mariejeann Filofa Shoshann Cheeve Ludvi Stoicism Alabam Fo Belmon Al Peshawa",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "Episcopalia Tammi Huc Castill McDowel Sabrin Izanam Salina Soav Gerar Margarett",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "Blondell Austin Menande Vandal Winnifre Daun Porsch Thomis Noel TELNE",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "Row Ber Fraue Kenya Trix Pissar Bake Vandal Wale Jua Benghaz Ronal",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "Babylonia Jacobit Guamania Zebede Hagiograph Stou AWO Dustbuste Shani",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "Edgard Rigolett Danic Carr Donn Rosco Jazmi Ermini BB Coloradoa Hebrais",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "Stockhause Tolyatt Marshal VG Haga Kamek Gall Pilcomay Ballar Morto Renascenc",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "Hebride Tup Hoebar Tunisia El Crysta Cheyenn SD Mad SU Silvai Johnn",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "Vis Ramb Luge Demetriu Collie Nettl Dicken Joelyn Conservativ Fonzi",
+              "sort_order": 9,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "Python语句及关键词",
+          "description": "New characters: ._",
+          "sort_order": 15,
+          "active": true,
+          "prompts": [
+            {
+              "content": "import turtle as t",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "import random as r",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "from turtle import *",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "turtle.forward(100)",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "turtle.right(90)",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "turtle.screensize(400,400)",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "turtle.circle(50,steps=6)",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "turtle.dot(100,\"red\")",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "for i in range(10):",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "while True:",
+              "sort_order": 9,
+              "active": true
+            },
+            {
+              "content": "continue break",
+              "sort_order": 10,
+              "active": true
+            },
+            {
+              "content": "True False",
+              "sort_order": 11,
+              "active": true
+            },
+            {
+              "content": "divmod()",
+              "sort_order": 12,
+              "active": true
+            },
+            {
+              "content": "eval()",
+              "sort_order": 13,
+              "active": true
+            },
+            {
+              "content": "format()",
+              "sort_order": 14,
+              "active": true
+            },
+            {
+              "content": "reversed()",
+              "sort_order": 15,
+              "active": true
+            },
+            {
+              "content": "sorted()",
+              "sort_order": 16,
+              "active": true
+            },
+            {
+              "content": "round()",
+              "sort_order": 17,
+              "active": true
+            },
+            {
+              "content": "try except",
+              "sort_order": 18,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "C++ 语句及关键词",
+          "description": "New characters: ()",
+          "sort_order": 16,
+          "active": true,
+          "prompts": [
+            {
+              "content": "#include <iostream>",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "using namespace std;",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "#include <iomanip>",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "#include <ctime>",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "#include <cstdlib>",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "#include <algorithm>",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "int n,a,b;",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "cin >> m >> n;",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "cout << m << n << endl;",
+              "sort_order": 8,
+              "active": true
+            },
+            {
+              "content": "for (int i = 1; i <= n; i++) {}",
+              "sort_order": 9,
+              "active": true
+            },
+            {
+              "content": "switch case",
+              "sort_order": 10,
+              "active": true
+            },
+            {
+              "content": "short int long long float double",
+              "sort_order": 11,
+              "active": true
+            },
+            {
+              "content": "setprecision(n)",
+              "sort_order": 12,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "turtle 3",
+          "description": "New characters: #",
+          "sort_order": 17,
+          "active": true,
+          "prompts": [
+            {
+              "content": "turtle.left turtle.right() write() # shape",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "reset hideturtle ht() clear reset() show turtle isvisible",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "is shape() resizemode() color mode shape # size turtlesize",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "title on click drag onrelease reset #bgpic background bgcolor",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "clearscreen reset delay tracer update setup reset #turtle.screensize()",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "register shape add_shape() turtle.left() #as listen onkey key release",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "turtle turtle.bgcolor() done() mainloop() #listen timer turtle.listen()",
+              "sort_order": 6,
+              "active": true
+            },
+            {
+              "content": "ontimer turtle.onclick() #onscreenclick bye speed bgpic() listen turtle.stamp() #",
+              "sort_order": 7,
+              "active": true
+            },
+            {
+              "content": "exit turtle.bye() # screensize exitonclick turtle.dot() turtle.right() #",
+              "sort_order": 8,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "数字和运算符",
+          "description": "New characters: +-*/=\\\\\"',",
+          "sort_order": 18,
+          "active": true,
+          "prompts": [
+            {
+              "content": "1 2 3 4 5 6 7 8 9 0 123 456 12+1",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "print , \"\" 'she said' hello world : \\ ,",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "+-*/ 12+13=25 18/2 9*0 11+1-10 12 40 100",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "\"abc\"+\"12\" 12*'hello' she said : \"python's a good language\"",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "\\'a' 19*8 12+4=16 19*2=38 (12-4)*8 1+1 = 1",
+              "sort_order": 4,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "Python关键字",
+          "description": "New characters: abc",
+          "sort_order": 19,
+          "active": true,
+          "prompts": [
+            {
+              "content": "if elif else and as break def null True False",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "print continue True for import None in is except not",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "if elif else or pass return False True with yield",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "def if break as import in True False not and or with",
+              "sort_order": 3,
+              "active": true
+            },
+            {
+              "content": "global nonlocal for in def class assert as and from",
+              "sort_order": 4,
+              "active": true
+            },
+            {
+              "content": "import as if elif else for print continue raise with yield",
+              "sort_order": 5,
+              "active": true
+            },
+            {
+              "content": "finally False True None break if elif else continue break",
+              "sort_order": 6,
+              "active": true
+            }
+          ]
+        },
+        {
+          "title": "Python内置函数",
+          "description": "New characters: []",
+          "sort_order": 20,
+          "active": true,
+          "prompts": [
+            {
+              "content": "abs() eval() exec() range() list() tuple() [] len() round()",
+              "sort_order": 0,
+              "active": true
+            },
+            {
+              "content": "ascii() bin() bool() bytes() float() filter() map() min() max() set()",
+              "sort_order": 1,
+              "active": true
+            },
+            {
+              "content": "chr() open() tuple() type() pow() {} zip() dict() dir() complex() input()",
+              "sort_order": 2,
+              "active": true
+            },
+            {
+              "content": "pow() print() super() set() slice() str() int() hex() hash() oct() ord()",
+              "sort_order": 3,
+              "active": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
