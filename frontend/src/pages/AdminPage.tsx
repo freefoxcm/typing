@@ -12,12 +12,13 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { BarChart3, BookOpen, ChevronDown, Download, FileUp, GripVertical, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
+import { BarChart3, BookOpen, ChevronDown, Download, FileUp, GripVertical, Languages, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import { errorLabel } from '../typing'
 import type { Child, Course, Lesson, Prompt, Report } from '../types'
+import { WordLibraryPanel } from './WordLibraryPanel'
 
-type Tab = 'children' | 'library' | 'import' | 'reports'
+type Tab = 'children' | 'library' | 'words' | 'import' | 'reports'
 type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
 export function AdminPage() {
@@ -30,7 +31,7 @@ export function AdminPage() {
 
   const loadChildren = useCallback(() => api<Child[]>('/api/admin/children').then(setChildren), [])
   const loadLibrary = useCallback(() => api<Course[]>('/api/admin/library').then(setCourses), [])
-  const loadReport = useCallback((childId = '', days = '30') => api<Report>(`/api/admin/reports/summary?days=${days}${childId ? `&child_id=${childId}` : ''}`).then(setReport), [])
+  const loadReport = useCallback((childId = '', days = '30', mode = 'all') => api<Report>(`/api/admin/reports/summary?days=${days}&mode=${mode}${childId ? `&child_id=${childId}` : ''}`).then(setReport), [])
   useEffect(() => { Promise.all([loadChildren(), loadLibrary(), loadReport()]).catch((e) => setError(e.message)) }, [loadChildren, loadLibrary, loadReport])
 
   const action = async (work: () => Promise<unknown>, success: string, reload: () => Promise<unknown> = async () => {}) => {
@@ -45,6 +46,7 @@ export function AdminPage() {
         <nav>
           <button className={tab === 'children' ? 'active' : ''} onClick={() => setTab('children')}><Users />学生档案</button>
           <button className={tab === 'library' ? 'active' : ''} onClick={() => setTab('library')}><BookOpen />课程词库</button>
+          <button className={tab === 'words' ? 'active' : ''} onClick={() => setTab('words')}><Languages />单词库</button>
           <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><FileUp />导入导出</button>
           <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}><BarChart3 />学习报告</button>
         </nav>
@@ -54,6 +56,7 @@ export function AdminPage() {
         {error && <p className="notice error">{error}</p>}
         {tab === 'children' && <ChildrenPanel children={children} action={action} reload={loadChildren} />}
         {tab === 'library' && <LibraryPanel courses={courses} action={action} reload={loadLibrary} />}
+        {tab === 'words' && <WordLibraryPanel />}
         {tab === 'import' && <ImportPanel courses={courses} reload={loadLibrary} action={action} />}
         {tab === 'reports' && <ReportsPanel children={children} report={report} loadReport={loadReport} />}
       </section>
@@ -197,13 +200,13 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
   </>
 }
 
-function ReportsPanel({ children, report, loadReport }: { children: Child[]; report: Report | null; loadReport: (child: string, days: string) => Promise<unknown> }) {
-  const [childId, setChildId] = useState(''); const [days, setDays] = useState('30')
-  useEffect(() => { void loadReport(childId, days) }, [childId, days, loadReport])
-  const query = `days=${days}${childId ? `&child_id=${childId}` : ''}`
+function ReportsPanel({ children, report, loadReport }: { children: Child[]; report: Report | null; loadReport: (child: string, days: string, mode: string) => Promise<unknown> }) {
+  const [childId, setChildId] = useState(''); const [days, setDays] = useState('30'); const [mode, setMode] = useState('all')
+  useEffect(() => { void loadReport(childId, days, mode) }, [childId, days, mode, loadReport])
+  const query = `days=${days}&mode=${mode}${childId ? `&child_id=${childId}` : ''}`
   return <><header className="section-title"><div><p className="eyebrow">学习报告</p><h2>看见每天的进步</h2><p>速度、准确率和薄弱按键一目了然。</p></div><a className="ghost link-button" href={`/api/admin/reports/export.csv?${query}`}><Download />导出 CSV</a></header>
-    <div className="report-filters card"><label>学生<select value={childId} onChange={(e) => setChildId(e.target.value)}><option value="">全部学生</option>{children.map((child) => <option value={child.id} key={child.id}>{child.name}</option>)}</select></label><label>时间范围<select value={days} onChange={(e) => setDays(e.target.value)}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近一年</option></select></label></div>
-    {report && <><div className="report-metrics"><div><span>练习次数</span><strong>{report.attempt_count}</strong></div><div><span>练习分钟</span><strong>{report.practice_minutes}</strong></div><div><span>平均速度</span><strong>{report.average_cpm} <small>CPM</small></strong></div><div><span>整体准确率</span><strong>{report.accuracy}%</strong></div></div><div className="report-columns"><section className="card"><h3>薄弱按键</h3>{report.weak_keys.length ? report.weak_keys.map((item) => <div className="weak-row" key={item.char}><kbd>{errorLabel(item.char)}</kbd><div><i style={{ width: `${Math.max(8, item.count / report.weak_keys[0].count * 100)}%` }} /></div><span>{item.count} 次</span></div>) : <p className="muted">还没有错误记录，继续保持！</p>}</section><section className="card"><h3>最近练习</h3><div className="attempt-table">{report.attempts.slice(0, 12).map((item) => <div key={item.id}><time>{new Date(item.created_at).toLocaleDateString()}</time><strong>{item.cpm} CPM</strong><span>{item.accuracy}%</span><span>{item.errors} 错</span></div>)}</div></section></div></>}
+    <div className="report-filters card"><label>学生<select value={childId} onChange={(e) => setChildId(e.target.value)}><option value="">全部学生</option>{children.map((child) => <option value={child.id} key={child.id}>{child.name}</option>)}</select></label><label>练习模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="all">全部模式</option><option value="course">课程练习</option><option value="word">单词练习</option></select></label><label>时间范围<select value={days} onChange={(e) => setDays(e.target.value)}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近一年</option></select></label></div>
+    {report && <><div className="report-metrics"><div><span>练习次数</span><strong>{report.attempt_count}</strong></div><div><span>练习分钟</span><strong>{report.practice_minutes}</strong></div><div><span>平均速度</span><strong>{report.average_cpm} <small>CPM</small></strong></div><div><span>整体准确率</span><strong>{report.accuracy}%</strong></div></div><div className="report-columns"><section className="card"><h3>薄弱按键</h3>{report.weak_keys.length ? report.weak_keys.map((item) => <div className="weak-row" key={item.char}><kbd>{errorLabel(item.char)}</kbd><div><i style={{ width: `${Math.max(8, item.count / report.weak_keys[0].count * 100)}%` }} /></div><span>{item.count} 次</span></div>) : <p className="muted">还没有错误记录，继续保持！</p>}</section><section className="card"><h3>最近练习</h3><div className="attempt-table">{report.attempts.slice(0, 12).map((item) => <div key={item.id}><time>{new Date(item.created_at).toLocaleDateString()}</time><strong>{item.cpm} CPM</strong><span>{item.mode === 'word' ? '单词' : '课程'} · {item.accuracy}%</span><span>{item.errors} 错</span></div>)}</div></section></div></>}
   </>
 }
 

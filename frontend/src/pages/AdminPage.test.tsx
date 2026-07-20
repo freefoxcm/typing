@@ -77,6 +77,21 @@ describe('AdminPage', () => {
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
   })
 
+  it('opens the dedicated word library and shows LLM configuration state', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/children') return []
+      if (path === '/api/admin/library') return courses
+      if (path.startsWith('/api/admin/reports/summary')) return report
+      if (path === '/api/admin/word-sets') return []
+      if (path === '/api/admin/llm/status') return { configured: false, base_url: 'https://api.openai.com/v1', model: '' }
+      return {}
+    })
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '单词库' }))
+    expect(await screen.findByText('LLM 未配置')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新建单词集' })).toBeInTheDocument()
+  })
+
   it('collapses courses and lessons independently while preserving nested state', async () => {
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '课程词库' }))

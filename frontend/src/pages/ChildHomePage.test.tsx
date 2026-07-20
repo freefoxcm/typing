@@ -19,7 +19,7 @@ const courses: Course[] = [
 describe('ChildHomePage', () => {
   beforeEach(() => {
     mockedApi.mockReset()
-    mockedApi.mockResolvedValue(courses)
+    mockedApi.mockImplementation(async (path) => path === '/api/library/courses' ? courses : [])
   })
 
   it('keeps courses collapsed by default and allows multiple courses to remain open', async () => {
@@ -42,5 +42,14 @@ describe('ChildHomePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '收起课程 入门课程' }))
     expect(screen.queryByText('字母练习')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: /符号练习/ })).toBeInTheDocument()
+  })
+
+  it('shows ready word sets as a separate practice area', async () => {
+    mockedApi.mockImplementation(async (path) => path === '/api/library/courses' ? courses : [{ id: 9, title: '计算机英语', description: '', word_count: 12, attempts: 3, best_cpm: 80 }])
+    render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
+    const wordSetLink = await screen.findByRole('link', { name: /计算机英语/ })
+    expect(wordSetLink).toHaveAttribute('href', '/word-practice/9')
+    expect(screen.getByText(/12 词/)).toBeInTheDocument()
+    expect(wordSetLink).toHaveTextContent('已练 3 次')
   })
 })

@@ -86,6 +86,61 @@ class AttemptCreate(BaseModel):
     errors: list[ErrorItem] = Field(default_factory=list, max_length=500)
 
 
+class WordAttemptCreate(BaseModel):
+    word_id: int = Field(gt=0)
+    duration_ms: int = Field(ge=100, le=86_400_000)
+    errors: list[ErrorItem] = Field(default_factory=list, max_length=500)
+
+
+class WordSetWrite(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+    active: bool = True
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
+class WordSetOrder(BaseModel):
+    word_set_ids: list[int] = Field(min_length=1, max_length=10000)
+
+    @field_validator("word_set_ids")
+    @classmethod
+    def unique_word_set_ids(cls, value: list[int]) -> list[int]:
+        if any(item <= 0 for item in value) or len(value) != len(set(value)):
+            raise ValueError("单词集 ID 必须为不重复的正整数")
+        return value
+
+
+class WordWrite(BaseModel):
+    word_set_id: int = Field(gt=0)
+    spelling: str = Field(min_length=1, max_length=120)
+    phonetic: str = Field(default="", max_length=160)
+    meaning_zh: str = Field(default="", max_length=2000)
+    technical_meaning_zh: str = Field(default="", max_length=2000)
+    active: bool = True
+
+    @field_validator("spelling")
+    @classmethod
+    def supported_spelling(cls, value: str) -> str:
+        from .word_imports import validate_spelling
+        value = value.strip()
+        error = validate_spelling(value)
+        if error:
+            raise ValueError(error)
+        return value
+
+
+class WordImportRequest(BaseModel):
+    word_set_id: int = Field(gt=0)
+    format: str = Field(pattern=r"^(txt|csv|json)$")
+    content: str = Field(min_length=1, max_length=5_000_000)
+    mode: str = Field(default="append", pattern=r"^(append|replace)$")
+
+
 class ImportRequest(BaseModel):
     format: str = Field(pattern=r"^(txt|csv|json)$")
     content: str = Field(min_length=1, max_length=5_000_000)
