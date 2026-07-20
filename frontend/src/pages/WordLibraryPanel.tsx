@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Download, FileUp, Pencil, Plus, RefreshCcw, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Pencil, Plus, RefreshCcw, Trash2 } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import type { LlmStatus, WordEntry, WordSetSummary } from '../types'
 
@@ -18,10 +18,6 @@ export function WordLibraryPanel() {
   const [phonetic, setPhonetic] = useState('')
   const [meaning, setMeaning] = useState('')
   const [technicalMeaning, setTechnicalMeaning] = useState('')
-  const [format, setFormat] = useState('txt')
-  const [mode, setMode] = useState('append')
-  const [content, setContent] = useState('')
-  const [preview, setPreview] = useState<any>(null)
 
   const load = useCallback(async () => {
     const [wordSets, llmStatus] = await Promise.all([api<WordSetSummary[]>('/api/admin/word-sets'), api<LlmStatus>('/api/admin/llm/status')])
@@ -56,22 +52,9 @@ export function WordLibraryPanel() {
     const next = [...sets]; [next[index], next[target]] = [next[target], next[index]]
     void action(() => api('/api/admin/word-sets/order', { method: 'PUT', ...jsonBody({ word_set_ids: next.map((item) => item.id) }) }), '单词集顺序已保存')
   }
-  const importPayload = { word_set_id: Number(wordSetId), format, mode, content }
-  const previewImport = () => void action(async () => setPreview(await api('/api/admin/word-import/preview', { method: 'POST', ...jsonBody(importPayload) })), '预览完成')
-  const commitImport = () => {
-    if (mode === 'replace' && !window.confirm('替换模式会删除该单词集的现有词条，确认继续？')) return
-    void action(() => api('/api/admin/word-import', { method: 'POST', ...jsonBody(importPayload) }), '单词导入完成').then((ok) => { if (ok) setPreview(null) })
-  }
-  const readFile = async (file?: File) => {
-    if (!file) return
-    setContent(await file.text()); setPreview(null)
-    const extension = file.name.split('.').pop()?.toLowerCase()
-    if (extension && ['txt', 'csv', 'json'].includes(extension)) setFormat(extension)
-  }
-
   return <>
     {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
-    <header className="section-title"><div><p className="eyebrow">单词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div><div className="button-row"><button className="ghost" onClick={() => void load()}><RefreshCcw />刷新状态</button><a className="primary link-button" href="/api/admin/word-export"><Download />导出 JSON</a></div></header>
+    <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div><button className="ghost" onClick={() => void load()}><RefreshCcw />刷新状态</button></header>
     <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div>
     <form className="inline-form card" onSubmit={createSet}><label>单词集名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建单词集</button></form>
     <div className="word-set-admin-list">{sets.map((item, index) => {
@@ -88,9 +71,8 @@ export function WordLibraryPanel() {
         {item.words?.map((word) => <div key={word.id}><code>{word.spelling}</code><span>{word.phonetic || '待补音标'}</span><p>{word.meaning_zh || '待补释义'}</p><i className={`word-status status-${word.enrichment_status}`}>{statusLabels[word.enrichment_status ?? ''] ?? word.enrichment_status}</i>{word.enrichment_error && <small title={word.enrichment_error}>查看错误</small>}<button aria-label={`编辑单词 ${word.spelling}`} onClick={() => editWord(word)}><Pencil /></button><button onClick={() => void action(() => api(`/api/admin/words/${word.id}`, { method: 'PUT', ...jsonBody({ word_set_id: word.word_set_id, spelling: word.spelling, phonetic: word.phonetic, meaning_zh: word.meaning_zh, technical_meaning_zh: word.technical_meaning_zh, active: !word.active }) }), word.active ? '单词已停用' : '单词已启用')}>{word.active ? '停用' : '启用'}</button>{word.enrichment_status === 'failed' && <button aria-label={`重试单词 ${word.spelling}`} onClick={() => void action(() => api(`/api/admin/words/${word.id}/retry`, { method: 'POST' }), '单词已重新排队')}><RefreshCcw /></button>}<button className="danger-button" aria-label={`删除单词 ${word.spelling}`} onClick={() => window.confirm(`删除 ${word.spelling}？`) && void action(() => api(`/api/admin/words/${word.id}`, { method: 'DELETE' }), '单词已删除')}><Trash2 /></button></div>)}
       </div>}</article>
     })}</div>
-    {sets.length > 0 && <><header className="section-title word-tools-title"><div><p className="eyebrow">添加与导入</p><h2>补充单词</h2></div></header>
+    {sets.length > 0 && <><header className="section-title word-tools-title"><div><p className="eyebrow">添加单词</p><h2>补充单词</h2></div></header>
       <form className="word-entry-form card" onSubmit={createWord}><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{sets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>单词或术语<input value={spelling} onChange={(e) => setSpelling(e.target.value)} required /></label><label>美式音标<input value={phonetic} onChange={(e) => setPhonetic(e.target.value)} placeholder="可留空" /></label><label className="wide">常用中文释义<input value={meaning} onChange={(e) => setMeaning(e.target.value)} placeholder="可留空" /></label><label className="wide">计算机领域释义<input value={technicalMeaning} onChange={(e) => setTechnicalMeaning(e.target.value)} placeholder="没有可留空" /></label><button className="primary"><Plus />添加单词</button></form>
-      <div className="card import-card word-import-card"><div className="import-grid"><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{sets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>格式<select value={format} onChange={(e) => { setFormat(e.target.value); setPreview(null) }}><option value="txt">TXT</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="append">追加/更新</option><option value="replace">替换本集</option></select></label><label className="file-picker"><FileUp />选择文件<input type="file" accept=".txt,.csv,.json" onChange={(e) => void readFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea rows={10} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null) }} placeholder={format === 'csv' ? 'word,phonetic,meaning_zh,technical_meaning_zh,active' : '粘贴内容，或选择文件…'} /></label><div className="button-row"><button className="ghost" onClick={previewImport} disabled={!content}>预览导入</button><button className="primary" onClick={commitImport} disabled={!preview?.valid}>确认导入</button></div>{preview && <div className={preview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{preview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>共 {preview.word_count} 词 · 新增 {preview.created_count} · 更新 {preview.updated_count} · 待补全 {preview.queued_count}</p>{preview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>
     </>}
   </>
 }
