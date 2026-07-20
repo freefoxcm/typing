@@ -1,21 +1,26 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, BookOpen, ChevronDown, Gauge, Sparkles, Target } from 'lucide-react'
+import { ArrowRight, BookOpen, ChevronDown, Gauge, Languages, Sparkles, Target } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import type { Course, Me } from '../types'
+import type { Course, Me, WordSetSummary } from '../types'
 
 export function ChildHomePage({ me }: { me: Me }) {
   const [courses, setCourses] = useState<Course[]>([])
+  const [wordSets, setWordSets] = useState<WordSetSummary[]>([])
   const [expandedCourses, setExpandedCourses] = useState<Set<number>>(() => new Set())
   const [error, setError] = useState('')
-  useEffect(() => { api<Course[]>('/api/library/courses').then(setCourses).catch((e) => setError(e.message)) }, [])
+  useEffect(() => {
+    Promise.all([api<Course[]>('/api/library/courses'), api<WordSetSummary[]>('/api/library/word-sets')])
+      .then(([courseItems, wordSetItems]) => { setCourses(courseItems); setWordSets(wordSetItems) })
+      .catch((e) => setError(e.message))
+  }, [])
   const toggleCourse = (courseId: number) => setExpandedCourses((current) => {
     const next = new Set(current)
     if (next.has(courseId)) next.delete(courseId); else next.add(courseId)
     return next
   })
-  const attempts = courses.flatMap((c) => c.lessons).reduce((sum, lesson) => sum + (lesson.attempts ?? 0), 0)
-  const best = Math.max(0, ...courses.flatMap((c) => c.lessons).map((lesson) => lesson.best_cpm ?? 0))
+  const attempts = courses.flatMap((c) => c.lessons).reduce((sum, lesson) => sum + (lesson.attempts ?? 0), 0) + wordSets.reduce((sum, item) => sum + (item.attempts ?? 0), 0)
+  const best = Math.max(0, ...courses.flatMap((c) => c.lessons).map((lesson) => lesson.best_cpm ?? 0), ...wordSets.map((item) => item.best_cpm ?? 0))
   return (
     <div className="page child-home">
       <section className="welcome-panel">
@@ -25,10 +30,16 @@ export function ChildHomePage({ me }: { me: Me }) {
       <section className="quick-stats">
         <div><Target /><span><strong>{attempts}</strong>已完成练习</span></div>
         <div><Gauge /><span><strong>{best}</strong>最快字符/分钟</span></div>
-        <div><BookOpen /><span><strong>{courses.length}</strong>可选课程</span></div>
+        <div><BookOpen /><span><strong>{courses.length + wordSets.length}</strong>可选练习</span></div>
       </section>
       {error && <p className="notice error">{error}</p>}
-      {courses.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的课程</h2><p>请管理员进入后台添加或导入词库。</p></div>}
+      {courses.length === 0 && wordSets.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的内容</h2><p>请管理员进入后台添加课程或单词集。</p></div>}
+      {wordSets.length > 0 && <section className="word-set-section">
+        <header className="section-title"><div><p className="eyebrow">单词练习</p><h2>边输入，边记住单词</h2><p>看音标和释义，准确地敲出每个词。</p></div></header>
+        <div className="word-set-grid">{wordSets.map((item) => <Link className="word-set-card" to={`/word-practice/${item.id}`} key={item.id}>
+          <Languages /><div className="grow"><h3>{item.title}</h3><p>{item.description || `${item.word_count} 个可练单词`}</p><span>{item.word_count} 词 · {item.attempts ? `已练 ${item.attempts} 次` : '尚未练习'}{item.best_cpm ? ` · 最佳 ${item.best_cpm} CPM` : ''}</span></div><ArrowRight />
+        </Link>)}</div>
+      </section>}
       <div className="course-list">
         {courses.map((course, courseIndex) => {
           const courseExpanded = expandedCourses.has(course.id)

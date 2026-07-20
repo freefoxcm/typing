@@ -282,17 +282,21 @@ def export_library(db: Session = Depends(get_db)):
     return JSONResponse(payload, headers={"Content-Disposition": "attachment; filename=kidtype-library.json"})
 
 
-def _report_query(db: Session, child_id: int | None, days: int):
+def _report_query(db: Session, child_id: int | None, days: int, mode: str = "all"):
     since = datetime.utcnow() - timedelta(days=days)
     query = select(PracticeAttempt).where(PracticeAttempt.created_at >= since)
     if child_id:
         query = query.where(PracticeAttempt.child_id == child_id)
+    if mode == "course":
+        query = query.where(PracticeAttempt.word_id.is_(None))
+    elif mode == "word":
+        query = query.where(PracticeAttempt.word_id.is_not(None))
     return db.scalars(query.options(selectinload(PracticeAttempt.errors)).order_by(PracticeAttempt.created_at.desc())).all()
 
 
 @router.get("/reports/summary")
-def report_summary(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), db: Session = Depends(get_db)):
-    attempts = _report_query(db, child_id, days)
+def report_summary(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), mode: str = Query(default="all", pattern=r"^(all|course|word)$"), db: Session = Depends(get_db)):
+    attempts = _report_query(db, child_id, days, mode)
     weak: defaultdict[str, int] = defaultdict(int)
     for attempt in attempts:
         for error in attempt.errors:
@@ -309,6 +313,9 @@ def report_summary(child_id: int | None = None, days: int = Query(default=30, ge
             "id": item.id,
             "child_id": item.child_id,
             "lesson_id": item.lesson_id,
+            "word_set_id": item.word_set_id,
+            "word_id": item.word_id,
+            "mode": "word" if item.word_id else "course",
             "cpm": item.cpm,
             "accuracy": item.accuracy,
             "errors": item.error_count,
@@ -319,13 +326,13 @@ def report_summary(child_id: int | None = None, days: int = Query(default=30, ge
 
 
 @router.get("/reports/export.csv")
-def export_report(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), db: Session = Depends(get_db)):
-    attempts = _report_query(db, child_id, days)
+def export_report(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), mode: str = Query(default="all", pattern=r"^(all|course|word)$"), db: Session = Depends(get_db)):
+    attempts = _report_query(db, child_id, days, mode)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["attempt_id", "child_id", "course_id", "lesson_id", "created_at", "duration_ms", "characters", "errors", "cpm", "accuracy"])
+    writer.writerow(["attempt_id", "child_id", "mode", "course_id", "lesson_id", "word_set_id", "word_id", "created_at", "duration_ms", "characters", "errors", "cpm", "accuracy"])
     for item in attempts:
-        writer.writerow([item.id, item.child_id, item.course_id, item.lesson_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.error_count, item.cpm, item.accuracy])
+        writer.writerow([item.id, item.child_id, "word" if item.word_id else "course", item.course_id, item.lesson_id, item.word_set_id, item.word_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.error_count, item.cpm, item.accuracy])
     data = output.getvalue().encode("utf-8-sig")
     return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kidtype-report.csv"})
 

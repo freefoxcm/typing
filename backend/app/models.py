@@ -73,6 +73,41 @@ class Prompt(Base):
     lesson: Mapped[Lesson] = relationship(back_populates="prompts")
 
 
+class WordSet(Base):
+    __tablename__ = "word_sets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(120), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    words: Mapped[list["Word"]] = relationship(back_populates="word_set", cascade="all, delete-orphan", order_by="Word.id")
+
+
+class Word(Base):
+    __tablename__ = "words"
+    __table_args__ = (
+        UniqueConstraint("word_set_id", "normalized_spelling", name="uq_word_set_normalized_spelling"),
+        Index("ix_words_enrichment_queue", "enrichment_status", "next_retry_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    word_set_id: Mapped[int] = mapped_column(ForeignKey("word_sets.id", ondelete="CASCADE"), index=True)
+    spelling: Mapped[str] = mapped_column(String(120))
+    normalized_spelling: Mapped[str] = mapped_column(String(120))
+    phonetic: Mapped[str] = mapped_column(String(160), default="")
+    meaning_zh: Mapped[str] = mapped_column(Text, default="")
+    technical_meaning_zh: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enrichment_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    enrichment_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    enrichment_error: Mapped[str] = mapped_column(Text, default="")
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    word_set: Mapped[WordSet] = relationship(back_populates="words")
+
+
 class PracticeAttempt(Base):
     __tablename__ = "practice_attempts"
     __table_args__ = (
@@ -84,6 +119,8 @@ class PracticeAttempt(Base):
     course_id: Mapped[Optional[int]] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     lesson_id: Mapped[Optional[int]] = mapped_column(ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
     prompt_id: Mapped[Optional[int]] = mapped_column(ForeignKey("prompts.id", ondelete="SET NULL"), nullable=True)
+    word_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("word_sets.id", ondelete="SET NULL"), nullable=True, index=True)
+    word_id: Mapped[Optional[int]] = mapped_column(ForeignKey("words.id", ondelete="SET NULL"), nullable=True, index=True)
     prompt_snapshot: Mapped[str] = mapped_column(Text)
     duration_ms: Mapped[int] = mapped_column(Integer)
     char_count: Mapped[int] = mapped_column(Integer)

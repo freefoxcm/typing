@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,8 +10,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings, get_settings
 from .database import Base, create_db
-from .routers import admin, auth, library, practice
+from .routers import admin, admin_words, auth, library, practice
 from .seed import bootstrap
+from .word_enrichment import enrichment_worker
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -23,7 +25,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             Base.metadata.create_all(engine)
         with session_factory() as db:
             bootstrap(db, settings)
-        yield
+        worker = asyncio.create_task(enrichment_worker(session_factory, settings))
+        try:
+            yield
+        finally:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
         engine.dispose()
 
     app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
@@ -50,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(library.router)
     app.include_router(practice.router)
     app.include_router(admin.router)
+    app.include_router(admin_words.router)
 
     dist = Path(settings.frontend_dist)
     assets = dist / "assets"

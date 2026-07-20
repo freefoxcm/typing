@@ -11,6 +11,8 @@
 - 严格逐字符练习：错误不前进，实时显示 CPM、准确率、错误和用时。
 - US ANSI 虚拟键盘、左右手提示、大小写、数字、符号、Enter 和 Tab。
 - 管理员维护孩子档案、课程、关卡和练习内容。
+- 独立单词练习：每轮随机洗牌，输入时同步展示美式音标、常用中文释义和计算机领域释义。
+- 单词资料缺失时可通过 OpenAI 兼容接口在后台自动补全，失败任务可重试。
 - TXT、CSV、JSON 预览导入，JSON 词库备份，CSV 成绩导出。
 - SQLite 持久化；密码和 PIN 使用 Argon2 哈希。
 
@@ -27,6 +29,8 @@ cp .env.example .env
 ```bash
 docker compose up -d --build
 ```
+
+如需自动补全单词资料，另行设置 `LLM_API_KEY` 和 `LLM_MODEL`；`LLM_BASE_URL` 默认是 `https://api.openai.com/v1`，也可改为其他兼容 Chat Completions 的服务。修改这些配置后需要重启容器。未配置 LLM 时，完整词条仍可正常练习，缺少音标或常用释义的词条会保留在等待状态。
 
 访问 `http://服务器地址:8080`。首次启动会创建管理员和少量原创示例课程。数据库位于名为 `kidtype_data` 的 Docker 卷中。
 
@@ -89,3 +93,11 @@ cd frontend && npm test && npm run build
 - JSON：使用后台导出的层级结构；多行代码可放在 JSON 或带引号的 CSV 字段中。
 
 练习文本只接受可打印 ASCII、换行和 Tab；课程与关卡名称可以使用中文。
+
+单词库导入时需选择目标单词集：
+
+- TXT：每个非空行一个单词或技术术语。
+- CSV：必须包含 `word`，可选 `phonetic,meaning_zh,technical_meaning_zh,active`。
+- JSON：根对象使用 `{"words":[...]}`，词条字段与 CSV 相同。
+
+同一单词集内的词条忽略大小写和多余空格去重。再次导入时，非空字段覆盖旧内容，空字段保留旧内容。
