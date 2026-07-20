@@ -19,6 +19,7 @@ import type { Child, Course, Lesson, Prompt, Report, WordSetSummary } from '../t
 import { WordLibraryPanel } from './WordLibraryPanel'
 
 type Tab = 'children' | 'library' | 'words' | 'import' | 'reports'
+type TransferTab = 'typing' | 'words'
 type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
 export function AdminPage() {
@@ -188,6 +189,7 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
 }
 
 function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: () => Promise<unknown>; action: AdminAction }) {
+  const [transferTab, setTransferTab] = useState<TransferTab>('typing')
   const [format, setFormat] = useState('txt'); const [content, setContent] = useState(''); const [mode, setMode] = useState('append'); const [lessonId, setLessonId] = useState(''); const [preview, setPreview] = useState<any>(null)
   const [wordSets, setWordSets] = useState<WordSetSummary[]>([]); const [wordSetsLoading, setWordSetsLoading] = useState(true); const [wordSetsError, setWordSetsError] = useState(''); const [wordSetId, setWordSetId] = useState('')
   const [wordFormat, setWordFormat] = useState('txt'); const [wordContent, setWordContent] = useState(''); const [wordMode, setWordMode] = useState('append'); const [wordPreview, setWordPreview] = useState<any>(null)
@@ -212,16 +214,30 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
     if (wordMode === 'replace' && !window.confirm('替换模式会删除该单词集的现有词条，确认继续？')) return
     void action(() => api('/api/admin/word-import', { method: 'POST', ...jsonBody(wordPayload) }), '单词导入完成').then((ok) => { if (ok) setWordPreview(null) })
   }
+  const selectTransferTab = (next: TransferTab, focus = false) => {
+    setTransferTab(next)
+    if (focus) window.setTimeout(() => document.getElementById(`${next}-transfer-tab`)?.focus(), 0)
+  }
+  const handleTransferTabKeyDown = (event: React.KeyboardEvent, current: TransferTab) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const next = event.key === 'Home' ? 'typing' : event.key === 'End' ? 'words' : current === 'typing' ? 'words' : 'typing'
+    selectTransferTab(next, true)
+  }
   return <><header className="section-title"><div><p className="eyebrow">导入导出</p><h2>迁移与备份词库</h2><p>导入前先预览，确认无误后再写入。</p></div></header>
-    <section className="transfer-section" aria-labelledby="typing-library-transfer"><header className="section-title"><div><p className="eyebrow">打字词库</p><h2 id="typing-library-transfer">导入课程与练习</h2></div><a className="primary link-button" href="/api/admin/export"><Download />导出打字词库</a></header>
+    <div className="transfer-tabs" role="tablist" aria-label="选择导入导出词库">
+      <button id="typing-transfer-tab" role="tab" aria-selected={transferTab === 'typing'} aria-controls="typing-transfer-panel" tabIndex={transferTab === 'typing' ? 0 : -1} onClick={() => selectTransferTab('typing')} onKeyDown={(event) => handleTransferTabKeyDown(event, 'typing')}><BookOpen />打字词库</button>
+      <button id="words-transfer-tab" role="tab" aria-selected={transferTab === 'words'} aria-controls="words-transfer-panel" tabIndex={transferTab === 'words' ? 0 : -1} onClick={() => selectTransferTab('words')} onKeyDown={(event) => handleTransferTabKeyDown(event, 'words')}><Languages />单词词库</button>
+    </div>
+    {transferTab === 'typing' && <section className="transfer-panel" id="typing-transfer-panel" role="tabpanel" aria-labelledby="typing-transfer-tab"><header className="section-title"><div><p className="eyebrow">打字词库</p><h2>导入课程与练习</h2></div><a className="primary link-button" href="/api/admin/export"><Download />导出打字词库</a></header>
       <div className="card import-card"><div className="import-grid"><label>格式<select value={format} onChange={(e) => { setFormat(e.target.value); setPreview(null) }}><option value="txt">TXT（每行一条）</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={mode} onChange={(e) => setMode(e.target.value)}><option value="append">追加</option><option value="replace">替换</option></select></label>{format === 'txt' && <label>目标关卡<select value={lessonId} onChange={(e) => setLessonId(e.target.value)}>{lessons.map((lesson) => <option value={lesson.id} key={lesson.id}>{lesson.title}</option>)}</select></label>}<label className="file-picker"><FileUp />选择文件<input aria-label="选择打字词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="打字词库文件内容" rows={14} value={content} onChange={(e) => { setContent(e.target.value); setPreview(null) }} placeholder="粘贴内容，或选择文件…" /></label><div className="button-row"><button className="ghost" onClick={previewImport} disabled={!content}>预览打字词库</button><button className="primary" onClick={commit} disabled={!preview?.valid}>导入打字词库</button></div>{preview && <div className={preview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{preview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>{preview.course_count} 个课程 · {preview.lesson_count} 个关卡 · {preview.prompt_count} 条练习</p>{preview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>
-    </section>
-    <section className="transfer-section" aria-labelledby="word-library-transfer"><header className="section-title"><div><p className="eyebrow">单词词库</p><h2 id="word-library-transfer">导入单词与释义</h2></div><a className="primary link-button" href="/api/admin/word-export"><Download />导出单词词库</a></header>
+    </section>}
+    {transferTab === 'words' && <section className="transfer-panel" id="words-transfer-panel" role="tabpanel" aria-labelledby="words-transfer-tab"><header className="section-title"><div><p className="eyebrow">单词词库</p><h2>导入单词与释义</h2></div><a className="primary link-button" href="/api/admin/word-export"><Download />导出单词词库</a></header>
       {wordSetsLoading && <div className="card transfer-empty"><p>正在加载单词集…</p></div>}
       {!wordSetsLoading && wordSetsError && <p className="notice error">{wordSetsError}</p>}
       {!wordSetsLoading && !wordSetsError && wordSets.length === 0 && <div className="card transfer-empty"><strong>暂无可导入的单词集</strong><p>请先在单词词库创建单词集。</p></div>}
       {!wordSetsLoading && wordSets.length > 0 && <div className="card import-card"><div className="import-grid"><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{wordSets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>格式<select value={wordFormat} onChange={(e) => { setWordFormat(e.target.value); setWordPreview(null) }}><option value="txt">TXT</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={wordMode} onChange={(e) => setWordMode(e.target.value)}><option value="append">追加/更新</option><option value="replace">替换本集</option></select></label><label className="file-picker"><FileUp />选择文件<input aria-label="选择单词词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readWordFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="单词词库文件内容" rows={10} value={wordContent} onChange={(e) => { setWordContent(e.target.value); setWordPreview(null) }} placeholder={wordFormat === 'csv' ? 'word,phonetic,meaning_zh,technical_meaning_zh,active' : '粘贴内容，或选择文件…'} /></label><div className="button-row"><button className="ghost" onClick={previewWordImport} disabled={!wordContent}>预览单词词库</button><button className="primary" onClick={commitWordImport} disabled={!wordPreview?.valid}>导入单词词库</button></div>{wordPreview && <div className={wordPreview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{wordPreview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>共 {wordPreview.word_count} 词 · 新增 {wordPreview.created_count} · 更新 {wordPreview.updated_count} · 待补全 {wordPreview.queued_count}</p>{wordPreview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>}
-    </section>
+    </section>}
   </>
 }
 
