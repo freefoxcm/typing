@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BarChart3, BookOpen, ChevronDown, Download, FileUp, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
+import {
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { BarChart3, BookOpen, ChevronDown, Download, FileUp, GripVertical, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import { errorLabel } from '../typing'
 import type { Child, Course, Lesson, Prompt, Report } from '../types'
 
 type Tab = 'children' | 'library' | 'import' | 'reports'
+type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
 export function AdminPage() {
   const [tab, setTab] = useState<Tab>('children')
@@ -21,7 +35,7 @@ export function AdminPage() {
 
   const action = async (work: () => Promise<unknown>, success: string, reload: () => Promise<unknown> = async () => {}) => {
     setError(''); setMessage('')
-    try { await work(); await reload(); setMessage(success) } catch (e) { setError(e instanceof Error ? e.message : '操作失败') }
+    try { await work(); await reload(); setMessage(success); return true } catch (e) { setError(e instanceof Error ? e.message : '操作失败'); return false }
   }
 
   return (
@@ -47,7 +61,7 @@ export function AdminPage() {
   )
 }
 
-function ChildrenPanel({ children, action, reload }: { children: Child[]; action: Function; reload: () => Promise<unknown> }) {
+function ChildrenPanel({ children, action, reload }: { children: Child[]; action: AdminAction; reload: () => Promise<unknown> }) {
   const [name, setName] = useState(''); const [pin, setPin] = useState('')
   const submit = (e: React.FormEvent) => { e.preventDefault(); void action(() => api('/api/admin/children', { method: 'POST', ...jsonBody({ name, pin, active: true }) }), '学生档案已创建', reload); setName(''); setPin('') }
   return <><header className="section-title"><div><p className="eyebrow">学生档案</p><h2>谁在练习？</h2><p>每个学生都有独立的 PIN 和学习记录。</p></div></header>
@@ -56,10 +70,53 @@ function ChildrenPanel({ children, action, reload }: { children: Child[]; action
   </>
 }
 
-function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: Function; reload: () => Promise<unknown> }) {
+export function reorderCourseList(courses: Course[], activeId: number, overId: number) {
+  const oldIndex = courses.findIndex((course) => course.id === activeId)
+  const newIndex = courses.findIndex((course) => course.id === overId)
+  if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return courses
+  return arrayMove(courses, oldIndex, newIndex).map((course, index) => ({ ...course, sort_order: index }))
+}
+
+export function saveCourseOrder(courses: Course[]) {
+  return api('/api/admin/courses/order', { method: 'PUT', ...jsonBody({ course_ids: courses.map((course) => course.id) }) })
+}
+
+function SortableCourseCard({ course, expanded, disabled, children }: { course: Course; expanded: boolean; disabled: boolean; children: React.ReactNode }) {
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: course.id, disabled })
+  const constrainedTransform = transform ? { ...transform, x: 0 } : null
+  return <article
+    ref={setNodeRef}
+    style={{ transform: CSS.Transform.toString(constrainedTransform), transition }}
+    className={`library-course card sortable-course${expanded ? ' expanded' : ' collapsed'}${isDragging ? ' is-dragging' : ''}`}
+  >
+    <button
+      type="button"
+      ref={setActivatorNodeRef}
+      className="course-drag-handle"
+      disabled={disabled}
+      {...attributes}
+      {...listeners}
+      aria-label={`拖动课程 ${course.title} 调整顺序`}
+      title="拖动调整顺序；键盘可用空格或回车拿起，方向键移动，再按空格或回车放下，Esc 取消"
+    ><GripVertical aria-hidden="true" /></button>
+    {children}
+  </article>
+}
+
+function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: AdminAction; reload: () => Promise<unknown> }) {
   const [title, setTitle] = useState(''); const [description, setDescription] = useState('')
+  const [orderedCourses, setOrderedCourses] = useState(courses)
+  const [activeCourseId, setActiveCourseId] = useState<number | null>(null)
+  const [reordering, setReordering] = useState(false)
   const [expandedCourses, setExpandedCourses] = useState<Set<number>>(() => new Set())
   const [expandedLessons, setExpandedLessons] = useState<Set<number>>(() => new Set())
+  useEffect(() => setOrderedCourses(courses), [courses])
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const activeCourse = useMemo(() => orderedCourses.find((course) => course.id === activeCourseId), [activeCourseId, orderedCourses])
   const toggleCourse = (courseId: number) => setExpandedCourses((current) => {
     const next = new Set(current)
     if (next.has(courseId)) next.delete(courseId); else next.add(courseId)
@@ -73,12 +130,40 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
   const createCourse = (e: React.FormEvent) => { e.preventDefault(); void action(() => api('/api/admin/courses', { method: 'POST', ...jsonBody({ title, description, sort_order: courses.length, active: true }) }), '课程已创建', reload); setTitle(''); setDescription('') }
   const createLesson = (course: Course) => { const value = window.prompt('新关卡名称'); if (value) void action(() => api('/api/admin/lessons', { method: 'POST', ...jsonBody({ course_id: course.id, title: value, description: '', sort_order: course.lessons.length, active: true }) }), '关卡已创建', reload) }
   const createPrompt = (lesson: Lesson) => { const value = window.prompt('输入练习内容（支持英文、代码和换行）'); if (value) void action(() => api('/api/admin/prompts', { method: 'POST', ...jsonBody({ lesson_id: lesson.id, content: value, sort_order: lesson.prompts?.length ?? 0, active: true }) }), '练习内容已添加', reload) }
+  const finishReorder = async ({ active, over }: DragEndEvent) => {
+    setActiveCourseId(null)
+    if (!over || reordering) return
+    const previous = orderedCourses
+    const next = reorderCourseList(previous, Number(active.id), Number(over.id))
+    if (next === previous) return
+    setOrderedCourses(next)
+    setReordering(true)
+    const saved = await action(
+      () => saveCourseOrder(next),
+      '课程顺序已保存',
+      reload,
+    )
+    if (!saved) {
+      setOrderedCourses(previous)
+      try { await reload() } catch { /* action 已显示原始保存错误 */ }
+    }
+    setReordering(false)
+  }
   return <><header className="section-title"><div><p className="eyebrow">课程词库</p><h2>设计练习路径</h2><p>按课程、关卡、练习条目组织内容。</p></div></header>
     <form className="inline-form card" onSubmit={createCourse}><label>课程名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建课程</button></form>
-    <div className="library-tree">{courses.map((course) => {
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      accessibility={{ screenReaderInstructions: { draggable: '聚焦拖动手柄后，按空格键或回车键拿起课程，使用上下方向键移动，按空格键或回车键放下，按 Esc 取消。' } }}
+      onDragStart={({ active }) => setActiveCourseId(Number(active.id))}
+      onDragCancel={() => setActiveCourseId(null)}
+      onDragEnd={(event) => void finishReorder(event)}
+    >
+    <SortableContext items={orderedCourses.map((course) => course.id)} strategy={verticalListSortingStrategy}>
+    <div className={`library-tree${reordering ? ' is-reordering' : ''}`} aria-busy={reordering}>{orderedCourses.map((course) => {
       const courseExpanded = expandedCourses.has(course.id)
       const lessonsId = `admin-course-${course.id}-lessons`
-      return <article className={`library-course card${courseExpanded ? ' expanded' : ' collapsed'}`} key={course.id}><header>
+      return <SortableCourseCard course={course} expanded={courseExpanded} disabled={reordering || orderedCourses.length < 2} key={course.id}><header>
         <button type="button" className="course-disclosure grow" aria-expanded={courseExpanded} aria-controls={lessonsId} aria-label={`${courseExpanded ? '收起' : '展开'}课程 ${course.title}`} onClick={() => toggleCourse(course.id)}><ChevronDown className="disclosure-chevron" /><div><h3>{course.title} {!course.active && <em>已停用</em>}</h3><p>{course.description || '暂无说明'}</p></div></button>
         <button type="button" className="ghost" onClick={() => { const value = window.prompt('课程名称', course.title); if (value) void action(() => api(`/api/admin/courses/${course.id}`, { method: 'PUT', ...jsonBody({ title: value, description: course.description, sort_order: course.sort_order ?? 0, active: course.active }) }), '课程已更新', reload) }}><Pencil />编辑</button><button type="button" className="ghost" onClick={() => createLesson(course)}><Plus />关卡</button><button type="button" className="danger-button" aria-label={`删除课程 ${course.title}`} onClick={() => window.confirm('删除课程及其全部关卡？历史成绩会保留文本快照。') && void action(() => api(`/api/admin/courses/${course.id}`, { method: 'DELETE' }), '课程已删除', reload)}><Trash2 /></button>
       </header>
@@ -91,12 +176,15 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
         </div>
         {lessonExpanded && <div className="prompt-list" id={promptsId}>{lesson.prompts?.map((prompt, index) => <div key={prompt.id}><code>{prompt.content.replace(/\n/g, ' ↵ ')}</code><span>{prompt.active ? '启用' : '停用'}</span><button type="button" aria-label="编辑练习内容" onClick={() => { const value = window.prompt('编辑练习内容', prompt.content); if (value) void action(() => api(`/api/admin/prompts/${prompt.id}`, { method: 'PUT', ...jsonBody({ lesson_id: lesson.id, content: value, sort_order: prompt.sort_order ?? index, active: prompt.active }) }), '内容已更新', reload) }}><Pencil /></button><button type="button" onClick={() => void action(() => api(`/api/admin/prompts/${prompt.id}`, { method: 'PUT', ...jsonBody({ lesson_id: lesson.id, content: prompt.content, sort_order: prompt.sort_order ?? index, active: !prompt.active }) }), prompt.active ? '内容已停用' : '内容已启用', reload)}>{prompt.active ? '停用' : '启用'}</button><button type="button" aria-label="删除练习内容" onClick={() => window.confirm('删除这条练习？') && void action(() => api(`/api/admin/prompts/${prompt.id}`, { method: 'DELETE' }), '内容已删除', reload)}><Trash2 /></button></div>)}</div>}
       </section>})}</div>}
-      </article>
+      </SortableCourseCard>
     })}</div>
+    </SortableContext>
+    <DragOverlay>{activeCourse && <div className="course-drag-overlay card"><GripVertical aria-hidden="true" /><div><strong>{activeCourse.title}</strong><small>{activeCourse.description || '暂无说明'}</small></div></div>}</DragOverlay>
+    </DndContext>
   </>
 }
 
-function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: () => Promise<unknown>; action: Function }) {
+function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: () => Promise<unknown>; action: AdminAction }) {
   const [format, setFormat] = useState('txt'); const [content, setContent] = useState(''); const [mode, setMode] = useState('append'); const [lessonId, setLessonId] = useState(''); const [preview, setPreview] = useState<any>(null)
   const lessons = courses.flatMap((course) => course.lessons)
   useEffect(() => { if (!lessonId && lessons[0]) setLessonId(String(lessons[0].id)) }, [lessonId, lessons])

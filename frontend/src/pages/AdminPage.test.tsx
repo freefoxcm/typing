@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { api } from '../api'
 import type { Course, Report } from '../types'
-import { AdminPage } from './AdminPage'
+import { AdminPage, reorderCourseList, saveCourseOrder } from './AdminPage'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -43,6 +43,24 @@ describe('AdminPage', () => {
       if (path.startsWith('/api/admin/reports/summary')) return report
       return {}
     })
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('builds a complete, continuous course order', () => {
+    const reordered = reorderCourseList(courses, 1, 2)
+    expect(reordered.map((course) => course.id)).toEqual([2, 1])
+    expect(reordered.map((course) => course.sort_order)).toEqual([0, 1])
+    expect(reorderCourseList(reordered, 999, 1)).toBe(reordered)
+  })
+
+  it('submits the complete course id list when saving an order', async () => {
+    const reordered = reorderCourseList(courses, 1, 2)
+    await saveCourseOrder(reordered)
+    expect(mockedApi).toHaveBeenCalledWith(
+      '/api/admin/courses/order',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ course_ids: [2, 1] }) }),
+    )
   })
 
   it('uses student wording throughout the administrator interface', async () => {
@@ -96,5 +114,15 @@ describe('AdminPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[0])
     expect(screen.getByRole('button', { name: '收起课程 入门课程' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: '展开关卡 字母关卡' })).toBeInTheDocument()
+  })
+
+  it('exposes dedicated keyboard-accessible drag handles', async () => {
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '课程词库' }))
+
+    const handle = await screen.findByRole('button', { name: '拖动课程 入门课程 调整顺序' })
+    expect(handle).toHaveAttribute('title', expect.stringContaining('方向键移动'))
+    expect(screen.getByRole('button', { name: '拖动课程 代码课程 调整顺序' })).toBeEnabled()
+    expect(screen.getByText(/聚焦拖动手柄后，按空格键或回车键拿起课程/)).toBeInTheDocument()
   })
 })

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
 from ..imports import parse_import
 from ..models import AttemptError, AuthSession, ChildProfile, Course, Lesson, PracticeAttempt, Prompt
-from ..schemas import ChildCreate, ChildUpdate, CourseWrite, ImportRequest, LessonWrite, PromptWrite
+from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LessonWrite, PromptWrite
 from ..security import Principal, hash_secret, require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -113,6 +113,18 @@ def create_course(payload: CourseWrite, db: Session = Depends(get_db)):
     _commit(db, "课程名称已存在")
     db.refresh(item)
     return _course_dict(item)
+
+
+@router.put("/courses/order")
+def reorder_courses(payload: CourseOrder, db: Session = Depends(get_db)):
+    courses = db.scalars(select(Course)).all()
+    courses_by_id = {course.id: course for course in courses}
+    if set(payload.course_ids) != set(courses_by_id):
+        raise HTTPException(status_code=409, detail="课程列表已变化，请刷新后重试")
+    for sort_order, course_id in enumerate(payload.course_ids):
+        courses_by_id[course_id].sort_order = sort_order
+    db.commit()
+    return {"ok": True, "course_ids": payload.course_ids}
 
 
 @router.put("/courses/{item_id}")
