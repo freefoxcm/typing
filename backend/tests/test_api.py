@@ -94,3 +94,71 @@ def test_import_is_transactional_and_visible(tmp_path):
         assert valid.status_code == 200
         library = client.get('/api/admin/library').json()
         assert any(course['title'] == 'New' for course in library)
+
+
+def test_course_order_is_atomic_and_visible_everywhere(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        child = client.post('/api/admin/children', json={'name': '小宇', 'pin': '1234', 'active': True})
+        assert child.status_code == 201
+        for sort_order, title in enumerate(['第二课程', '第三课程'], start=1):
+            created = client.post('/api/admin/courses', json={
+                'title': title,
+                'description': '',
+                'sort_order': sort_order,
+                'active': True,
+            })
+            assert created.status_code == 201
+            lesson = client.post('/api/admin/lessons', json={
+                'course_id': created.json()['id'],
+                'title': f'{title}关卡',
+                'description': '',
+                'sort_order': 0,
+                'active': True,
+            })
+            assert lesson.status_code == 201
+            prompt = client.post('/api/admin/prompts', json={
+                'lesson_id': lesson.json()['id'],
+                'content': f'practice {sort_order}',
+                'sort_order': 0,
+                'active': True,
+            })
+            assert prompt.status_code == 201
+
+        original = client.get('/api/admin/library').json()
+        reversed_ids = [course['id'] for course in reversed(original)]
+        reordered = client.put('/api/admin/courses/order', json={'course_ids': reversed_ids})
+        assert reordered.status_code == 200
+        assert reordered.json() == {'ok': True, 'course_ids': reversed_ids}
+        assert [course['id'] for course in client.get('/api/admin/library').json()] == reversed_ids
+
+        arbitrary_ids = [reversed_ids[1], reversed_ids[2], reversed_ids[0]]
+        reordered = client.put('/api/admin/courses/order', json={'course_ids': arbitrary_ids})
+        assert reordered.status_code == 200
+        assert [course['id'] for course in client.get('/api/admin/library').json()] == arbitrary_ids
+        assert [course['id'] for course in client.get('/api/admin/export').json()['courses']] == arbitrary_ids
+
+        client.post('/api/auth/logout')
+        assert client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'}).status_code == 200
+        assert [course['id'] for course in client.get('/api/library/courses').json()] == arbitrary_ids
+
+
+def test_course_order_rejects_stale_or_invalid_lists_without_changes(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        created = client.post('/api/admin/courses', json={
+            'title': '第二课程',
+            'description': '',
+            'sort_order': 1,
+            'active': False,
+        })
+        assert created.status_code == 201
+        original_ids = [course['id'] for course in client.get('/api/admin/library').json()]
+
+        duplicate = client.put('/api/admin/courses/order', json={'course_ids': [original_ids[0], original_ids[0]]})
+        missing = client.put('/api/admin/courses/order', json={'course_ids': original_ids[:-1]})
+        unknown = client.put('/api/admin/courses/order', json={'course_ids': [*original_ids[:-1], 999999]})
+        assert duplicate.status_code == 422
+        assert missing.status_code == 409
+        assert unknown.status_code == 409
+        assert [course['id'] for course in client.get('/api/admin/library').json()] == original_ids

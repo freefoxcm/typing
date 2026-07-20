@@ -37,6 +37,19 @@ class CourseWrite(BaseModel):
     active: bool = True
 
 
+class CourseOrder(BaseModel):
+    course_ids: list[int] = Field(min_length=1, max_length=10000)
+
+    @field_validator("course_ids")
+    @classmethod
+    def unique_course_ids(cls, value: list[int]) -> list[int]:
+        if any(item <= 0 for item in value):
+            raise ValueError("课程 ID 必须为正整数")
+        if len(value) != len(set(value)):
+            raise ValueError("课程 ID 不能重复")
+        return value
+
+
 class LessonWrite(BaseModel):
     course_id: int
     title: str = Field(min_length=1, max_length=120)
