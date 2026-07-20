@@ -27,7 +27,7 @@ describe('LoginPage', () => {
     expect(screen.getByLabelText('输入 PIN')).toHaveValue('')
     expect(mockedApi).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: '管理员' }))
+    fireEvent.click(screen.getByRole('button', { name: '教师' }))
     expect(screen.getByLabelText('管理员用户名')).toHaveValue('')
     expect(screen.getByLabelText('密码')).toHaveValue('')
   })
@@ -53,15 +53,15 @@ describe('LoginPage', () => {
     fireEvent.change(screen.getByLabelText('学生姓名'), { target: { value: '小宇' } })
     fireEvent.change(screen.getByLabelText('输入 PIN'), { target: { value: '1234' } })
 
-    fireEvent.click(screen.getByRole('button', { name: '管理员' }))
+    fireEvent.click(screen.getByRole('button', { name: '教师' }))
     fireEvent.change(screen.getByLabelText('管理员用户名'), { target: { value: 'root' } })
     fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'secret' } })
 
-    fireEvent.click(screen.getByRole('button', { name: '孩子登录' }))
+    fireEvent.click(screen.getByRole('button', { name: '学生' }))
     expect(screen.getByLabelText('学生姓名')).toHaveValue('')
     expect(screen.getByLabelText('输入 PIN')).toHaveValue('')
 
-    fireEvent.click(screen.getByRole('button', { name: '管理员' }))
+    fireEvent.click(screen.getByRole('button', { name: '教师' }))
     expect(screen.getByLabelText('管理员用户名')).toHaveValue('')
     expect(screen.getByLabelText('密码')).toHaveValue('')
   })
@@ -79,5 +79,17 @@ describe('LoginPage', () => {
       body: JSON.stringify({ name: '小宇', pin: '1234' }),
     }))
     expect(onLogin).toHaveBeenCalledWith(me)
+  })
+
+  it('shows the renamed roles and decorative keys', () => {
+    renderLogin()
+
+    expect(screen.getByRole('button', { name: '学生' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '教师' })).toBeInTheDocument()
+    expect(screen.getByText('Y', { selector: 'kbd' })).toBeInTheDocument()
+    expect(screen.getByText('L', { selector: 'kbd' })).toBeInTheDocument()
+    expect(screen.getByText('Space', { selector: 'kbd' })).toBeInTheDocument()
+    expect(screen.queryByText('F', { selector: 'kbd' })).not.toBeInTheDocument()
+    expect(screen.queryByText('J', { selector: 'kbd' })).not.toBeInTheDocument()
   })
 })

@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, BookOpen, Gauge, Sparkles, Target } from 'lucide-react'
+import { ArrowRight, BookOpen, ChevronDown, Gauge, Sparkles, Target } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { Course, Me } from '../types'
 
 export function ChildHomePage({ me }: { me: Me }) {
   const [courses, setCourses] = useState<Course[]>([])
+  const [expandedCourses, setExpandedCourses] = useState<Set<number>>(() => new Set())
   const [error, setError] = useState('')
   useEffect(() => { api<Course[]>('/api/library/courses').then(setCourses).catch((e) => setError(e.message)) }, [])
+  const toggleCourse = (courseId: number) => setExpandedCourses((current) => {
+    const next = new Set(current)
+    if (next.has(courseId)) next.delete(courseId); else next.add(courseId)
+    return next
+  })
   const attempts = courses.flatMap((c) => c.lessons).reduce((sum, lesson) => sum + (lesson.attempts ?? 0), 0)
   const best = Math.max(0, ...courses.flatMap((c) => c.lessons).map((lesson) => lesson.best_cpm ?? 0))
   return (
@@ -24,19 +30,23 @@ export function ChildHomePage({ me }: { me: Me }) {
       {error && <p className="notice error">{error}</p>}
       {courses.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的课程</h2><p>请管理员进入后台添加或导入词库。</p></div>}
       <div className="course-list">
-        {courses.map((course, courseIndex) => (
-          <section className="course-card" key={course.id}>
-            <div className="course-heading"><span className={`course-number color-${courseIndex % 4}`}>{String(courseIndex + 1).padStart(2, '0')}</span><div><h2>{course.title}</h2><p>{course.description}</p></div></div>
-            <div className="lesson-grid">
+        {courses.map((course, courseIndex) => {
+          const courseExpanded = expandedCourses.has(course.id)
+          const lessonsId = `student-course-${course.id}-lessons`
+          return (
+          <section className={`course-card${courseExpanded ? ' expanded' : ' collapsed'}`} key={course.id}>
+            <button type="button" className="course-heading" aria-expanded={courseExpanded} aria-controls={lessonsId} aria-label={`${courseExpanded ? '收起' : '展开'}课程 ${course.title}`} onClick={() => toggleCourse(course.id)}><span className={`course-number color-${courseIndex % 4}`}>{String(courseIndex + 1).padStart(2, '0')}</span><div className="grow"><h2>{course.title}</h2><p>{course.description}</p></div><ChevronDown className="disclosure-chevron" /></button>
+            {courseExpanded && <div className="lesson-grid" id={lessonsId}>
               {course.lessons.map((lesson) => (
                 <Link className="lesson-card" to={`/practice/${lesson.id}`} key={lesson.id}>
                   <div><h3>{lesson.title}</h3><p>{lesson.description || `${lesson.prompt_count} 条练习`}</p></div>
                   <div className="lesson-meta"><span>{lesson.attempts ? `练习 ${lesson.attempts} 次` : '尚未练习'}</span>{lesson.best_cpm ? <span>最佳 {lesson.best_cpm} CPM</span> : null}<ArrowRight /></div>
                 </Link>
               ))}
-            </div>
+            </div>}
           </section>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
