@@ -16,7 +16,13 @@ def llm_configured(settings: Settings) -> bool:
 
 
 def mark_word_readiness(word: Word, reset_attempts: bool = True) -> None:
-    ready = bool(word.phonetic.strip() and word.meaning_zh.strip())
+    # SQLAlchemy column defaults are applied when an object is flushed. A newly
+    # constructed Word can therefore still contain None while bulk import is
+    # deciding whether it should enter the enrichment queue.
+    word.phonetic = (word.phonetic or "").strip()
+    word.meaning_zh = (word.meaning_zh or "").strip()
+    word.technical_meaning_zh = (word.technical_meaning_zh or "").strip()
+    ready = bool(word.phonetic and word.meaning_zh)
     word.enrichment_status = "ready" if ready else "pending"
     word.enrichment_error = ""
     word.next_retry_at = None

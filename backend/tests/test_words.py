@@ -104,6 +104,30 @@ def test_word_import_preview_and_nonempty_overwrite(tmp_path):
         assert word["meaning_zh"] == "苹果"
 
 
+def test_word_import_without_metadata_is_queued_instead_of_crashing(tmp_path):
+    with make_client(tmp_path) as client:
+        login_admin(client)
+        set_id = client.post("/api/admin/word-sets", json={
+            "title": "待补全词库", "description": "", "sort_order": 0, "active": True,
+        }).json()["id"]
+        payload = {
+            "word_set_id": set_id,
+            "format": "txt",
+            "mode": "append",
+            "content": "apple\ncache",
+        }
+        preview = client.post("/api/admin/word-import/preview", json=payload)
+        assert preview.status_code == 200
+        assert preview.json()["queued_count"] == 2
+        imported = client.post("/api/admin/word-import", json=payload)
+        assert imported.status_code == 200
+        words = client.get("/api/admin/word-sets").json()[0]["words"]
+        assert [(word["spelling"], word["phonetic"], word["meaning_zh"], word["enrichment_status"]) for word in words] == [
+            ("apple", "", "", "pending"),
+            ("cache", "", "", "pending"),
+        ]
+
+
 def test_llm_parsing_completion_failure_and_manual_readiness(tmp_path):
     values = parse_llm_content('```json\n{"phonetic":"/kæʃ/","meaning_zh":"缓存","technical_meaning_zh":"高速临时存储"}\n```')
     assert values["meaning_zh"] == "缓存"
