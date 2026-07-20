@@ -159,11 +159,21 @@ describe('AdminPage', () => {
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
 
+    const typingTab = screen.getByRole('tab', { name: '打字词库' })
+    const wordTab = screen.getByRole('tab', { name: '单词词库' })
+    expect(typingTab).toHaveAttribute('aria-selected', 'true')
+    expect(wordTab).toHaveAttribute('aria-selected', 'false')
     expect(await screen.findByRole('heading', { name: '导入课程与练习' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '导入单词与释义' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '导出打字词库' })).toHaveAttribute('href', '/api/admin/export')
-    expect(screen.getByRole('link', { name: '导出单词词库' })).toHaveAttribute('href', '/api/admin/word-export')
     expect(screen.getByLabelText('打字词库文件内容')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '导入单词与释义' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(typingTab, { key: 'ArrowRight' })
+    await waitFor(() => expect(wordTab).toHaveAttribute('aria-selected', 'true'))
+    expect(wordTab).toHaveFocus()
+    expect(screen.queryByRole('heading', { name: '导入课程与练习' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '导入单词与释义' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '导出单词词库' })).toHaveAttribute('href', '/api/admin/word-export')
     expect(await screen.findByLabelText('单词词库文件内容')).toBeInTheDocument()
   })
 
@@ -180,7 +190,6 @@ describe('AdminPage', () => {
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
     fireEvent.change(screen.getByLabelText('打字词库文件内容'), { target: { value: 'asdf' } })
-    fireEvent.change(await screen.findByLabelText('单词词库文件内容'), { target: { value: 'array' } })
 
     fireEvent.click(screen.getByRole('button', { name: '预览打字词库' }))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
@@ -190,6 +199,8 @@ describe('AdminPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '导入打字词库' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: '导入打字词库' }))
 
+    fireEvent.click(screen.getByRole('tab', { name: '单词词库' }))
+    fireEvent.change(await screen.findByLabelText('单词词库文件内容'), { target: { value: 'array' } })
     fireEvent.click(screen.getByRole('button', { name: '预览单词词库' }))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/admin/word-import/preview',
@@ -202,6 +213,9 @@ describe('AdminPage', () => {
       expect(mockedApi).toHaveBeenCalledWith('/api/admin/import', expect.objectContaining({ method: 'POST' }))
       expect(mockedApi).toHaveBeenCalledWith('/api/admin/word-import', expect.objectContaining({ method: 'POST' }))
     })
+    fireEvent.click(screen.getByRole('tab', { name: '打字词库' }))
+    expect(screen.getByLabelText('打字词库文件内容')).toHaveValue('asdf')
+    expect(screen.getByText('0 个课程 · 0 个关卡 · 1 条练习')).toBeInTheDocument()
   })
 
   it('keeps replacement imports behind their existing confirmations', async () => {
@@ -217,18 +231,19 @@ describe('AdminPage', () => {
     })
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
-    await screen.findByLabelText('单词词库文件内容')
-    const modeSelectors = screen.getAllByLabelText('模式')
-    fireEvent.change(modeSelectors[0], { target: { value: 'replace' } })
-    fireEvent.change(modeSelectors[1], { target: { value: 'replace' } })
+    fireEvent.change(screen.getByLabelText('模式'), { target: { value: 'replace' } })
     fireEvent.change(screen.getByLabelText('打字词库文件内容'), { target: { value: 'asdf' } })
-    fireEvent.change(screen.getByLabelText('单词词库文件内容'), { target: { value: 'array' } })
 
     fireEvent.click(screen.getByRole('button', { name: '预览打字词库' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '导入打字词库' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: '导入打字词库' }))
+
+    fireEvent.click(screen.getByRole('tab', { name: '单词词库' }))
+    await screen.findByLabelText('单词词库文件内容')
+    fireEvent.change(screen.getByLabelText('模式'), { target: { value: 'replace' } })
+    fireEvent.change(screen.getByLabelText('单词词库文件内容'), { target: { value: 'array' } })
     fireEvent.click(screen.getByRole('button', { name: '预览单词词库' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '导入单词词库' })).toBeEnabled())
-    fireEvent.click(screen.getByRole('button', { name: '导入打字词库' }))
     fireEvent.click(screen.getByRole('button', { name: '导入单词词库' }))
 
     expect(confirm).toHaveBeenCalledWith('替换模式会删除目标范围内现有词库，确认继续？')
@@ -247,6 +262,7 @@ describe('AdminPage', () => {
     })
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
+    fireEvent.click(screen.getByRole('tab', { name: '单词词库' }))
 
     expect(await screen.findByText('请先在单词词库创建单词集。')).toBeInTheDocument()
     expect(screen.queryByLabelText('单词词库文件内容')).not.toBeInTheDocument()
