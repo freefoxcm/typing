@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     import_llm_model: str = ""
     import_llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
     import_llm_max_retries: int = Field(default=3, ge=1, le=20)
+    import_llm_batch_pages: int = Field(default=3, ge=1, le=8)
     import_max_file_mb: int = Field(default=25, ge=1, le=100)
     import_max_pages: int = Field(default=100, ge=1, le=500)
     question_asset_dir: str = "/data/question-assets"

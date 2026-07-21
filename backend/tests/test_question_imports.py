@@ -7,7 +7,7 @@ import pytest
 from app.config import Settings
 from app.database import Base, create_db
 from app.models import QuestionAsset
-from app.question_imports import _extract_pages, _import_error_detail, _json_content, materialize_draft
+from app.question_imports import _extract_pages, _import_error_detail, _json_content, _page_batches, materialize_draft
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -29,6 +29,21 @@ def test_pdf_extraction_renders_pages_and_enforces_limit(tmp_path):
     document.close()
     with pytest.raises(ValueError, match="超过 1 页"):
         _extract_pages(path, Settings(import_max_pages=1))
+
+
+def test_page_batches_limit_request_size_and_overlap_boundaries():
+    pages = [{"number": number} for number in range(1, 11)]
+
+    batches = list(_page_batches(pages, 3))
+
+    assert [[page["number"] for page in batch] for batch in batches] == [
+        [1, 2, 3],
+        [3, 4, 5],
+        [5, 6, 7],
+        [7, 8, 9],
+        [9, 10],
+    ]
+    assert list(_page_batches(pages[:2], 1)) == [[pages[0]], [pages[1]]]
 
 
 def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):

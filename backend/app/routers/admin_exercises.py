@@ -56,7 +56,12 @@ def _editable(question_set: QuestionSet) -> None:
 
 @router.get("/api/admin/import-llm/status")
 def import_llm_status(_principal: Principal = Depends(require_admin), settings: Settings = Depends(get_settings)):
-    return {"configured": import_llm_configured(settings), "base_url": settings.import_llm_base_url, "model": settings.import_llm_model}
+    return {
+        "configured": import_llm_configured(settings),
+        "base_url": settings.import_llm_base_url,
+        "model": settings.import_llm_model,
+        "batch_pages": settings.import_llm_batch_pages,
+    }
 
 
 @router.post("/api/admin/question-imports", status_code=202)

@@ -44,7 +44,7 @@ docker compose logs -f kidtype
 docker compose logs -f judge
 ```
 
-编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
+编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。PDF 默认每次向模型发送 3 页，可通过 `IMPORT_LLM_BATCH_PAGES` 在 1–8 页之间调整。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
 
 升级时拉取或替换代码，然后重新运行 `docker compose up -d --build`；容器启动会自动执行 Alembic 数据库迁移。
 

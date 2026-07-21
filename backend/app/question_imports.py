@@ -142,15 +142,39 @@ async def _request_batch(settings: Settings, pages: list[dict[str, Any]]) -> dic
         return _json_content(response.json()["choices"][0]["message"]["content"])
 
 
+def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
+    size = max(1, min(8, batch_pages))
+    overlap = 1 if size > 1 else 0
+    step = size - overlap
+    start = 0
+    while start < len(pages):
+        batch = pages[start:start + size]
+        if not batch:
+            break
+        yield batch
+        if start + size >= len(pages):
+            break
+        start += step
+
+
 async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
     document, pages = _extract_pages(path, settings)
     combined: dict[str, Any] = {"title": path.stem, "description": "", "questions": []}
     seen: dict[tuple[str, str], dict[str, Any]] = {}
     try:
-        # Two-page overlap keeps programming problems that cross a page/batch
-        # boundary together. Duplicate questions are merged below.
-        for start in range(0, len(pages), 6):
-            batch = pages[start:start + 8]
+        # One-page overlap keeps adjacent pages together when a programming
+        # problem crosses a batch boundary. Duplicate questions are merged below.
+        batches = list(_page_batches(pages, settings.import_llm_batch_pages))
+        for batch_index, batch in enumerate(batches, start=1):
+            logger.info(
+                "PDF import model request %s/%s: file=%s pages=%s-%s page_count=%s",
+                batch_index,
+                len(batches),
+                path.name,
+                batch[0]["number"],
+                batch[-1]["number"],
+                len(batch),
+            )
             payload = await _request_batch(settings, batch)
             if payload.get("title") and combined["title"] == path.stem:
                 combined["title"] = str(payload["title"])[:180]
