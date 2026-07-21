@@ -141,3 +141,157 @@ class AttemptError(Base):
     count: Mapped[int] = mapped_column(Integer)
     attempt: Mapped[PracticeAttempt] = relationship(back_populates="errors")
 
+
+class QuestionSet(Base):
+    __tablename__ = "question_sets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(180))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    source_pdf_asset_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    questions: Mapped[list["Question"]] = relationship(back_populates="question_set", cascade="all, delete-orphan", order_by="Question.sort_order")
+
+
+class Question(Base):
+    __tablename__ = "questions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_set_id: Mapped[int] = mapped_column(ForeignKey("question_sets.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(24), index=True)
+    stem_markdown: Mapped[str] = mapped_column(Text)
+    explanation_markdown: Mapped[str] = mapped_column(Text, default="")
+    points: Mapped[int] = mapped_column(Integer, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    reviewed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    correct_bool: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    source_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_assets.id", ondelete="SET NULL"), nullable=True)
+    show_source_crop: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    question_set: Mapped[QuestionSet] = relationship(back_populates="questions")
+    options: Mapped[list["QuestionOption"]] = relationship(back_populates="question", cascade="all, delete-orphan", order_by="QuestionOption.sort_order")
+    programming: Mapped[Optional["ProgrammingSpec"]] = relationship(back_populates="question", cascade="all, delete-orphan", uselist=False)
+
+
+class QuestionOption(Base):
+    __tablename__ = "question_options"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(16))
+    content_markdown: Mapped[str] = mapped_column(Text)
+    correct: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    question: Mapped[Question] = relationship(back_populates="options")
+
+
+class ProgrammingSpec(Base):
+    __tablename__ = "programming_specs"
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True)
+    input_markdown: Mapped[str] = mapped_column(Text, default="")
+    output_markdown: Mapped[str] = mapped_column(Text, default="")
+    constraints_markdown: Mapped[str] = mapped_column(Text, default="")
+    starter_code: Mapped[str] = mapped_column(Text, default="")
+    reference_solution: Mapped[str] = mapped_column(Text, default="")
+    time_limit_ms: Mapped[int] = mapped_column(Integer, default=1000)
+    memory_limit_mb: Mapped[int] = mapped_column(Integer, default=128)
+    question: Mapped[Question] = relationship(back_populates="programming")
+    cases: Mapped[list["ProgrammingCase"]] = relationship(back_populates="programming", cascade="all, delete-orphan", order_by="ProgrammingCase.id")
+
+
+class ProgrammingCase(Base):
+    __tablename__ = "programming_cases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("programming_specs.question_id", ondelete="CASCADE"), index=True)
+    input_data: Mapped[str] = mapped_column(Text, default="")
+    expected_output: Mapped[str] = mapped_column(Text, default="")
+    is_sample: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    weight: Mapped[int] = mapped_column(Integer, default=0)
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    note: Mapped[str] = mapped_column(Text, default="")
+    programming: Mapped[ProgrammingSpec] = relationship(back_populates="cases")
+
+
+class QuestionAsset(Base):
+    __tablename__ = "question_assets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_sets.id", ondelete="CASCADE"), nullable=True, index=True)
+    storage_key: Mapped[str] = mapped_column(String(255), unique=True)
+    original_name: Mapped[str] = mapped_column(String(255), default="")
+    mime_type: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(24), default="question")
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class QuestionImportJob(Base):
+    __tablename__ = "question_import_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("question_assets.id", ondelete="CASCADE"), index=True)
+    question_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_sets.id", ondelete="SET NULL"), nullable=True)
+    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ExerciseSession(Base):
+    __tablename__ = "exercise_sessions"
+    __table_args__ = (Index("ix_exercise_session_child_created", "child_id", "created_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    child_id: Mapped[int] = mapped_column(ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True)
+    mode: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="in_progress", index=True)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    title: Mapped[str] = mapped_column(String(180), default="习题练习")
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    max_score: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    items: Mapped[list["ExerciseSessionItem"]] = relationship(back_populates="session", cascade="all, delete-orphan", order_by="ExerciseSessionItem.sort_order")
+
+
+class ExerciseSessionItem(Base):
+    __tablename__ = "exercise_session_items"
+    __table_args__ = (UniqueConstraint("session_id", "sort_order", name="uq_exercise_session_item_order"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("exercise_sessions.id", ondelete="CASCADE"), index=True)
+    question_id: Mapped[Optional[int]] = mapped_column(ForeignKey("questions.id", ondelete="SET NULL"), nullable=True, index=True)
+    question_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_sets.id", ondelete="SET NULL"), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    points: Mapped[int] = mapped_column(Integer)
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    session: Mapped[ExerciseSession] = relationship(back_populates="items")
+    answer: Mapped[Optional["ExerciseAnswer"]] = relationship(back_populates="item", cascade="all, delete-orphan", uselist=False)
+
+
+class ExerciseAnswer(Base):
+    __tablename__ = "exercise_answers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_item_id: Mapped[int] = mapped_column(ForeignKey("exercise_session_items.id", ondelete="CASCADE"), unique=True, index=True)
+    answer_json: Mapped[str] = mapped_column(Text, default="{}")
+    code: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="unanswered")
+    awarded_points: Mapped[int] = mapped_column(Integer, default=0)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    item: Mapped[ExerciseSessionItem] = relationship(back_populates="answer")
+
+
+class WrongQuestion(Base):
+    __tablename__ = "wrong_questions"
+    __table_args__ = (UniqueConstraint("child_id", "question_id", name="uq_wrong_child_question"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    child_id: Mapped[int] = mapped_column(ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id", ondelete="CASCADE"), index=True)
+    wrong_count: Mapped[int] = mapped_column(Integer, default=1)
+    mastered: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    last_wrong_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    mastered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+

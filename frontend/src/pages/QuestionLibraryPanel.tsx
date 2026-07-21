@@ -1,0 +1,164 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Archive, CheckCircle2, Code2, FileUp, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { api, jsonBody } from '../api'
+import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionOption, QuestionSetSummary } from '../types'
+
+type ImportJob = { id: number; status: string; question_set_id?: number; page_count?: number; error?: string; attempts: number; created_at: string }
+type LlmStatus = { configured: boolean; base_url: string; model: string }
+type ExerciseReport = { session_count: number; average_percent: number; unresolved_wrong_count: number }
+type EditableQuestion = Omit<ExerciseQuestion, 'id'> & { id?: number }
+
+const labels: Record<ExerciseQuestionType, string> = {
+  single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', programming: '编程题',
+}
+
+const blankQuestion = (sortOrder = 0): EditableQuestion => ({
+  type: 'single_choice', stem_markdown: '', explanation_markdown: '', points: 2, sort_order: sortOrder,
+  reviewed: false, correct_bool: true, source_page: null, source_asset_id: null, show_source_crop: false,
+  options: [
+    { label: 'A', content_markdown: '', correct: true, sort_order: 0 },
+    { label: 'B', content_markdown: '', correct: false, sort_order: 1 },
+  ],
+  programming: null,
+})
+
+const blankProgram = () => ({
+  input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: '', reference_solution: '',
+  time_limit_ms: 1000, memory_limit_mb: 128, cases: [] as ProgrammingCase[],
+})
+
+export function QuestionLibraryPanel() {
+  const [sets, setSets] = useState<QuestionSetSummary[]>([])
+  const [jobs, setJobs] = useState<ImportJob[]>([])
+  const [llm, setLlm] = useState<LlmStatus | null>(null)
+  const [report, setReport] = useState<ExerciseReport | null>(null)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [editor, setEditor] = useState<{ setId: number; question: EditableQuestion } | null>(null)
+
+  const reload = useCallback(async () => {
+    const [setItems, importItems, status, reportData] = await Promise.all([
+      api<QuestionSetSummary[]>('/api/admin/question-sets'),
+      api<ImportJob[]>('/api/admin/question-imports'),
+      api<LlmStatus>('/api/admin/import-llm/status'),
+      api<ExerciseReport>('/api/admin/exercise-reports/summary'),
+    ])
+    setSets(setItems); setJobs(importItems); setLlm(status); setReport(reportData)
+  }, [])
+
+  useEffect(() => { void reload().catch((e) => setError(e.message)) }, [reload])
+  const activeJobs = useMemo(() => jobs.some((job) => ['pending', 'processing'].includes(job.status)), [jobs])
+  useEffect(() => {
+    if (!activeJobs) return
+    const timer = window.setInterval(() => void reload().catch(() => {}), 2500)
+    return () => window.clearInterval(timer)
+  }, [activeJobs, reload])
+
+  const action = async (work: () => Promise<unknown>, success: string) => {
+    setError(''); setMessage('')
+    try { await work(); await reload(); setMessage(success); return true } catch (e) { setError(e instanceof Error ? e.message : '操作失败'); return false }
+  }
+
+  const createSet = (event: React.FormEvent) => {
+    event.preventDefault()
+    void action(() => api('/api/admin/question-sets', { method: 'POST', ...jsonBody({ title, description }) }), '题套草稿已创建').then((ok) => {
+      if (ok) { setTitle(''); setDescription('') }
+    })
+  }
+
+  const uploadPdf = async (file?: File) => {
+    if (!file) return
+    setUploading(true); setError(''); setMessage('')
+    try {
+      const body = new FormData(); body.append('file', file)
+      await api('/api/admin/question-imports', { method: 'POST', body })
+      await reload(); setMessage('PDF 已进入识别队列')
+    } catch (e) { setError(e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
+  }
+
+  const saveQuestion = async (question: EditableQuestion) => {
+    if (!editor) return
+    const path = question.id ? `/api/admin/questions/${question.id}` : `/api/admin/question-sets/${editor.setId}/questions`
+    const ok = await action(() => api(path, { method: question.id ? 'PUT' : 'POST', ...jsonBody(question) }), question.id ? '题目已保存' : '题目已添加')
+    if (ok) setEditor(null)
+  }
+
+  const generateOutputs = async (questionId: number) => {
+    setError(''); setMessage('正在提交参考程序…')
+    try {
+      const queued = await api<{ job_id: string }>(`/api/admin/questions/${questionId}/reference-output`, { method: 'POST' })
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+        const status = await api<{ status: string }>(`/api/admin/reference-output/${queued.job_id}`)
+        if (status.status !== 'queued') { await reload(); setMessage('候选测试点输出已生成，请校对并确认'); return }
+      }
+      setMessage('生成仍在进行，可稍后刷新查看')
+    } catch (e) { setError(e instanceof Error ? e.message : '生成失败') }
+  }
+
+  return <>
+    <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div><a className="ghost link-button" href="/api/admin/exercise-reports/export.csv">导出习题成绩</a></header>
+    {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
+    <div className="exercise-admin-metrics">
+      <div><span>已完成练习</span><strong>{report?.session_count ?? 0}</strong></div>
+      <div><span>平均得分率</span><strong>{report?.average_percent ?? 0}%</strong></div>
+      <div><span>未掌握错题</span><strong>{report?.unresolved_wrong_count ?? 0}</strong></div>
+    </div>
+    <section className="card pdf-import-card">
+      <div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model}` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div>
+      <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>
+      {jobs.length > 0 && <div className="import-job-list">{jobs.slice(0, 5).map((job) => <div key={job.id}><span>任务 #{job.id}</span><strong>{job.status === 'ready' ? `完成 · ${job.page_count} 页` : job.status === 'processing' ? '正在识别' : job.status === 'pending' ? '等待识别' : '识别失败'}</strong>{job.error && <small>{job.error}</small>}{job.status === 'failed' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-imports/${job.id}/retry`, { method: 'POST' }), '已重新排队')}><RefreshCcw />重试</button>}</div>)}</div>}
+    </section>
+    <form className="inline-form card" onSubmit={createSet}><label>题套名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />手动新建题套</button></form>
+    <div className="question-set-admin-list">{sets.map((set) => <article className="card question-set-admin" key={set.id}>
+      <header><div className="grow"><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 编程 {set.counts.programming ?? 0}</small></div>
+        {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: blankQuestion(set.questions?.length ?? 0) })}><Plus />题目</button><button className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></>}
+        {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
+        {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
+      </header>
+      {set.questions && set.questions.length > 0 && <div className="question-admin-list">{set.questions.map((question, index) => <div key={question.id}>
+        <span>{index + 1}</span><div className="grow"><strong>{labels[question.type]} · {question.points} 分 {question.reviewed ? '· 已复核' : '· 待复核'}</strong><p>{question.stem_markdown.slice(0, 100)}</p></div>
+        {question.type === 'programming' && set.status === 'draft' && <button className="ghost" title="用参考程序生成候选输出" onClick={() => void generateOutputs(question.id)}><Play />生成输出</button>}
+        {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: JSON.parse(JSON.stringify(question)) })}><Pencil />编辑</button><button className="danger-button" onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
+      </div>)}</div>}
+    </article>)}</div>
+    {editor && <QuestionEditor value={editor.question} onCancel={() => setEditor(null)} onSave={(value) => void saveQuestion(value)} />}
+  </>
+}
+
+function QuestionEditor({ value, onCancel, onSave }: { value: EditableQuestion; onCancel: () => void; onSave: (value: EditableQuestion) => void }) {
+  const [question, setQuestion] = useState<EditableQuestion>(() => JSON.parse(JSON.stringify(value)))
+  const updateOption = (index: number, patch: Partial<QuestionOption>) => setQuestion((current) => ({ ...current, options: current.options.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
+  const updateCase = (index: number, patch: Partial<ProgrammingCase>) => setQuestion((current) => ({ ...current, programming: current.programming ? { ...current.programming, cases: current.programming.cases.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) } : null }))
+  const changeType = (type: ExerciseQuestionType) => setQuestion((current) => ({
+    ...current, type, reviewed: false,
+    options: type === 'single_choice' || type === 'multiple_choice' ? (current.options.length >= 2 ? current.options : blankQuestion().options) : [],
+    programming: type === 'programming' ? (current.programming || blankProgram()) : null,
+    correct_bool: type === 'true_false' ? (current.correct_bool ?? true) : null,
+    points: type === 'programming' && current.points === 2 ? 25 : current.points,
+  }))
+  return <div className="modal-backdrop" role="presentation"><form className="question-editor-modal card" onSubmit={(e) => { e.preventDefault(); onSave(question) }}>
+    <header><div><p className="eyebrow">题目编辑</p><h2>{question.id ? '校对题目' : '添加题目'}</h2></div><button type="button" className="ghost" aria-label="关闭" onClick={onCancel}><X /></button></header>
+    <div className="question-editor-grid"><label>题型<select value={question.type} onChange={(e) => changeType(e.target.value as ExerciseQuestionType)}>{Object.entries(labels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>分值<input type="number" min="1" value={question.points} onChange={(e) => setQuestion({ ...question, points: Number(e.target.value) })} /></label><label>顺序<input type="number" min="0" value={question.sort_order} onChange={(e) => setQuestion({ ...question, sort_order: Number(e.target.value) })} /></label><label className="check-label"><input type="checkbox" checked={question.reviewed ?? false} onChange={(e) => setQuestion({ ...question, reviewed: e.target.checked })} />已人工复核</label></div>
+    <label>题面<textarea rows={7} value={question.stem_markdown} onChange={(e) => setQuestion({ ...question, stem_markdown: e.target.value, reviewed: false })} required /></label>
+    {question.source_asset_id && <label className="check-label"><input type="checkbox" checked={question.show_source_crop ?? false} onChange={(e) => setQuestion({ ...question, show_source_crop: e.target.checked })} />向学生显示原题截图</label>}
+    {question.show_source_crop && question.source_asset_id && <img className="question-source-preview" src={`/api/question-assets/${question.source_asset_id}`} alt="原题截图" />}
+    {(question.type === 'single_choice' || question.type === 'multiple_choice') && <section className="option-editor"><h3>选项与答案</h3>{question.options.map((option, index) => <div key={index}><input aria-label={`选项 ${index + 1} 标签`} value={option.label} onChange={(e) => updateOption(index, { label: e.target.value })} /><textarea aria-label={`选项 ${index + 1} 内容`} rows={2} value={option.content_markdown} onChange={(e) => updateOption(index, { content_markdown: e.target.value })} required /><label className="check-label"><input type={question.type === 'single_choice' ? 'radio' : 'checkbox'} name="correct-option" checked={option.correct ?? false} onChange={(e) => setQuestion((current) => ({ ...current, reviewed: false, options: current.options.map((item, itemIndex) => ({ ...item, correct: question.type === 'single_choice' ? itemIndex === index : itemIndex === index ? e.target.checked : item.correct })) }))} />正确</label><button type="button" className="danger-button" onClick={() => setQuestion({ ...question, options: question.options.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 /></button></div>)}<button type="button" className="ghost" onClick={() => setQuestion({ ...question, options: [...question.options, { label: String.fromCharCode(65 + question.options.length), content_markdown: '', correct: false, sort_order: question.options.length }] })}><Plus />添加选项</button></section>}
+    {question.type === 'true_false' && <label>正确答案<select value={String(question.correct_bool)} onChange={(e) => setQuestion({ ...question, correct_bool: e.target.value === 'true', reviewed: false })}><option value="true">正确</option><option value="false">错误</option></select></label>}
+    {question.type === 'programming' && question.programming && <ProgrammingEditor program={question.programming} setProgram={(programming) => setQuestion({ ...question, programming, reviewed: false })} updateCase={updateCase} />}
+    <label>答案解析<textarea rows={5} value={question.explanation_markdown ?? ''} onChange={(e) => setQuestion({ ...question, explanation_markdown: e.target.value })} /></label>
+    <div className="button-row"><button type="button" className="ghost" onClick={onCancel}>取消</button><button className="primary">保存题目</button></div>
+  </form></div>
+}
+
+function ProgrammingEditor({ program, setProgram, updateCase }: { program: NonNullable<EditableQuestion['programming']>; setProgram: (program: NonNullable<EditableQuestion['programming']>) => void; updateCase: (index: number, patch: Partial<ProgrammingCase>) => void }) {
+  return <section className="program-editor"><div className="section-title"><div><h3><Code2 />编程规格</h3></div></div>
+    <div className="question-editor-grid"><label>时间限制（ms）<input type="number" min="100" max="5000" value={program.time_limit_ms} onChange={(e) => setProgram({ ...program, time_limit_ms: Number(e.target.value) })} /></label><label>内存限制（MB）<input type="number" min="32" max="512" value={program.memory_limit_mb} onChange={(e) => setProgram({ ...program, memory_limit_mb: Number(e.target.value) })} /></label></div>
+    <label>输入格式<textarea rows={3} value={program.input_markdown} onChange={(e) => setProgram({ ...program, input_markdown: e.target.value })} /></label><label>输出格式<textarea rows={3} value={program.output_markdown} onChange={(e) => setProgram({ ...program, output_markdown: e.target.value })} /></label><label>数据范围<textarea rows={3} value={program.constraints_markdown} onChange={(e) => setProgram({ ...program, constraints_markdown: e.target.value })} /></label><label>初始代码<textarea className="code-input" rows={5} value={program.starter_code} onChange={(e) => setProgram({ ...program, starter_code: e.target.value })} /></label><label>参考程序<textarea className="code-input" rows={10} value={program.reference_solution ?? ''} onChange={(e) => setProgram({ ...program, reference_solution: e.target.value })} /></label>
+    <h3>测试点</h3>{program.cases.map((item, index) => <div className="case-editor" key={item.id ?? index}><div><strong>{item.is_sample ? '公开样例' : '隐藏测试点'}</strong><label className="check-label"><input type="checkbox" checked={item.is_sample} onChange={(e) => updateCase(index, { is_sample: e.target.checked, weight: e.target.checked ? 0 : item.weight })} />公开</label>{!item.is_sample && <label className="check-label"><input type="checkbox" checked={item.confirmed ?? false} onChange={(e) => updateCase(index, { confirmed: e.target.checked })} />已确认</label>}</div><label>输入<textarea className="code-input" rows={3} value={item.input_data} onChange={(e) => updateCase(index, { input_data: e.target.value, confirmed: false })} /></label><label>期望输出<textarea className="code-input" rows={3} value={item.expected_output} onChange={(e) => updateCase(index, { expected_output: e.target.value, confirmed: false })} /></label>{!item.is_sample && <label>权重<input type="number" min="0" value={item.weight} onChange={(e) => updateCase(index, { weight: Number(e.target.value), confirmed: false })} /></label>}<button type="button" className="danger-button" onClick={() => setProgram({ ...program, cases: program.cases.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 />删除测试点</button></div>)}
+    <button type="button" className="ghost" onClick={() => setProgram({ ...program, cases: [...program.cases, { input_data: '', expected_output: '', is_sample: false, weight: 0, confirmed: false, note: '' }] })}><Plus />添加测试点</button>
+  </section>
+}

@@ -27,10 +27,57 @@ services:
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+      IMPORT_LLM_BASE_URL: ${IMPORT_LLM_BASE_URL:-https://api.openai.com/v1}
+      IMPORT_LLM_API_KEY: ${IMPORT_LLM_API_KEY:-}
+      IMPORT_LLM_MODEL: ${IMPORT_LLM_MODEL:-}
+      IMPORT_LLM_TIMEOUT_SECONDS: ${IMPORT_LLM_TIMEOUT_SECONDS:-120}
+      IMPORT_LLM_MAX_RETRIES: ${IMPORT_LLM_MAX_RETRIES:-3}
+      IMPORT_MAX_FILE_MB: ${IMPORT_MAX_FILE_MB:-25}
+      IMPORT_MAX_PAGES: ${IMPORT_MAX_PAGES:-100}
+      QUESTION_ASSET_DIR: /data/question-assets
+      JUDGE_QUEUE_DIR: /judge-queue
+      JUDGE_DEFAULT_TIME_MS: ${JUDGE_DEFAULT_TIME_MS:-1000}
+      JUDGE_DEFAULT_MEMORY_MB: ${JUDGE_DEFAULT_MEMORY_MB:-128}
+      JUDGE_MAX_TIME_MS: ${JUDGE_MAX_TIME_MS:-5000}
+      JUDGE_MAX_MEMORY_MB: ${JUDGE_MAX_MEMORY_MB:-512}
+      JUDGE_OUTPUT_LIMIT_BYTES: ${JUDGE_OUTPUT_LIMIT_BYTES:-65536}
     volumes:
       - kidtype_data:/data
+      - judge_queue:/judge-queue
+    depends_on:
+      - judge
+
+  judge:
+    build:
+      context: ./judge_worker
+      dockerfile: Dockerfile
+    image: kidtype-judge:local
+    container_name: kidtype-judge
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    cpus: "1.0"
+    mem_limit: 640m
+    environment:
+      JUDGE_QUEUE_DIR: /queue
+      JUDGE_MAX_TIME_MS: ${JUDGE_MAX_TIME_MS:-5000}
+      JUDGE_MAX_MEMORY_MB: ${JUDGE_MAX_MEMORY_MB:-512}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    volumes:
+      - judge_queue:/queue
 
 volumes:
   kidtype_data:
     name: kidtype_data
+  judge_queue:
+    name: kidtype_judge_queue
 

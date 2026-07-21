@@ -6,6 +6,7 @@ import { AdminPage } from './pages/AdminPage'
 import { ChildHomePage } from './pages/ChildHomePage'
 import { LoginPage } from './pages/LoginPage'
 import { PracticePage } from './pages/PracticePage'
+import { ExercisePage } from './pages/ExercisePage'
 import { WordPracticePage } from './pages/WordPracticePage'
 import type { Me } from './types'
 
@@ -18,6 +19,7 @@ function AppRoutes() {
     <Route path="/" element={me?.role === 'child' ? <Shell me={me}><ChildHomePage me={me} /></Shell> : <Navigate to={me?.role === 'admin' ? '/admin' : '/login'} replace />} />
     <Route path="/practice/:lessonId" element={me?.role === 'child' ? <Shell me={me}><PracticePage /></Shell> : <Navigate to="/login" replace />} />
     <Route path="/word-practice/:wordSetId" element={me?.role === 'child' ? <Shell me={me}><WordPracticePage /></Shell> : <Navigate to="/login" replace />} />
+    <Route path="/exercise/:sessionId" element={me?.role === 'child' ? <Shell me={me}><ExercisePage /></Shell> : <Navigate to="/login" replace />} />
     <Route path="/admin" element={me?.role === 'admin' ? <Shell me={me}><AdminPage /></Shell> : <Navigate to="/login" replace />} />
     <Route path="*" element={<Navigate to={me?.role === 'admin' ? '/admin' : me ? '/' : '/login'} replace />} />
   </Routes>

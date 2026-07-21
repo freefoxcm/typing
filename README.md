@@ -14,6 +14,8 @@
 - 独立单词练习：每轮随机洗牌，输入时同步展示美式音标、常用中文释义和计算机领域释义。
 - 单词资料缺失时可通过 OpenAI 兼容接口在后台自动补全，失败任务可重试。
 - TXT、CSV、JSON 预览导入，JSON 词库备份，CSV 成绩导出。
+- 在线习题：单选、多选、判断和 Python 编程题，支持整套练习、随机组题和错题重练。
+- PDF 试卷通过独立视觉模型识别为可校对草稿；编程题由无网络判题工作器执行公开样例和隐藏测试点。
 - SQLite 持久化；密码和 PIN 使用 Argon2 哈希。
 
 ## Docker 部署
@@ -39,7 +41,10 @@ docker compose up -d --build
 ```bash
 docker compose ps
 docker compose logs -f kidtype
+docker compose logs -f judge
 ```
+
+编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
 
 升级时拉取或替换代码，然后重新运行 `docker compose up -d --build`；容器启动会自动执行 Alembic 数据库迁移。
 
