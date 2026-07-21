@@ -107,14 +107,14 @@ describe('WordLibraryPanel', () => {
     ))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(await screen.findByText('array')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /编程词汇.*1 词/ })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: '收起单词集 编程词汇' })).toHaveAttribute('aria-expanded', 'true')
     await waitFor(() => expect(addButton).toHaveFocus())
   })
 
   it('edits all word fields in one modal while preserving set and active state', async () => {
     wordSets = makeWordSets(true)
     render(<WordLibraryPanel />)
-    fireEvent.click(await screen.findByRole('button', { name: /编程词汇.*1 词/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '展开单词集 编程词汇' }))
     fireEvent.click(await screen.findByRole('button', { name: '编辑单词 cache' }))
 
     expect(screen.getByRole('dialog', { name: '编辑 cache' })).toBeInTheDocument()

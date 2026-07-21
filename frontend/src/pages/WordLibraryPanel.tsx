@@ -12,7 +12,7 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, Pencil, Plus, RefreshCcw, Trash2 } from 'lucide-react'
+import { ChevronDown, GripVertical, Pencil, Plus, RefreshCcw, Trash2 } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import type { LlmStatus, WordEntry, WordSetSummary } from '../types'
 
@@ -41,13 +41,13 @@ export function saveWordSetOrder(wordSets: WordSetSummary[]) {
   return api('/api/admin/word-sets/order', { method: 'PUT', ...jsonBody({ word_set_ids: wordSets.map((item) => item.id) }) })
 }
 
-function SortableWordSetCard({ item, disabled, children }: { item: WordSetSummary; disabled: boolean; children: React.ReactNode }) {
+function SortableWordSetCard({ item, expanded, disabled, children }: { item: WordSetSummary; expanded: boolean; disabled: boolean; children: React.ReactNode }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id, disabled })
   const constrainedTransform = transform ? { ...transform, x: 0 } : null
   return <article
     ref={setNodeRef}
     style={{ transform: CSS.Transform.toString(constrainedTransform), transition }}
-    className={`card word-set-admin sortable-word-set${isDragging ? ' is-dragging' : ''}`}
+    className={`card word-set-admin sortable-word-set library-disclosure-card${expanded ? ' expanded' : ' collapsed'}${isDragging ? ' is-dragging' : ''}`}
   >
     <button
       type="button"
@@ -169,8 +169,8 @@ export function WordLibraryPanel() {
     <SortableContext items={sets.map((item) => item.id)} strategy={verticalListSortingStrategy}>
     <div className={`word-set-admin-list${reordering ? ' is-reordering' : ''}`} aria-busy={reordering}>{sets.map((item, index) => {
       const open = expanded.has(item.id)
-      return <SortableWordSetCard item={item} disabled={reordering || sets.length < 2} key={item.id}><header>
-        <button className="word-set-disclosure grow" aria-expanded={open} onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}><div><h3>{item.title} {!item.active && <em>已停用</em>}</h3><p>{item.description || '暂无说明'} · {item.word_count} 词</p></div></button>
+      return <SortableWordSetCard item={item} expanded={open} disabled={reordering || sets.length < 2} key={item.id}><header>
+        <button className="course-disclosure word-set-disclosure grow" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}单词集 ${item.title}`} onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}><ChevronDown className="disclosure-chevron" /><div><h3>{item.title} {!item.active && <em>已停用</em>}</h3><p>{item.description || '暂无说明'} · {item.word_count} 词</p></div></button>
         <div className="word-status-counts">{Object.entries(item.status_counts ?? {}).map(([status, count]) => <span className={`status-${status}`} key={status}>{statusLabels[status] ?? status} {count}</span>)}</div>
         <button aria-label={`向单词集 ${item.title} 添加单词`} title="添加单词" onClick={(event) => openCreateWord(item, event.currentTarget)}><Plus /></button>
         <button aria-label={`编辑单词集 ${item.title}`} onClick={() => { const value = window.prompt('单词集名称', item.title); if (value) void action(() => api(`/api/admin/word-sets/${item.id}`, { method: 'PUT', ...jsonBody({ title: value, description: item.description, sort_order: item.sort_order ?? index, active: item.active }) }), '单词集已更新') }}><Pencil /></button>
