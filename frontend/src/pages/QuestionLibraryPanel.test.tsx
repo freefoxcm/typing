@@ -50,4 +50,31 @@ describe('QuestionLibraryPanel', () => {
     expect(await screen.findByText(/MiniMax-M3 · https:\/\/api\.minimaxi\.com\/v1 · 每批 3 页/)).toBeInTheDocument()
     expect(screen.getByText(/unknown model/)).toBeInTheDocument()
   })
+
+  it('requires an explicit answer when an imported true-false question has no answer', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{
+        id: 2, title: '导入题套', description: '', status: 'draft', question_count: 1, total_points: 2,
+        counts: { single_choice: 0, multiple_choice: 0, true_false: 1, programming: 0 },
+        questions: [{
+          id: 19, question_set_id: 2, type: 'true_false', stem_markdown: '判断题', explanation_markdown: '',
+          points: 2, sort_order: 0, reviewed: false, correct_bool: null, source_page: 1,
+          source_asset_id: null, show_source_crop: false, options: [], programming: null,
+        }],
+      }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/exercise-reports/summary') return { session_count: 0, average_percent: 0, unresolved_wrong_count: 0 }
+      return { id: 19 }
+    })
+
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }))
+
+    const answer = screen.getByLabelText('正确答案')
+    expect(answer).toHaveValue('')
+    expect(answer).toBeRequired()
+    fireEvent.change(answer, { target: { value: 'false' } })
+    expect(answer).toHaveValue('false')
+  })
 })
