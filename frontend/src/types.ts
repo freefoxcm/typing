@@ -102,6 +102,7 @@ export type QuestionSetSummary = {
   title: string
   description: string
   status: 'draft' | 'published' | 'archived'
+  sort_order?: number
   question_count: number
   counts: Record<ExerciseQuestionType, number>
   total_points: number

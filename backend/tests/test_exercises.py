@@ -2,10 +2,11 @@ import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
-from app.models import QuestionAsset, QuestionImportJob
+from app.models import ExerciseSessionItem, QuestionAsset, QuestionImportJob, QuestionSet, WrongQuestion
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -212,3 +213,76 @@ def test_import_api_returns_structured_diagnostics(tmp_path):
         assert result["warnings"] == ["第 4 页需要核对"]
         assert result["counts"]["programming"] == 2
         assert result["retried_pages"] == [4]
+        assert result["source_filename"] == "paper.pdf"
+        assert result["question_count"] == 27
+
+
+def test_question_set_and_question_reordering_controls_student_order(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        create_child(client)
+        first_set, _, _ = create_objective_set(client)
+        second_set, _, _ = create_objective_set(client)
+
+        duplicate = client.put("/api/admin/question-sets/order", json={"question_set_ids": [second_set, second_set]})
+        assert duplicate.status_code == 409
+        reordered = client.put("/api/admin/question-sets/order", json={"question_set_ids": [second_set, first_set]})
+        assert reordered.status_code == 200
+        assert [item["id"] for item in client.get("/api/admin/question-sets").json()] == [second_set, first_set]
+
+        second_questions = client.get(f"/api/admin/question-sets/{second_set}").json()["questions"]
+        question_ids = [item["id"] for item in second_questions]
+        blocked = client.put(f"/api/admin/question-sets/{second_set}/questions/order", json={"question_ids": question_ids[::-1]})
+        assert blocked.status_code == 409
+        assert client.post(f"/api/admin/question-sets/{second_set}/unpublish").status_code == 200
+        moved = client.put(f"/api/admin/question-sets/{second_set}/questions/order", json={"question_ids": question_ids[::-1]})
+        assert moved.status_code == 200
+        assert [item["id"] for item in client.get(f"/api/admin/question-sets/{second_set}").json()["questions"]] == question_ids[::-1]
+
+        assert client.post(f"/api/admin/question-sets/{second_set}/publish").status_code == 200
+        child_login(client)
+        assert [item["id"] for item in client.get("/api/exercises/question-sets").json()] == [second_set, first_set]
+
+
+def test_deleting_draft_set_removes_library_resources_but_keeps_session_snapshot(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        create_child(client)
+        set_id, _, _ = create_objective_set(client)
+        asset_root = tmp_path / "assets"
+        asset_root.mkdir(parents=True, exist_ok=True)
+        asset_path = asset_root / "source-paper.pdf"
+        asset_path.write_bytes(b"%PDF-1.7\n")
+        with client.app.state.session_factory() as db:
+            asset = QuestionAsset(question_set_id=set_id, storage_key=asset_path.name, original_name="paper.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=9)
+            db.add(asset)
+            db.flush()
+            question_set = db.get(QuestionSet, set_id)
+            question_set.source_pdf_asset_id = asset.id
+            job = QuestionImportJob(source_asset_id=asset.id, question_set_id=set_id, status="ready", page_count=1)
+            db.add(job)
+            db.commit()
+            asset_id, job_id = asset.id, job.id
+
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}}).json()
+        first, second = session["items"]
+        wrong_option = first["question"]["options"][0]["id"]
+        client.patch(f"/api/exercises/sessions/{session['id']}/answers/{first['id']}", json={"selected_option_ids": [wrong_option], "bool_answer": None, "code": ""})
+        client.patch(f"/api/exercises/sessions/{session['id']}/answers/{second['id']}", json={"selected_option_ids": [], "bool_answer": True, "code": ""})
+        assert client.post(f"/api/exercises/sessions/{session['id']}/submit").status_code == 202
+
+        admin_login(client)
+        assert client.delete(f"/api/admin/question-sets/{set_id}").status_code == 409
+        assert client.post(f"/api/admin/question-sets/{set_id}/unpublish").status_code == 200
+        assert client.delete(f"/api/admin/question-sets/{set_id}").status_code == 204
+        assert not asset_path.exists()
+
+        with client.app.state.session_factory() as db:
+            assert db.get(QuestionSet, set_id) is None
+            assert db.get(QuestionAsset, asset_id) is None
+            assert db.get(QuestionImportJob, job_id) is None
+            assert db.scalars(select(WrongQuestion)).all() == []
+            stored = db.scalars(select(ExerciseSessionItem).where(ExerciseSessionItem.session_id == session["id"])).all()
+            assert stored and all(item.question_id is None and item.question_set_id is None for item in stored)
+            assert "Python 的输入函数是" in stored[0].snapshot_json

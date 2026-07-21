@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .config import Settings
@@ -610,10 +610,13 @@ def _save_crop(db: Session, settings: Settings, question_set_id: int, document: 
 
 
 def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAsset, document: Any, payload: dict[str, Any]) -> QuestionSet:
+    max_sort_order = db.scalar(select(func.max(QuestionSet.sort_order)))
+    next_sort_order = 0 if max_sort_order is None else max_sort_order + 1
     question_set = QuestionSet(
         title=str(payload.get("title") or source_asset.original_name)[:180],
         description=_safe_markdown(payload.get("description"), 5000),
         status="draft",
+        sort_order=next_sort_order,
         source_pdf_asset_id=source_asset.id,
     )
     db.add(question_set)

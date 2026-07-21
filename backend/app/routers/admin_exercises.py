@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_library import publication_errors, question_dict, question_set_dict, replace_question
-from ..exercise_schemas import QuestionSetWrite, QuestionWrite
+from ..exercise_schemas import QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -32,6 +33,7 @@ from ..security import Principal, current_principal, require_admin
 
 
 router = APIRouter(tags=["exercise-admin"])
+logger = logging.getLogger("uvicorn.error")
 
 
 def _import_diagnostics(item: QuestionImportJob) -> dict:
@@ -42,8 +44,9 @@ def _import_diagnostics(item: QuestionImportJob) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _import_dict(item: QuestionImportJob) -> dict:
+def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
     diagnostics = _import_diagnostics(item)
+    counts = diagnostics.get("counts", {})
     return {
         "id": item.id,
         "status": item.status,
@@ -51,8 +54,10 @@ def _import_dict(item: QuestionImportJob) -> dict:
         "page_count": item.page_count,
         "error": item.error,
         "attempts": item.attempts,
+        "source_filename": source.original_name if source else "",
         "warnings": diagnostics.get("warnings", []),
-        "counts": diagnostics.get("counts", {}),
+        "counts": counts,
+        "question_count": sum(value for value in counts.values() if isinstance(value, int)),
         "retried_pages": diagnostics.get("retried_pages", []),
         "created_at": item.created_at,
         "updated_at": item.updated_at,
@@ -63,7 +68,7 @@ def _sets_query():
     return select(QuestionSet).options(
         selectinload(QuestionSet.questions).selectinload(Question.options),
         selectinload(QuestionSet.questions).selectinload(Question.programming).selectinload(ProgrammingSpec.cases),
-    ).order_by(QuestionSet.created_at.desc())
+    ).order_by(QuestionSet.sort_order, QuestionSet.id)
 
 
 def _get_set(db: Session, set_id: int) -> QuestionSet:
@@ -124,7 +129,8 @@ async def create_import(
 @router.get("/api/admin/question-imports")
 def list_imports(_principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     items = db.scalars(select(QuestionImportJob).order_by(QuestionImportJob.created_at.desc()).limit(100)).all()
-    return [_import_dict(item) for item in items]
+    sources = {item.id: item for item in db.scalars(select(QuestionAsset).where(QuestionAsset.id.in_([job.source_asset_id for job in items]))).all()} if items else {}
+    return [_import_dict(item, sources.get(item.source_asset_id)) for item in items]
 
 
 @router.get("/api/admin/question-imports/{job_id}")
@@ -132,7 +138,7 @@ def get_import(job_id: int, _principal: Principal = Depends(require_admin), db: 
     item = db.get(QuestionImportJob, job_id)
     if not item:
         raise HTTPException(status_code=404, detail="导入任务不存在")
-    return _import_dict(item)
+    return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
 
 
 @router.post("/api/admin/question-imports/{job_id}/retry")
@@ -158,6 +164,18 @@ def list_sets(_principal: Principal = Depends(require_admin), db: Session = Depe
     return [question_set_dict(item) for item in db.scalars(_sets_query()).unique().all()]
 
 
+@router.put("/api/admin/question-sets/order")
+def reorder_sets(payload: QuestionSetOrder, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    items = db.scalars(select(QuestionSet)).all()
+    by_id = {item.id: item for item in items}
+    if len(payload.question_set_ids) != len(set(payload.question_set_ids)) or set(payload.question_set_ids) != set(by_id):
+        raise HTTPException(status_code=409, detail="题套列表已变化，请刷新后重试")
+    for sort_order, item_id in enumerate(payload.question_set_ids):
+        by_id[item_id].sort_order = sort_order
+    db.commit()
+    return {"ok": True, "question_set_ids": payload.question_set_ids}
+
+
 @router.get("/api/admin/question-sets/{set_id}")
 def get_set(set_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     return question_set_dict(_get_set(db, set_id))
@@ -165,7 +183,9 @@ def get_set(set_id: int, _principal: Principal = Depends(require_admin), db: Ses
 
 @router.post("/api/admin/question-sets", status_code=201)
 def create_set(payload: QuestionSetWrite, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
-    item = QuestionSet(title=payload.title, description=payload.description, status="draft")
+    max_sort_order = db.scalar(select(func.max(QuestionSet.sort_order)))
+    next_sort_order = 0 if max_sort_order is None else max_sort_order + 1
+    item = QuestionSet(title=payload.title, description=payload.description, status="draft", sort_order=next_sort_order)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -180,6 +200,32 @@ def update_set(set_id: int, payload: QuestionSetWrite, _principal: Principal = D
     item.description = payload.description
     db.commit()
     return question_set_dict(_get_set(db, set_id))
+
+
+@router.delete("/api/admin/question-sets/{set_id}", status_code=204)
+def delete_set(
+    set_id: int,
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = _get_set(db, set_id)
+    if item.status == "published":
+        raise HTTPException(status_code=409, detail="请先撤回已发布题套再删除")
+    storage_keys = db.scalars(select(QuestionAsset.storage_key).where(QuestionAsset.question_set_id == set_id)).all()
+    db.delete(item)
+    db.commit()
+
+    root = Path(settings.question_asset_dir).resolve()
+    for storage_key in storage_keys:
+        try:
+            path = (root / storage_key).resolve()
+            if path.parent != root:
+                logger.error("Refusing to delete question asset outside configured directory: %s", storage_key)
+                continue
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to delete question asset file: %s", storage_key)
 
 
 @router.post("/api/admin/question-sets/{set_id}/publish")
@@ -219,12 +265,32 @@ def archive_set(set_id: int, _principal: Principal = Depends(require_admin), db:
 def create_question(set_id: int, payload: QuestionWrite, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     question_set = _get_set(db, set_id)
     _editable(question_set)
+    max_sort_order = db.scalar(select(func.max(Question.sort_order)).where(Question.question_set_id == set_id))
     item = Question(question_set_id=set_id, type=payload.type, stem_markdown=payload.stem_markdown)
     replace_question(item, payload)
+    item.sort_order = 0 if max_sort_order is None else max_sort_order + 1
     db.add(item)
     db.commit()
     db.refresh(item)
     return question_dict(item)
+
+
+@router.put("/api/admin/question-sets/{set_id}/questions/order")
+def reorder_questions(
+    set_id: int,
+    payload: QuestionOrder,
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question_set = _get_set(db, set_id)
+    _editable(question_set)
+    by_id = {item.id: item for item in question_set.questions}
+    if len(payload.question_ids) != len(set(payload.question_ids)) or set(payload.question_ids) != set(by_id):
+        raise HTTPException(status_code=409, detail="题目列表已变化，请刷新后重试")
+    for sort_order, item_id in enumerate(payload.question_ids):
+        by_id[item_id].sort_order = sort_order
+    db.commit()
+    return {"ok": True, "question_ids": payload.question_ids}
 
 
 @router.put("/api/admin/questions/{question_id}")

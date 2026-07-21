@@ -16,6 +16,14 @@ class QuestionSetWrite(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class QuestionSetOrder(BaseModel):
+    question_set_ids: list[int] = Field(min_length=1, max_length=10000)
+
+
+class QuestionOrder(BaseModel):
+    question_ids: list[int] = Field(min_length=1, max_length=10000)
+
+
 class OptionWrite(BaseModel):
     label: str = Field(min_length=1, max_length=16)
     content_markdown: str = Field(min_length=1, max_length=10000)
