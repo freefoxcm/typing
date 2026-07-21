@@ -19,6 +19,7 @@ def test_accepts_correct_output_and_rejects_wrong_output():
 
 def test_reports_syntax_runtime_and_timeout():
     assert run("if True print('x')")["status"] == "Syntax Error"
+    assert run("for _ in range(1):\nprint('x')")["status"] == "Syntax Error"
     assert run("raise RuntimeError('boom')")["status"] == "RE"
     assert run("while True: pass")["status"] == "TLE"
 

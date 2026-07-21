@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -31,6 +32,31 @@ from ..security import Principal, current_principal, require_admin
 
 
 router = APIRouter(tags=["exercise-admin"])
+
+
+def _import_diagnostics(item: QuestionImportJob) -> dict:
+    try:
+        value = json.loads(item.diagnostics_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _import_dict(item: QuestionImportJob) -> dict:
+    diagnostics = _import_diagnostics(item)
+    return {
+        "id": item.id,
+        "status": item.status,
+        "question_set_id": item.question_set_id,
+        "page_count": item.page_count,
+        "error": item.error,
+        "attempts": item.attempts,
+        "warnings": diagnostics.get("warnings", []),
+        "counts": diagnostics.get("counts", {}),
+        "retried_pages": diagnostics.get("retried_pages", []),
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
 
 
 def _sets_query():
@@ -98,16 +124,7 @@ async def create_import(
 @router.get("/api/admin/question-imports")
 def list_imports(_principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     items = db.scalars(select(QuestionImportJob).order_by(QuestionImportJob.created_at.desc()).limit(100)).all()
-    return [{
-        "id": item.id,
-        "status": item.status,
-        "question_set_id": item.question_set_id,
-        "page_count": item.page_count,
-        "error": item.error,
-        "attempts": item.attempts,
-        "created_at": item.created_at,
-        "updated_at": item.updated_at,
-    } for item in items]
+    return [_import_dict(item) for item in items]
 
 
 @router.get("/api/admin/question-imports/{job_id}")
@@ -115,11 +132,7 @@ def get_import(job_id: int, _principal: Principal = Depends(require_admin), db: 
     item = db.get(QuestionImportJob, job_id)
     if not item:
         raise HTTPException(status_code=404, detail="导入任务不存在")
-    return {
-        "id": item.id, "status": item.status, "question_set_id": item.question_set_id,
-        "page_count": item.page_count, "error": item.error, "attempts": item.attempts,
-        "created_at": item.created_at, "updated_at": item.updated_at,
-    }
+    return _import_dict(item)
 
 
 @router.post("/api/admin/question-imports/{job_id}/retry")
@@ -134,6 +147,7 @@ def retry_import(job_id: int, _principal: Principal = Depends(require_admin), db
     item.status = "pending"
     item.attempts = 0
     item.error = ""
+    item.diagnostics_json = "{}"
     item.processing_started_at = None
     db.commit()
     return {"ok": True, "status": item.status}

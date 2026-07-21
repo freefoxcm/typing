@@ -234,6 +234,7 @@ class QuestionImportJob(Base):
     question_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_sets.id", ondelete="SET NULL"), nullable=True)
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error: Mapped[str] = mapped_column(Text, default="")
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
