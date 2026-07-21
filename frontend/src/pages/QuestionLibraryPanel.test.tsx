@@ -24,12 +24,12 @@ describe('QuestionLibraryPanel', () => {
   it('disables PDF upload when the dedicated model is not configured', async () => {
     render(<QuestionLibraryPanel />)
     expect(await screen.findByText(/尚未配置 IMPORT_LLM/)).toBeInTheDocument()
-    expect(screen.getByText('上传 PDF').closest('label')?.querySelector('input[type="file"]')).toBeDisabled()
     const disclosure = screen.getByRole('button', { name: /PDF 智能识别/ })
-    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(disclosure)
     expect(disclosure).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('上传 PDF')).not.toBeInTheDocument()
+    fireEvent.click(disclosure)
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('上传 PDF').closest('label')?.querySelector('input[type="file"]')).toBeDisabled()
   })
 
   it('creates a manual draft question set', async () => {
@@ -53,6 +53,7 @@ describe('QuestionLibraryPanel', () => {
     render(<QuestionLibraryPanel />)
 
     expect(await screen.findByText(/MiniMax-M3 · https:\/\/api\.minimaxi\.com\/v1 · 每批 3 页/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /PDF 智能识别/ }))
     expect(screen.getByText(/unknown model/)).toBeInTheDocument()
   })
 
@@ -65,6 +66,7 @@ describe('QuestionLibraryPanel', () => {
       return { id: 1 }
     })
     render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /PDF 智能识别/ }))
     expect(await screen.findByText('识别统计')).toBeInTheDocument()
     expect(screen.getByText('定向重试页：4')).toBeInTheDocument()
     expect(screen.getByText('15').parentElement).toHaveTextContent('单选题')
@@ -107,13 +109,12 @@ describe('QuestionLibraryPanel', () => {
     })
 
     render(<QuestionLibraryPanel />)
-    const setDisclosure = await screen.findByRole('button', { name: /^导入题套/ })
-    expect(setDisclosure).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('判断题')).toBeInTheDocument()
-    fireEvent.click(setDisclosure)
+    const setDisclosure = await screen.findByRole('button', { name: '展开习题集 导入题套' })
     expect(setDisclosure).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('判断题')).not.toBeInTheDocument()
     fireEvent.click(setDisclosure)
+    expect(setDisclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('判断题')).toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: /编辑/ }))
 
     expect(screen.queryByLabelText('顺序')).not.toBeInTheDocument()
