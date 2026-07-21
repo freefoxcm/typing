@@ -657,10 +657,17 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
                 memory_limit_mb=max(32, min(settings.judge_max_memory_mb, int(program.get("memory_limit_mb") or settings.judge_default_memory_mb))),
             )
             for case in program.get("cases") or []:
+                input_data = str(case.get("input_data") or "")[:100000]
+                expected_output = str(case.get("expected_output") or "")[:100000]
+                # The JSON schema contains an empty case to describe its shape.
+                # Vision models occasionally copy that placeholder verbatim;
+                # it is not a runnable sample and would make input() raise EOF.
+                if not input_data.strip() and not expected_output.strip():
+                    continue
                 is_sample = bool(case.get("is_sample"))
                 spec.cases.append(ProgrammingCase(
-                    input_data=str(case.get("input_data") or "")[:100000],
-                    expected_output=str(case.get("expected_output") or "")[:100000] if is_sample else "",
+                    input_data=input_data,
+                    expected_output=expected_output if is_sample else "",
                     is_sample=is_sample,
                     weight=0 if is_sample else max(0, int(case.get("weight") or 0)),
                     confirmed=False,

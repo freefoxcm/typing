@@ -143,6 +143,12 @@ def publication_errors(question_set: QuestionSet) -> list[str]:
             if not question.programming or not question.programming.reference_solution.strip():
                 errors.append(f"{prefix}缺少参考程序")
                 continue
+            empty_samples = [
+                case for case in question.programming.cases
+                if case.is_sample and not case.input_data.strip() and not case.expected_output.strip()
+            ]
+            if empty_samples:
+                errors.append(f"{prefix}存在空的公开样例，请补充输入输出或删除该样例")
             hidden = [case for case in question.programming.cases if not case.is_sample and case.confirmed]
             if not hidden:
                 errors.append(f"{prefix}至少需要一个已确认隐藏测试点")

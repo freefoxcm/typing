@@ -190,3 +190,25 @@ def test_parse_pdf_retries_incomplete_primary_page_and_reconciles(monkeypatch, t
         assert payload["diagnostics"]["counts"]["programming"] == 1
     finally:
         document.close()
+
+
+def test_imported_programming_question_drops_empty_schema_case(tmp_path):
+    path = tmp_path / "program.pdf"
+    make_pdf(path)
+    document, _ = _extract_pages(path, Settings(import_max_pages=2))
+    engine, session_factory = create_db(f"sqlite:///{tmp_path / 'program.db'}")
+    Base.metadata.create_all(engine)
+    payload = {
+        "title": "编程样卷",
+        "questions": [{
+            "type": "programming", "stem_markdown": "输出 Hello", "points": 10, "source_page": 1,
+            "programming": {"reference_solution": "print('Hello')", "cases": [{"input_data": "", "expected_output": "", "is_sample": True, "weight": 0}]},
+        }],
+    }
+    with session_factory() as db:
+        source = QuestionAsset(storage_key="program.pdf", original_name="program.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+        db.add(source); db.flush()
+        question_set = materialize_draft(db, Settings(question_asset_dir=str(tmp_path / "assets")), source, document, payload)
+        assert question_set.questions[0].programming.cases == []
+    document.close()
+    engine.dispose()

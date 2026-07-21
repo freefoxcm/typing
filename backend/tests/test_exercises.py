@@ -130,6 +130,16 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
         assert program["reference_solution"] == ""
         assert all(case["is_sample"] for case in program["cases"])
         item = session["items"][0]
+        sample_run = client.post(f"/api/exercises/sessions/{session['id']}/sample-runs", json={
+            "session_item_id": item["id"],
+            "code": "a,b=map(int,input().split());print(a+b)",
+        })
+        assert sample_run.status_code == 202
+        sample_job_path = next((tmp_path / "judge" / "incoming").glob("*.json"))
+        sample_job = json.loads(sample_job_path.read_text(encoding="utf-8"))
+        assert sample_job["kind"] == "sample"
+        assert sample_job["cases"] == [{"id": program["cases"][0]["id"], "input": "1 2\n", "expected": "3\n", "weight": 0}]
+        sample_job_path.unlink()
         client.patch(f"/api/exercises/sessions/{session['id']}/answers/{item['id']}", json={"selected_option_ids": [], "bool_answer": None, "code": "a,b=map(int,input().split());print(a+b)"})
         assert client.post(f"/api/exercises/sessions/{session['id']}/submit").json()["status"] == "judging"
 
@@ -148,6 +158,28 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
         hidden_result = next(case for case in result["items"][0]["question"]["programming"]["cases"] if not case["is_sample"])
         assert "input_data" not in hidden_result and "expected_output" not in hidden_result
         assert result["items"][0]["answer"]["details"] == {"cases": [{"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 25}], "passed": 1, "total": 1}
+
+
+def test_programming_set_cannot_publish_with_empty_sample_placeholder(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "空样例", "description": ""}).json()
+        question = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "输出结果。", "explanation_markdown": "",
+            "points": 10, "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [],
+            "programming": {
+                "input_markdown": "一个数字", "output_markdown": "一个数字", "constraints_markdown": "",
+                "starter_code": "", "reference_solution": "print(input())", "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [
+                    {"input_data": "", "expected_output": "", "is_sample": True, "weight": 0, "confirmed": False, "note": ""},
+                    {"input_data": "1\n", "expected_output": "1\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""},
+                ],
+            },
+        })
+        assert question.status_code == 201
+        published = client.post(f"/api/admin/question-sets/{question_set['id']}/publish")
+        assert published.status_code == 422
+        assert "存在空的公开样例" in "".join(published.json()["detail"]["errors"])
 
 
 def test_pdf_import_requires_separate_model_configuration(tmp_path):

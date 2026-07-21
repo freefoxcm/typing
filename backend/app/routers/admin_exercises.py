@@ -254,9 +254,12 @@ def generate_reference_outputs(question_id: int, _principal: Principal = Depends
     if not item or item.type != "programming" or not item.programming:
         raise HTTPException(status_code=404, detail="编程题不存在")
     _editable(db.get(QuestionSet, item.question_set_id))
-    candidates = [case for case in item.programming.cases if not case.is_sample]
+    candidates = [
+        case for case in item.programming.cases
+        if case.input_data.strip() or case.expected_output.strip()
+    ]
     if not item.programming.reference_solution.strip() or not candidates:
-        raise HTTPException(status_code=422, detail="请先填写参考程序和隐藏测试输入")
+        raise HTTPException(status_code=422, detail="请先填写参考程序和有效的测试输入")
     job_id = enqueue(settings, {
         "kind": "reference",
         "question_id": item.id,
@@ -277,7 +280,7 @@ def reference_output(job_id: str, _principal: Principal = Depends(require_admin)
     item = db.get(Question, question_id)
     if not item or not item.programming:
         raise HTTPException(status_code=404, detail="对应编程题不存在")
-    by_id = {case.id: case for case in item.programming.cases if not case.is_sample}
+    by_id = {case.id: case for case in item.programming.cases}
     for case_result in payload.get("cases", []):
         case = by_id.get(int(case_result.get("id") or 0))
         if case and case_result.get("status") == "AC":

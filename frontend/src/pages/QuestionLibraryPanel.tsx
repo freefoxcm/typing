@@ -92,8 +92,14 @@ export function QuestionLibraryPanel() {
       const queued = await api<{ job_id: string }>(`/api/admin/questions/${questionId}/reference-output`, { method: 'POST' })
       for (let attempt = 0; attempt < 60; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
-        const status = await api<{ status: string }>(`/api/admin/reference-output/${queued.job_id}`)
-        if (status.status !== 'queued') { await reload(); setMessage('候选测试点输出已生成，请校对并确认'); return }
+        const status = await api<{ status: string; cases?: { status: string }[] }>(`/api/admin/reference-output/${queued.job_id}`)
+        if (status.status !== 'queued') {
+          await reload()
+          const failed = status.cases?.filter((item) => item.status !== 'AC').length ?? 0
+          if (failed) setError(`参考程序在 ${failed} 个测试点上运行失败，请检查输入格式和参考程序`)
+          else setMessage('样例和候选测试点输出已生成，请校对并确认')
+          return
+        }
       }
       setMessage('生成仍在进行，可稍后刷新查看')
     } catch (e) { setError(e instanceof Error ? e.message : '生成失败') }
