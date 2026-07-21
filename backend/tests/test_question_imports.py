@@ -68,6 +68,24 @@ def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
     engine.dispose()
 
 
+def test_llm_json_parser_ignores_thinking_and_repairs_trailing_commas():
+    payload = _json_content(
+        '<think>先构造一个 {草稿}。</think>\n```json\n'
+        '{"title":"样卷","questions":[{"number":"1","type":"true_false",}],}\n```'
+    )
+
+    assert payload["title"] == "样卷"
+    assert payload["questions"][0]["type"] == "true_false"
+
+
+def test_llm_json_parser_reports_location_and_response_context():
+    with pytest.raises(ValueError, match="第 1 行第") as caught:
+        _json_content('{"title":"样卷","questions":[{bad:value}]}')
+
+    assert "响应片段" in str(caught.value)
+    assert "bad:value" in str(caught.value)
+
+
 def test_import_error_detail_includes_upstream_body_and_redacts_secrets():
     request = httpx.Request(
         "POST",

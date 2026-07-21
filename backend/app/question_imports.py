@@ -58,16 +58,41 @@ def import_llm_configured(settings: Settings) -> bool:
 
 
 def _json_content(content: str) -> dict[str, Any]:
-    text = content.strip()
+    text = re.sub(r"<think>.*?</think>", "", content.strip(), flags=re.DOTALL | re.IGNORECASE).strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    decoder = json.JSONDecoder(strict=False)
+    errors: list[json.JSONDecodeError] = []
+    for match in re.finditer(r"\{", text):
+        try:
+            payload, _ = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError as exc:
+            errors.append(exc)
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("questions"), list):
+            return payload
+
     start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end < start:
+    if start >= 0 and end >= start:
+        candidate = text[start:end + 1]
+        # Models occasionally emit JavaScript-style trailing commas. This is a
+        # conservative repair that does not alter question text or answers.
+        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+        if repaired != candidate:
+            try:
+                payload = json.loads(repaired, strict=False)
+                if isinstance(payload, dict) and isinstance(payload.get("questions"), list):
+                    return payload
+            except json.JSONDecodeError as exc:
+                errors.append(exc)
+    if not errors:
         raise ValueError("识别模型未返回 JSON 对象")
-    payload = json.loads(text[start:end + 1])
-    if not isinstance(payload, dict) or not isinstance(payload.get("questions"), list):
-        raise ValueError("识别结果缺少 questions 数组")
-    return payload
+    error = max(errors, key=lambda item: item.pos)
+    context = text[max(0, error.pos - 120):error.pos + 120].replace("\n", "\\n")
+    raise ValueError(
+        f"识别模型返回无效 JSON：{error.msg}，第 {error.lineno} 行第 {error.colno} 列；"
+        f"响应片段：{context}"
+    ) from error
 
 
 def _safe_markdown(value: Any, limit: int = 50000) -> str:
@@ -120,26 +145,67 @@ async def _request_batch(settings: Settings, pages: list[dict[str, Any]]) -> dic
         '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":""}]}}]}。'
         "bbox 使用相对页面坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
+        "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": "请把这些连续试卷页面解析为结构化题库。" + schema}]
     for page in pages:
         content.append({"type": "text", "text": f"第 {page['number']} 页提取文本：\n{page['text']}"})
         content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(page["png"]).decode("ascii")}})
+    endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
+    request_body: dict[str, Any] = {
+        "model": settings.import_llm_model,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": "你是严谨的中文试卷数字化编辑。只能输出一个语法严格合法的 JSON 对象，不要解释，不要使用 Markdown 代码围栏。"},
+            {"role": "user", "content": content},
+        ],
+    }
+    if settings.import_llm_model.strip().lower() == "minimax-m3":
+        request_body["thinking"] = {"type": "disabled"}
     async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
-        response = await client.post(
-            f"{settings.import_llm_base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"},
-            json={
+        response = await client.post(endpoint, headers=headers, json=request_body)
+        response.raise_for_status()
+        choice = response.json()["choices"][0]
+        raw_content = str(choice["message"].get("content") or "")
+        if choice.get("finish_reason") == "length":
+            raise ValueError("识别模型输出因长度限制被截断，请降低 IMPORT_LLM_BATCH_PAGES 后重试")
+        try:
+            return _json_content(raw_content)
+        except ValueError as original_error:
+            logger.warning(
+                "PDF import model returned invalid JSON; attempting one repair request: %s",
+                original_error,
+            )
+            repair_body: dict[str, Any] = {
                 "model": settings.import_llm_model,
                 "temperature": 0,
                 "messages": [
-                    {"role": "system", "content": "你是严谨的中文试卷数字化编辑，只输出合法 JSON。"},
-                    {"role": "user", "content": content},
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是 JSON 语法修复器。修复用户提供的 JSON，使其能被标准 JSON 解析器读取。"
+                            "不得增删题目或改变字段值；所有属性名和字符串使用英文双引号；正确转义换行和反斜杠；"
+                            "删除尾逗号。只输出修复后的 JSON 对象，不要解释或使用 Markdown。"
+                        ),
+                    },
+                    {"role": "user", "content": raw_content},
                 ],
-            },
-        )
-        response.raise_for_status()
-        return _json_content(response.json()["choices"][0]["message"]["content"])
+            }
+            if settings.import_llm_model.strip().lower() == "minimax-m3":
+                repair_body["thinking"] = {"type": "disabled"}
+            repair_response = await client.post(endpoint, headers=headers, json=repair_body)
+            repair_response.raise_for_status()
+            repair_choice = repair_response.json()["choices"][0]
+            if repair_choice.get("finish_reason") == "length":
+                raise ValueError("JSON 自动修复输出因长度限制被截断，请降低 IMPORT_LLM_BATCH_PAGES 后重试") from original_error
+            repaired_content = str(repair_choice["message"].get("content") or "")
+            try:
+                return _json_content(repaired_content)
+            except ValueError as repair_error:
+                raise ValueError(
+                    f"识别模型返回无效 JSON，自动修复仍失败。原始错误：{original_error}；修复错误：{repair_error}"
+                ) from repair_error
 
 
 def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
