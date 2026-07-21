@@ -84,7 +84,7 @@ def run_case(code: str, case: dict, kind: str, time_ms: int, memory_mb: int, out
     if timed_out:
         status = "TLE"
     elif process.returncode != 0:
-        if "SyntaxError" in stderr:
+        if any(name in stderr for name in ("SyntaxError", "IndentationError", "TabError")):
             status = "Syntax Error"
         elif "MemoryError" in stderr or (os.name == "posix" and process.returncode in {-signal.SIGKILL, -signal.SIGSEGV} and not stderr.strip()):
             status = "MLE"

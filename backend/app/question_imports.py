@@ -1,8 +1,10 @@
 import asyncio
 import base64
+import html
 import json
 import logging
 import re
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -97,7 +99,10 @@ def _json_content(content: str) -> dict[str, Any]:
 
 def _safe_markdown(value: Any, limit: int = 50000) -> str:
     text = str(value or "").strip()[:limit]
-    return text.replace("<", "&lt;").replace(">", "&gt;")
+    # React renders this content as text and the Markdown component never uses
+    # raw HTML, so storing entities here only makes comparison operators appear
+    # as literal "&lt;" / "&gt;" text. Decode one model-produced entity layer.
+    return html.unescape(text)
 
 
 def _question_type(value: Any) -> str:
@@ -133,17 +138,29 @@ def _extract_pages(path: Path, settings: Settings) -> tuple[Any, list[dict[str, 
     return document, pages
 
 
-async def _request_batch(settings: Settings, pages: list[dict[str, Any]]) -> dict[str, Any]:
+async def _request_batch(
+    settings: Settings,
+    pages: list[dict[str, Any]],
+    primary_pages: list[int] | None = None,
+) -> dict[str, Any]:
+    primary_pages = primary_pages or [int(page["number"]) for page in pages]
     schema = (
-        '只返回 JSON：{"title":"题套标题","description":"说明","questions":[{'
-        '"number":"1","type":"single_choice|multiple_choice|true_false|programming",'
+        '只返回 JSON：{"title":"题套标题","description":"说明",'
+        '"page_inventory":[{"source_page":1,"questions":[{"candidate_id":"p1-q1",'
+        '"number":"1","section":"一、选择题","type":"single_choice"}]}],"questions":[{'
+        '"candidate_id":"p1-q1","number":"1","section":"一、选择题",'
+        '"type":"single_choice|multiple_choice|true_false|programming",'
         '"stem_markdown":"题面","explanation_markdown":"解析","points":2,"correct_bool":null,'
-        '"source_page":1,"has_visual":false,"bbox":[0,0,1,1],'
+        '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0,0,1,1],'
         '"options":[{"label":"A","content_markdown":"选项","correct":true}],'
         '"programming":{"input_markdown":"","output_markdown":"","constraints_markdown":"",'
         '"starter_code":"","reference_solution":"","time_limit_ms":1000,"memory_limit_mb":128,'
         '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":""}]}}]}。'
-        "bbox 使用相对页面坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块。"
+        f"本次仅输出起始页为 {primary_pages} 的题目；其他页只是上下文，不得单独输出其上开始的题。"
+        "page_inventory 必须逐个列出主页面上开始的题目，并与 questions 使用相同 candidate_id。"
+        "一道编程题的题面、小问、代码、样例和续页必须合并为同一题，除非试卷明确印有新题号和独立分值。"
+        "题目被截断或续页不足时 complete=false，source_end_page 是实际覆盖的最后页。"
+        "bbox 使用起始页的相对坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块和原始缩进。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
@@ -208,6 +225,222 @@ async def _request_batch(settings: Settings, pages: list[dict[str, Any]]) -> dic
                 ) from repair_error
 
 
+def _model_request_body(settings: Settings, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": settings.import_llm_model,
+        "temperature": 0,
+        "messages": messages,
+    }
+    if settings.import_llm_model.strip().lower() == "minimax-m3":
+        body["thinking"] = {"type": "disabled"}
+    return body
+
+
+async def _request_reconciliation(settings: Settings, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    metadata = []
+    for raw in candidates:
+        metadata.append({
+            "candidate_id": raw["_candidate_id"],
+            "number": str(raw.get("number") or ""),
+            "section": str(raw.get("section") or ""),
+            "type": _question_type(raw.get("type")),
+            "source_page": raw.get("source_page"),
+            "source_end_page": raw.get("source_end_page"),
+            "complete": raw.get("complete", True),
+            "stem_excerpt": str(raw.get("stem_markdown") or "")[:240],
+        })
+    prompt = (
+        "你是试卷题目结构校对器。只根据候选元数据判断哪些候选是同一道印刷题的重复或跨页片段。"
+        "不得合并不同章节中恰好同号的题，不得新增题目或改写题面。"
+        '只返回标准 JSON：{"questions":[],"groups":[{"candidate_ids":["c1","c2"],"reason":"跨页续题"}],'
+        '"warnings":["疑似缺少第 3 题"]}。不需合并的候选不要出现在 groups 中。\n'
+        + json.dumps(metadata, ensure_ascii=False)
+    )
+    endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
+    body = _model_request_body(settings, [
+        {"role": "system", "content": "只输出一个严格 JSON 对象，不要解释。"},
+        {"role": "user", "content": prompt},
+    ])
+    async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
+        response = await client.post(endpoint, headers=headers, json=body)
+        response.raise_for_status()
+    return _json_content(str(response.json()["choices"][0]["message"].get("content") or ""))
+
+
+def _normalize_key_part(value: Any) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
+def _integer(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        match = re.search(r"\d+", str(value or ""))
+        return int(match.group()) if match else default
+
+
+def _positive_int(value: Any, default: int = 1) -> int:
+    return max(1, _integer(value, default))
+
+
+def _question_key(raw: dict[str, Any]) -> tuple[str, str, int]:
+    page = _positive_int(raw.get("source_page"), 1)
+    section = _normalize_key_part(raw.get("section"))
+    number = _normalize_key_part(raw.get("number"))
+    if not section:
+        # Printed numbers commonly restart in each section. When the model omits
+        # the section, include a stem fingerprint instead of risking an unsafe
+        # merge of two unrelated "question 1" entries on the same page.
+        section = "missing" + _normalize_key_part(str(raw.get("stem_markdown") or "")[:40])
+    if not number:
+        number = _normalize_key_part(str(raw.get("stem_markdown") or "")[:80])
+    return section, number, page
+
+
+def _candidate_score(raw: dict[str, Any]) -> int:
+    program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
+    options = raw.get("options") if isinstance(raw.get("options"), list) else []
+    return (
+        (100000 if raw.get("complete", True) else 0)
+        + len(str(raw.get("stem_markdown") or ""))
+        + len(str(raw.get("explanation_markdown") or ""))
+        + len(json.dumps(program, ensure_ascii=False))
+        + len(options) * 100
+    )
+
+
+def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
+    ordered = sorted(group, key=_candidate_score, reverse=True)
+    result = deepcopy(ordered[0])
+    result["source_page"] = min(_positive_int(item.get("source_page"), 1) for item in group)
+    result["source_end_page"] = max(_positive_int(item.get("source_end_page"), _positive_int(item.get("source_page"), 1)) for item in group)
+    result["complete"] = any(item.get("complete", True) for item in group)
+    result["_merged_candidate_ids"] = [item["_candidate_id"] for item in group]
+    if _question_type(result.get("type")) in {"single_choice", "multiple_choice"}:
+        result["options"] = max(
+            (item.get("options") for item in group if isinstance(item.get("options"), list)),
+            key=len,
+            default=[],
+        )
+    if _question_type(result.get("type")) == "programming":
+        programs = [item.get("programming") for item in ordered if isinstance(item.get("programming"), dict)]
+        if programs:
+            program = deepcopy(max(programs, key=lambda item: len(json.dumps(item, ensure_ascii=False))))
+            for candidate in programs:
+                for field in ("input_markdown", "output_markdown", "constraints_markdown", "starter_code", "reference_solution"):
+                    if not str(program.get(field) or "").strip() and str(candidate.get(field) or "").strip():
+                        program[field] = candidate[field]
+            cases: dict[tuple[bool, str], dict[str, Any]] = {}
+            for candidate in programs:
+                for case in candidate.get("cases") or []:
+                    if not isinstance(case, dict):
+                        continue
+                    key = (bool(case.get("is_sample")), str(case.get("input_data") or "").strip())
+                    previous = cases.get(key)
+                    if previous is None or len(str(case.get("expected_output") or "")) > len(str(previous.get("expected_output") or "")):
+                        cases[key] = deepcopy(case)
+            program["cases"] = list(cases.values())
+            result["programming"] = program
+    return result
+
+
+def _merge_candidates(
+    candidates: list[dict[str, Any]],
+    reconciliation: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    parent = {item["_candidate_id"]: item["_candidate_id"] for item in candidates}
+
+    def find(value: str) -> str:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(values: list[str]) -> None:
+        valid = [value for value in values if value in parent]
+        if len(valid) < 2:
+            return
+        root = find(valid[0])
+        for value in valid[1:]:
+            parent[find(value)] = root
+
+    local_groups: dict[tuple[str, str, int], list[str]] = {}
+    for item in candidates:
+        local_groups.setdefault(_question_key(item), []).append(item["_candidate_id"])
+    for values in local_groups.values():
+        union(values)
+    rejected_groups = 0
+    if reconciliation:
+        for group in reconciliation.get("groups") or []:
+            if isinstance(group, dict):
+                values = [str(value) for value in group.get("candidate_ids") or []]
+                members = [item for item in candidates if item["_candidate_id"] in values]
+                sections = {_normalize_key_part(item.get("section")) for item in members if _normalize_key_part(item.get("section"))}
+                numbers = {_normalize_key_part(item.get("number")) for item in members if _normalize_key_part(item.get("number"))}
+                number_roots = {match.group() for value in numbers if (match := re.match(r"\d+", value))}
+                number_conflict = len(numbers) > 1 and (not number_roots or len(number_roots) > 1)
+                if len(sections) > 1 or number_conflict:
+                    rejected_groups += 1
+                    continue
+                union(values)
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in candidates:
+        grouped.setdefault(find(item["_candidate_id"]), []).append(item)
+    merged = [_merge_question_group(group) for group in grouped.values()]
+    merged.sort(key=lambda item: (
+        int(item.get("source_page") or 1),
+        float((item.get("bbox") or [0, 0, 1, 1])[1]) if str((item.get("bbox") or [0, 0, 1, 1])[1]).replace(".", "", 1).isdigit() else 0,
+        _normalize_key_part(item.get("number")),
+    ))
+    merged_count = sum(max(0, len(group) - 1) for group in grouped.values())
+    warnings = []
+    if reconciliation:
+        warnings.extend(str(item) for item in reconciliation.get("warnings") or [] if str(item).strip())
+    if merged_count:
+        warnings.append(f"已合并 {merged_count} 个重复或跨页题目候选")
+    if rejected_groups:
+        warnings.append(f"已拒绝 {rejected_groups} 组跨章节或题号冲突的自动合并建议")
+    return merged, warnings, merged_count
+
+
+def _inventory_count(payload: dict[str, Any], page_number: int) -> int | None:
+    entries = payload.get("page_inventory")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and _integer(entry.get("source_page"), 0) == page_number:
+            questions = entry.get("questions")
+            return len(questions) if isinstance(questions, list) else 0
+    return 0
+
+
+def _numbering_anomalies(candidates: list[dict[str, Any]]) -> tuple[set[int], list[str]]:
+    sections: dict[str, list[tuple[int, int]]] = {}
+    labels: dict[str, str] = {}
+    for raw in candidates:
+        section = _normalize_key_part(raw.get("section"))
+        number_text = str(raw.get("number") or "").strip()
+        if not section or not number_text.isdigit():
+            continue
+        sections.setdefault(section, []).append((int(number_text), _positive_int(raw.get("source_page"), 1)))
+        labels[section] = str(raw.get("section") or section)
+    retry_pages: set[int] = set()
+    warnings: list[str] = []
+    for section, values in sections.items():
+        unique = sorted(set(values))
+        if len(unique) < 3:
+            continue
+        for previous, current in zip(unique, unique[1:]):
+            gap = current[0] - previous[0]
+            if 1 < gap <= 10:
+                retry_pages.update({previous[1], current[1]})
+                missing = "、".join(str(number) for number in range(previous[0] + 1, current[0]))
+                warnings.append(f"{labels[section]} 疑似缺少题号 {missing}，已定向重试相关页")
+    return retry_pages, warnings
+
+
 def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
     size = max(1, min(8, batch_pages))
     overlap = 1 if size > 1 else 0
@@ -226,33 +459,124 @@ def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
 async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
     document, pages = _extract_pages(path, settings)
     combined: dict[str, Any] = {"title": path.stem, "description": "", "questions": []}
-    seen: dict[tuple[str, str], dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    retried_pages: set[int] = set()
+    expected_by_page: dict[int, int] = {}
     try:
-        # One-page overlap keeps adjacent pages together when a programming
-        # problem crosses a batch boundary. Duplicate questions are merged below.
+        # The last page of every non-final batch is look-ahead context. It becomes
+        # a primary page in the next batch, so each printed question has one owner
+        # while questions crossing a boundary can still see their continuation.
         batches = list(_page_batches(pages, settings.import_llm_batch_pages))
         for batch_index, batch in enumerate(batches, start=1):
+            is_last = batch_index == len(batches)
+            primary = batch if is_last or len(batch) == 1 else batch[:-1]
+            primary_numbers = [int(page["number"]) for page in primary]
             logger.info(
-                "PDF import model request %s/%s: file=%s pages=%s-%s page_count=%s",
+                "PDF import model request %s/%s: file=%s pages=%s-%s primary=%s page_count=%s",
                 batch_index,
                 len(batches),
                 path.name,
                 batch[0]["number"],
                 batch[-1]["number"],
+                primary_numbers,
                 len(batch),
             )
-            payload = await _request_batch(settings, batch)
+            payload = await _request_batch(settings, batch, primary_numbers)
             if payload.get("title") and combined["title"] == path.stem:
                 combined["title"] = str(payload["title"])[:180]
                 combined["description"] = str(payload.get("description", ""))[:5000]
-            for raw in payload.get("questions", []):
-                kind = _question_type(raw.get("type"))
-                number = str(raw.get("number", len(seen) + 1))
-                key = (kind, number)
-                previous = seen.get(key)
-                if previous is None or len(str(raw.get("stem_markdown", ""))) > len(str(previous.get("stem_markdown", ""))):
-                    seen[key] = raw
-        combined["questions"] = list(seen.values())
+            batch_candidates: list[dict[str, Any]] = []
+            for candidate_index, value in enumerate(payload.get("questions") or [], start=1):
+                if not isinstance(value, dict):
+                    continue
+                raw = deepcopy(value)
+                try:
+                    source_page = max(1, int(raw.get("source_page") or primary_numbers[0]))
+                except (TypeError, ValueError):
+                    source_page = primary_numbers[0]
+                if source_page not in primary_numbers:
+                    warnings.append(f"已忽略上下文页 {source_page} 上重复输出的题目")
+                    continue
+                raw["source_page"] = source_page
+                raw["source_end_page"] = max(source_page, _positive_int(raw.get("source_end_page"), source_page))
+                raw["_candidate_id"] = f"b{batch_index}-q{candidate_index}"
+                batch_candidates.append(raw)
+            candidates.extend(batch_candidates)
+            for page_number in primary_numbers:
+                expected = _inventory_count(payload, page_number)
+                if expected is None:
+                    warnings.append(f"第 {page_number} 页未返回题目清单，需要人工核对")
+                    continue
+                expected_by_page[page_number] = expected
+                actual = sum(int(item.get("source_page") or 0) == page_number for item in batch_candidates)
+                if actual != expected:
+                    retried_pages.add(page_number)
+            for raw in batch_candidates:
+                if not raw.get("complete", True):
+                    retried_pages.add(int(raw["source_page"]))
+
+        numbering_pages, numbering_warnings = _numbering_anomalies(candidates)
+        retried_pages.update(numbering_pages)
+        warnings.extend(numbering_warnings)
+
+        # Retry only pages whose inventory count disagrees or whose question was
+        # marked incomplete. Include one previous and two following pages so a
+        # long programming statement can be reconstructed without a huge request.
+        for retry_index, page_number in enumerate(sorted(retried_pages), start=1):
+            focus = [page for page in pages if page_number - 1 <= int(page["number"]) <= page_number + 2]
+            logger.info("PDF import focused retry %s: file=%s primary=%s context=%s", retry_index, path.name, page_number, [page["number"] for page in focus])
+            payload = await _request_batch(settings, focus, [page_number])
+            added = 0
+            for candidate_index, value in enumerate(payload.get("questions") or [], start=1):
+                if not isinstance(value, dict):
+                    continue
+                raw = deepcopy(value)
+                try:
+                    source_page = max(1, int(raw.get("source_page") or page_number))
+                except (TypeError, ValueError):
+                    source_page = page_number
+                if source_page != page_number:
+                    continue
+                raw["source_page"] = source_page
+                raw["source_end_page"] = max(source_page, _positive_int(raw.get("source_end_page"), source_page))
+                raw["_candidate_id"] = f"r{retry_index}-q{candidate_index}"
+                candidates.append(raw)
+                added += 1
+            if not added:
+                warnings.append(f"第 {page_number} 页定向重试仍未识别到题目")
+
+        reconciliation: dict[str, Any] | None = None
+        if len(candidates) > 1:
+            try:
+                reconciliation = await _request_reconciliation(settings, candidates)
+            except Exception as exc:
+                logger.warning("PDF import metadata reconciliation failed; using deterministic merge: %s", _import_error_detail(exc))
+                warnings.append("题目元数据自动校对失败，已使用本地规则合并，请重点检查跨页题")
+        merged, merge_warnings, merged_count = _merge_candidates(candidates, reconciliation)
+        warnings.extend(merge_warnings)
+        for page_number, expected in expected_by_page.items():
+            actual = sum(int(item.get("source_page") or 0) == page_number for item in merged)
+            if actual != expected:
+                warnings.append(f"第 {page_number} 页题目清单为 {expected} 题，合并后为 {actual} 题，请人工核对")
+        for item in merged:
+            if not item.get("complete", True):
+                warnings.append(f"第 {item.get('source_page')} 页的题目 {item.get('number') or ''} 可能不完整")
+        # Preserve order while removing repeated diagnostics.
+        warnings = list(dict.fromkeys(item for item in warnings if item.strip()))[:100]
+        counts = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "programming")}
+        for raw in merged:
+            kind = _question_type(raw.get("type"))
+            counts[kind] = counts.get(kind, 0) + 1
+        combined["questions"] = merged
+        combined["diagnostics"] = {
+            "warnings": warnings,
+            "counts": counts,
+            "retried_pages": sorted(retried_pages),
+            "inventory_count": sum(expected_by_page.values()),
+            "candidate_count": len(candidates),
+            "merged_count": merged_count,
+        }
         if not combined["questions"]:
             raise ValueError("没有识别到题目")
         return document, pages, combined
@@ -307,7 +631,7 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
             sort_order=index - 1,
             reviewed=False,
             correct_bool=raw.get("correct_bool") if kind == "true_false" else None,
-            source_page=max(1, int(raw.get("source_page") or 1)),
+            source_page=_positive_int(raw.get("source_page"), 1),
             show_source_crop=bool(raw.get("has_visual")),
         )
         db.add(question)
@@ -395,6 +719,7 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
             question_set = materialize_draft(db, settings, asset, document, payload)
             job.question_set_id = question_set.id
             job.page_count = len(pages)
+            job.diagnostics_json = json.dumps(payload.get("diagnostics") or {}, ensure_ascii=False)
             job.status = "ready"
             job.processing_started_at = None
             db.commit()

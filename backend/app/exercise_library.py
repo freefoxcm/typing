@@ -1,4 +1,5 @@
 import json
+import html
 from typing import Any
 
 from .exercise_schemas import QuestionWrite
@@ -8,11 +9,16 @@ from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionOption, 
 QUESTION_TYPES = {"single_choice", "multiple_choice", "true_false", "programming"}
 
 
+def display_text(value: str | None) -> str:
+    """Decode the single legacy HTML-entity layer used by old PDF imports."""
+    return html.unescape(value or "")
+
+
 def option_dict(item: QuestionOption, include_correct: bool) -> dict[str, Any]:
     result = {
         "id": item.id,
         "label": item.label,
-        "content_markdown": item.content_markdown,
+        "content_markdown": display_text(item.content_markdown),
         "sort_order": item.sort_order,
     }
     if include_correct:
@@ -31,7 +37,7 @@ def case_dict(item: ProgrammingCase, include_hidden: bool) -> dict[str, Any] | N
         "weight": item.weight,
     }
     if include_hidden:
-        result.update({"confirmed": item.confirmed, "note": item.note})
+        result.update({"confirmed": item.confirmed, "note": display_text(item.note)})
     return result
 
 
@@ -40,8 +46,8 @@ def question_dict(question: Question, include_answers: bool = True) -> dict[str,
         "id": question.id,
         "question_set_id": question.question_set_id,
         "type": question.type,
-        "stem_markdown": question.stem_markdown,
-        "explanation_markdown": question.explanation_markdown if include_answers else "",
+        "stem_markdown": display_text(question.stem_markdown),
+        "explanation_markdown": display_text(question.explanation_markdown) if include_answers else "",
         "points": question.points,
         "sort_order": question.sort_order,
         "source_page": question.source_page,
@@ -54,9 +60,9 @@ def question_dict(question: Question, include_answers: bool = True) -> dict[str,
     if question.programming:
         cases = [case_dict(item, include_answers) for item in question.programming.cases]
         result["programming"] = {
-            "input_markdown": question.programming.input_markdown,
-            "output_markdown": question.programming.output_markdown,
-            "constraints_markdown": question.programming.constraints_markdown,
+            "input_markdown": display_text(question.programming.input_markdown),
+            "output_markdown": display_text(question.programming.output_markdown),
+            "constraints_markdown": display_text(question.programming.constraints_markdown),
             "starter_code": question.programming.starter_code,
             "reference_solution": question.programming.reference_solution if include_answers else "",
             "time_limit_ms": question.programming.time_limit_ms,
@@ -74,8 +80,8 @@ def question_set_dict(question_set: QuestionSet, include_questions: bool = True)
         counts[question.type] = counts.get(question.type, 0) + 1
     result: dict[str, Any] = {
         "id": question_set.id,
-        "title": question_set.title,
-        "description": question_set.description,
+        "title": display_text(question_set.title),
+        "description": display_text(question_set.description),
         "status": question_set.status,
         "source_pdf_asset_id": question_set.source_pdf_asset_id,
         "question_count": len(question_set.questions),

@@ -3,7 +3,7 @@ import { Archive, CheckCircle2, Code2, FileUp, Pencil, Play, Plus, RefreshCcw, T
 import { api, jsonBody } from '../api'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionOption, QuestionSetSummary } from '../types'
 
-type ImportJob = { id: number; status: string; question_set_id?: number; page_count?: number; error?: string; attempts: number; created_at: string }
+type ImportJob = { id: number; status: string; question_set_id?: number; page_count?: number; error?: string; attempts: number; created_at: string; warnings?: string[]; counts?: Partial<Record<ExerciseQuestionType, number>>; retried_pages?: number[] }
 type LlmStatus = { configured: boolean; base_url: string; model: string; batch_pages: number }
 type ExerciseReport = { session_count: number; average_percent: number; unresolved_wrong_count: number }
 type EditableQuestion = Omit<ExerciseQuestion, 'id'> & { id?: number }
@@ -110,7 +110,7 @@ export function QuestionLibraryPanel() {
     <section className="card pdf-import-card">
       <div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div>
       <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>
-      {jobs.length > 0 && <div className="import-job-list">{jobs.slice(0, 5).map((job) => <div key={job.id}><span>任务 #{job.id}</span><strong>{job.status === 'ready' ? `完成 · ${job.page_count} 页` : job.status === 'processing' ? '正在识别' : job.status === 'pending' ? '等待识别' : '识别失败'}</strong>{job.error && <small title={job.error}>{job.error}</small>}{job.status === 'failed' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-imports/${job.id}/retry`, { method: 'POST' }), '已重新排队')}><RefreshCcw />重试</button>}</div>)}</div>}
+      {jobs.length > 0 && <div className="import-job-list">{jobs.slice(0, 5).map((job) => <div key={job.id}><div className="import-job-heading"><span>任务 #{job.id}</span><strong>{job.status === 'ready' ? `完成 · ${job.page_count} 页` : job.status === 'processing' ? '正在识别' : job.status === 'pending' ? '等待识别' : '识别失败'}</strong>{job.error && <small title={job.error}>{job.error}</small>}{job.status === 'failed' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-imports/${job.id}/retry`, { method: 'POST' }), '已重新排队')}><RefreshCcw />重试</button>}</div>{job.status === 'ready' && job.counts && <small className="import-job-counts">单选 {job.counts.single_choice ?? 0} · 多选 {job.counts.multiple_choice ?? 0} · 判断 {job.counts.true_false ?? 0} · 编程 {job.counts.programming ?? 0}{job.retried_pages?.length ? ` · 重试页 ${job.retried_pages.join('、')}` : ''}</small>}{job.warnings?.map((warning) => <small className="import-job-warning" key={warning}>{warning}</small>)}</div>)}</div>}
     </section>
     <form className="inline-form card" onSubmit={createSet}><label>题套名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />手动新建题套</button></form>
     <div className="question-set-admin-list">{sets.map((set) => <article className="card question-set-admin" key={set.id}>

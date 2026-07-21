@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -7,7 +8,10 @@ import pytest
 from app.config import Settings
 from app.database import Base, create_db
 from app.models import QuestionAsset
-from app.question_imports import _extract_pages, _import_error_detail, _json_content, _page_batches, materialize_draft
+import app.question_imports as question_imports
+from app.exercise_library import question_dict
+from app.models import Question
+from app.question_imports import _extract_pages, _import_error_detail, _json_content, _merge_candidates, _page_batches, _safe_markdown, materialize_draft, parse_pdf
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -108,3 +112,81 @@ def test_import_error_detail_includes_upstream_body_and_redacts_secrets():
     assert "visible-secret" not in detail
     assert "do-not-log" not in detail
     assert "another-secret" not in detail
+
+
+def test_markdown_comparison_operators_are_not_double_escaped():
+    assert _safe_markdown("0 &lt; x < 10 &gt; 2") == "0 < x < 10 > 2"
+    question = Question(
+        id=1,
+        question_set_id=1,
+        type="true_false",
+        stem_markdown="x &lt; 10 and y &gt; 0",
+        explanation_markdown="<script>alert(1)</script>",
+        points=2,
+        sort_order=0,
+        reviewed=True,
+        correct_bool=True,
+        show_source_crop=False,
+    )
+    result = question_dict(question)
+    assert result["stem_markdown"] == "x < 10 and y > 0"
+    assert result["explanation_markdown"] == "<script>alert(1)</script>"
+
+
+def test_candidate_merge_joins_cross_page_programming_fragments_but_keeps_sections_separate():
+    base_program = {"input_markdown": "N", "output_markdown": "", "constraints_markdown": "", "starter_code": "", "reference_solution": "", "cases": []}
+    candidates = [
+        {"_candidate_id": "c1", "number": "1", "section": "三、编程题", "type": "programming", "source_page": 4, "source_end_page": 4, "complete": False, "stem_markdown": "计算阶乘", "programming": base_program},
+        {"_candidate_id": "c2", "number": "1", "section": "三、编程题", "type": "programming", "source_page": 5, "source_end_page": 5, "complete": True, "stem_markdown": "计算阶乘并输出结果", "programming": {**base_program, "output_markdown": "N!", "cases": [{"input_data": "3\n", "expected_output": "6\n", "is_sample": True}]}},
+        {"_candidate_id": "c3", "number": "1", "section": "四、附加题", "type": "programming", "source_page": 5, "source_end_page": 5, "complete": True, "stem_markdown": "输出图形", "programming": base_program},
+    ]
+    merged, warnings, merged_count = _merge_candidates(candidates, {"groups": [{"candidate_ids": ["c1", "c2"]}], "warnings": []})
+    assert len(merged) == 2
+    assert merged_count == 1
+    assert any("已合并 1" in warning for warning in warnings)
+    factorial = next(item for item in merged if item["section"] == "三、编程题")
+    assert factorial["source_page"] == 4
+    assert factorial["source_end_page"] == 5
+    assert factorial["programming"]["output_markdown"] == "N!"
+
+
+def test_parse_pdf_retries_incomplete_primary_page_and_reconciles(monkeypatch, tmp_path):
+    path = tmp_path / "paper.pdf"
+    make_pdf(path, 4)
+    calls: list[list[int]] = []
+
+    async def fake_batch(_settings, _pages, primary_pages=None):
+        primary = list(primary_pages or [])
+        calls.append(primary)
+        if primary == [1, 2]:
+            return {
+                "title": "跨页样卷",
+                "page_inventory": [
+                    {"source_page": 1, "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "编程题", "type": "programming"}]},
+                    {"source_page": 2, "questions": []},
+                ],
+                "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "编程题", "type": "programming", "source_page": 1, "source_end_page": 2, "complete": False, "stem_markdown": "跨页题前半", "programming": {"cases": []}}],
+            }
+        if primary == [3, 4]:
+            return {"page_inventory": [{"source_page": 3, "questions": []}, {"source_page": 4, "questions": []}], "questions": []}
+        assert primary == [1]
+        return {
+            "page_inventory": [{"source_page": 1, "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "编程题", "type": "programming"}]}],
+            "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "编程题", "type": "programming", "source_page": 1, "source_end_page": 3, "complete": True, "stem_markdown": "完整跨页编程题", "programming": {"input_markdown": "N", "cases": []}}],
+        }
+
+    async def fake_reconciliation(_settings, candidates):
+        assert len(candidates) == 2
+        return {"groups": [{"candidate_ids": ["b1-q1", "r1-q1"]}], "warnings": [], "questions": []}
+
+    monkeypatch.setattr(question_imports, "_request_batch", fake_batch)
+    monkeypatch.setattr(question_imports, "_request_reconciliation", fake_reconciliation)
+    document, _, payload = asyncio.run(parse_pdf(Settings(import_llm_batch_pages=3), path))
+    try:
+        assert calls == [[1, 2], [3, 4], [1]]
+        assert len(payload["questions"]) == 1
+        assert payload["questions"][0]["stem_markdown"] == "完整跨页编程题"
+        assert payload["diagnostics"]["retried_pages"] == [1]
+        assert payload["diagnostics"]["counts"]["programming"] == 1
+    finally:
+        document.close()

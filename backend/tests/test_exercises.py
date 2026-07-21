@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.models import QuestionAsset, QuestionImportJob
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -155,3 +156,27 @@ def test_pdf_import_requires_separate_model_configuration(tmp_path):
         response = client.post("/api/admin/question-imports", files={"file": ("paper.pdf", b"%PDF-1.7\n", "application/pdf")})
         assert response.status_code == 409
         assert "PDF 识别模型" in response.json()["detail"]
+
+
+def test_import_api_returns_structured_diagnostics(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        with client.app.state.session_factory() as db:
+            asset = QuestionAsset(storage_key="paper.pdf", original_name="paper.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset)
+            db.flush()
+            db.add(QuestionImportJob(
+                source_asset_id=asset.id,
+                status="ready",
+                page_count=5,
+                diagnostics_json=json.dumps({
+                    "warnings": ["第 4 页需要核对"],
+                    "counts": {"single_choice": 15, "true_false": 10, "programming": 2},
+                    "retried_pages": [4],
+                }, ensure_ascii=False),
+            ))
+            db.commit()
+        result = client.get("/api/admin/question-imports").json()[0]
+        assert result["warnings"] == ["第 4 页需要核对"]
+        assert result["counts"]["programming"] == 2
+        assert result["retried_pages"] == [4]

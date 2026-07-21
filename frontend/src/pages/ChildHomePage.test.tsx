@@ -55,4 +55,18 @@ describe('ChildHomePage', () => {
     expect(screen.getByText(/12 词/)).toBeInTheDocument()
     expect(wordSetLink).toHaveTextContent('已练 3 次')
   })
+
+  it('orders words, typing practice, then online exercises', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/library/courses') return courses
+      if (path === '/api/library/word-sets') return [{ id: 9, title: '计算机英语', description: '', word_count: 12 }]
+      return [{ id: 8, title: 'Python 练习', description: '', status: 'published', question_count: 2, total_points: 4, counts: { single_choice: 1, multiple_choice: 0, true_false: 1, programming: 0 } }]
+    })
+    render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
+    const typing = await screen.findByRole('heading', { name: '循序渐进，练出速度' })
+    const exercises = screen.getByRole('heading', { name: '读题、思考、动手编程' })
+    const words = screen.getByRole('heading', { name: '边输入，边记住单词' })
+    expect(words.compareDocumentPosition(typing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(typing.compareDocumentPosition(exercises) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })

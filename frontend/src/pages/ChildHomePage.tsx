@@ -36,7 +36,6 @@ export function ChildHomePage({ me }: { me: Me }) {
       </section>
       {error && <p className="notice error">{error}</p>}
       {courses.length === 0 && wordSets.length === 0 && questionSets.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的内容</h2><p>请管理员进入后台添加课程、单词集或习题题套。</p></div>}
-      <ExerciseHomeSection sets={questionSets} />
       {wordSets.length > 0 && <section className="word-set-section">
         <header className="section-title"><div><p className="eyebrow">单词练习</p><h2>边输入，边记住单词</h2><p>看音标和释义，准确地敲出每个词。</p></div></header>
         <div className="word-set-grid">{wordSets.map((item) => <Link className="word-set-card" to={`/word-practice/${item.id}`} key={item.id}>
@@ -65,6 +64,7 @@ export function ChildHomePage({ me }: { me: Me }) {
         })}
         </div>
       </section>}
+      <ExerciseHomeSection sets={questionSets} />
     </div>
   )
 }
