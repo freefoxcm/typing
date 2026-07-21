@@ -148,6 +148,7 @@ class QuestionSet(Base):
     title: Mapped[str] = mapped_column(String(180))
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
     source_pdf_asset_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

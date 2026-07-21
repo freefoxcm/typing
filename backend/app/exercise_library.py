@@ -83,6 +83,7 @@ def question_set_dict(question_set: QuestionSet, include_questions: bool = True)
         "title": display_text(question_set.title),
         "description": display_text(question_set.description),
         "status": question_set.status,
+        "sort_order": question_set.sort_order,
         "source_pdf_asset_id": question_set.source_pdf_asset_id,
         "question_count": len(question_set.questions),
         "counts": counts,

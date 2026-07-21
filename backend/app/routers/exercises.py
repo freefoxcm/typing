@@ -110,7 +110,7 @@ def _session_dict(session: ExerciseSession) -> dict[str, Any]:
 
 @router.get("/question-sets")
 def list_question_sets(principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
-    sets = db.scalars(_published_sets_query().order_by(QuestionSet.published_at.desc(), QuestionSet.id.desc())).unique().all()
+    sets = db.scalars(_published_sets_query().order_by(QuestionSet.sort_order, QuestionSet.id)).unique().all()
     rows = db.execute(
         select(ExerciseSession.config_json, func.max(ExerciseSession.score), func.max(ExerciseSession.max_score), func.count(ExerciseSession.id))
         .where(ExerciseSession.child_id == principal.actor_id, ExerciseSession.status == "completed", ExerciseSession.mode == "set")
