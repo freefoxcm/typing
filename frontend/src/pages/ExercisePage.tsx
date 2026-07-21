@@ -143,6 +143,7 @@ function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, 
   onRun: () => void
 }) {
   const program = item.question.programming!
+  const samples = program.cases.filter((sample) => sample.is_sample && (sample.input_data.trim() || sample.expected_output.trim()))
   const applyIndent = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' && event.key !== 'Tab') return
     event.preventDefault()
@@ -154,26 +155,99 @@ function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, 
       target.selectionEnd = edit.selectionEnd
     })
   }
-  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div><label>Python 3.13 代码<textarea aria-label="Python 3.13 代码" className="code-editor" spellCheck={false} rows={16} value={code} disabled={complete || sessionStatus !== 'in_progress'} onKeyDown={applyIndent} onChange={(event) => onCodeChange(event.target.value)} onBlur={() => onSave(code)} /></label>{!complete && <button className="ghost" disabled={!code.trim() || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
+  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div>{samples.length > 0 ? <section className="public-samples"><h3>公开样例</h3>{samples.map((sample, index) => <div className="public-sample" key={sample.id ?? index}><strong>样例 {index + 1}</strong><div><label>标准输入<pre>{sample.input_data || '（无输入）'}</pre></label><label>期望输出<pre>{sample.expected_output || '（无输出）'}</pre></label></div></div>)}</section> : <p className="notice">该题未配置有效的公开样例，请联系管理员补充。</p>}<label>Python 3.13 代码<textarea aria-label="Python 3.13 代码" className="code-editor" spellCheck={false} rows={16} value={code} disabled={complete || sessionStatus !== 'in_progress'} onKeyDown={applyIndent} onChange={(event) => onCodeChange(event.target.value)} onBlur={() => onSave(code)} /></label>{!complete && <button className="ghost" disabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
 }
 
-function MarkdownText({ value }: { value?: string }) {
-  const parts = (value || '—').split(/```/g)
-  return <div className="markdown-text">{parts.map((part, index) => {
-    if (index % 2 === 1) {
-      const lines = part.replace(/^\n/, '').split('\n')
-      if (lines[0] && /^[a-z0-9_+-]+$/i.test(lines[0])) lines.shift()
-      return <pre key={index}><code>{lines.join('\n').trimEnd()}</code></pre>
+function inlineMarkdown(text: string, prefix: string): React.ReactNode[] {
+  const pattern = /!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`/g
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > cursor) nodes.push(text.slice(cursor, index))
+    const key = `${prefix}-${index}`
+    if (match[1] !== undefined) nodes.push(<span className="markdown-image-placeholder" key={key}>[图片：{match[1] || '未命名'}]</span>)
+    else if (match[3] !== undefined) {
+      const href = match[4]
+      nodes.push(/^(https?:\/\/|\/)/.test(href) ? <a href={href} rel="noreferrer" target={href.startsWith('/') ? undefined : '_blank'} key={key}>{match[3]}</a> : <span key={key}>{match[3]}</span>)
+    } else if (match[5] !== undefined) nodes.push(<strong key={key}>{match[5]}</strong>)
+    else nodes.push(<code key={key}>{match[6]}</code>)
+    cursor = index + match[0].length
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes
+}
+
+function blockStart(line: string): boolean {
+  return /^\s*```/.test(line) || /^\s{0,3}#{1,4}\s+/.test(line) || /^\s*[-*+]\s+/.test(line) || /^\s*\d+\.\s+/.test(line) || /^\s*>\s+/.test(line)
+}
+
+export function MarkdownText({ value }: { value?: string }) {
+  const lines = (value || '—').replace(/\r\n?/g, '\n').split('\n')
+  const blocks: React.ReactNode[] = []
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]
+    if (!line.trim()) { index += 1; continue }
+    const fence = line.match(/^\s*```\s*([a-z0-9_+-]*)/i)
+    if (fence) {
+      const code: string[] = []
+      index += 1
+      while (index < lines.length && !/^\s*```/.test(lines[index])) { code.push(lines[index]); index += 1 }
+      if (index < lines.length) index += 1
+      blocks.push(<pre key={`code-${index}`}><code data-language={fence[1] || undefined}>{code.join('\n').trimEnd()}</code></pre>)
+      continue
     }
-    return <span key={index}>{part}</span>
-  })}</div>
+    const heading = line.match(/^\s{0,3}(#{1,4})\s+(.+)$/)
+    if (heading) {
+      const content = inlineMarkdown(heading[2], `heading-${index}`)
+      const level = heading[1].length
+      blocks.push(level === 1 ? <h2 key={index}>{content}</h2> : level === 2 ? <h3 key={index}>{content}</h3> : <h4 key={index}>{content}</h4>)
+      index += 1
+      continue
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: React.ReactNode[] = []
+      while (index < lines.length) {
+        const match = lines[index].match(/^\s*[-*+]\s+(.+)$/)
+        if (!match) break
+        items.push(<li key={index}>{inlineMarkdown(match[1], `ul-${index}`)}</li>)
+        index += 1
+      }
+      blocks.push(<ul key={`ul-${index}`}>{items}</ul>)
+      continue
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: React.ReactNode[] = []
+      while (index < lines.length) {
+        const match = lines[index].match(/^\s*\d+\.\s+(.+)$/)
+        if (!match) break
+        items.push(<li key={index}>{inlineMarkdown(match[1], `ol-${index}`)}</li>)
+        index += 1
+      }
+      blocks.push(<ol key={`ol-${index}`}>{items}</ol>)
+      continue
+    }
+    const quote = line.match(/^\s*>\s+(.+)$/)
+    if (quote) {
+      blocks.push(<blockquote key={index}>{inlineMarkdown(quote[1], `quote-${index}`)}</blockquote>)
+      index += 1
+      continue
+    }
+    const paragraph: string[] = [line]
+    index += 1
+    while (index < lines.length && lines[index].trim() && !blockStart(lines[index])) { paragraph.push(lines[index]); index += 1 }
+    blocks.push(<p key={`p-${index}`}>{paragraph.map((part, partIndex) => <span key={partIndex}>{inlineMarkdown(part, `p-${index}-${partIndex}`)}{partIndex < paragraph.length - 1 && <br />}</span>)}</p>)
+  }
+  return <div className="markdown-text">{blocks}</div>
 }
 function questionTypeLabel(type: string) { return ({ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', programming: '编程题' } as Record<string, string>)[type] ?? type }
 
 function SampleResults({ result }: { result?: SampleResult }) {
   if (!result || result.status === 'queued') return null
   const indentationError = result.cases?.some((item) => /IndentationError|TabError/.test(item.stderr || ''))
-  return <div className="sample-results"><h3>样例运行结果</h3>{indentationError && <p className="code-hint">Python 的 for、if、while 或 def 语句后的代码需要缩进。可以在编辑器中按 Tab 添加 4 个空格。</p>}{result.cases?.map((item, index) => <div className={item.status === 'AC' ? 'passed' : 'failed'} key={item.id ?? index}><strong>样例 {index + 1} · {item.status}</strong><span>{item.duration_ms} ms</span>{item.stdout !== undefined && <pre>{item.stdout || '（无输出）'}</pre>}{item.stderr && <pre className="stderr">{item.stderr}</pre>}</div>)}</div>
+  const eofError = result.cases?.some((item) => /EOFError:\s*EOF when reading a line/.test(item.stderr || ''))
+  return <div className="sample-results"><h3>样例运行结果</h3>{indentationError && <p className="code-hint">Python 的 for、if、while 或 def 语句后的代码需要缩进。可以在编辑器中按 Tab 添加 4 个空格。</p>}{eofError && <p className="code-hint">程序读取的数据比公开样例提供的更多。请先对照上方“标准输入”调整 input() 次数；如果样例本身不完整，请联系管理员修正。</p>}{result.cases?.map((item, index) => <div className={item.status === 'AC' ? 'passed' : 'failed'} key={item.id ?? index}><strong>样例 {index + 1} · {item.status}</strong><span>{item.duration_ms} ms</span>{item.stdout !== undefined && <pre>{item.stdout || '（无输出）'}</pre>}{item.stderr && <pre className="stderr">{item.stderr}</pre>}</div>)}</div>
 }
 
 function ResultPanel({ item }: { item: ExerciseSessionItem }) {

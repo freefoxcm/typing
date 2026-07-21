@@ -248,9 +248,15 @@ def sample_run(session_id: int, payload: SampleRunCreate, principal: Principal =
     program = snapshot.get("programming")
     if not item or snapshot.get("type") != "programming" or not program:
         raise HTTPException(status_code=404, detail="编程题不存在")
-    cases = [case for case in program.get("cases", []) if case.get("is_sample")]
+    cases = [
+        case for case in program.get("cases", [])
+        if case.get("is_sample") and (
+            str(case.get("input_data") or "").strip()
+            or str(case.get("expected_output") or "").strip()
+        )
+    ]
     if not cases:
-        raise HTTPException(status_code=422, detail="该题没有公开样例")
+        raise HTTPException(status_code=422, detail="该题没有配置有效的公开样例输入输出，请联系管理员补充")
     job_id = enqueue(settings, {
         "kind": "sample", "session_id": session.id, "session_item_id": item.id, "code": payload.code,
         "time_limit_ms": program.get("time_limit_ms", 1000), "memory_limit_mb": program.get("memory_limit_mb", 128),

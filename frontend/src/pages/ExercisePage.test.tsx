@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api'
 import type { ExerciseSession } from '../types'
-import { ExercisePage, pythonIndentEdit } from './ExercisePage'
+import { ExercisePage, MarkdownText, pythonIndentEdit } from './ExercisePage'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -71,7 +71,7 @@ describe('ExercisePage', () => {
         id: 72, sort_order: 0, points: 25,
         question: {
           id: 4, type: 'programming', stem_markdown: '循环输出', points: 25, sort_order: 0, options: [],
-          programming: { input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: 'for i in range(3):', time_limit_ms: 1000, memory_limit_mb: 128, cases: [] },
+          programming: { input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: 'for i in range(3):', time_limit_ms: 1000, memory_limit_mb: 128, cases: [{ id: 1, input_data: '3\n', expected_output: '0\n1\n2\n', is_sample: true, weight: 0 }] },
         },
         answer: { selected_option_ids: [], bool_answer: null, code: '', status: 'unanswered' },
       }],
@@ -81,6 +81,7 @@ describe('ExercisePage', () => {
     const editor = await screen.findByLabelText('Python 3.13 代码')
     expect(editor).toHaveValue('for i in range(3):')
     expect(screen.getByRole('button', { name: /运行公开样例/ })).toBeEnabled()
+    expect(screen.getByText(/^3$/)).toBeInTheDocument()
     fireEvent.change(editor, { target: { value: 'for i in range(3):\n    print(i)' } })
     fireEvent.blur(editor)
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
@@ -98,6 +99,16 @@ describe('ExercisePage', () => {
     const view = renderPage()
     expect(await screen.findByText(/<script>alert\(1\)<\/script>/)).toBeInTheDocument()
     expect(view.container.querySelector('script')).toBeNull()
+    expect(view.container.querySelector('img')).toBeNull()
+  })
+
+  it('renders safe Markdown emphasis, lists, headings, and inline code', () => {
+    const view = render(<MarkdownText value={'## 输入说明\n\n**重点**\n\n- 第一项\n- 使用 `input()`\n\n![外部图](https://example.test/x.png)'} />)
+    expect(screen.getByRole('heading', { name: '输入说明' })).toBeInTheDocument()
+    expect(screen.getByText('重点').tagName).toBe('STRONG')
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('input()').tagName).toBe('CODE')
+    expect(screen.getByText('[图片：外部图]')).toBeInTheDocument()
     expect(view.container.querySelector('img')).toBeNull()
   })
 })
