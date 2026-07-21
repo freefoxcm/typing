@@ -89,11 +89,14 @@ export function QuestionLibraryPanel() {
   const [uploading, setUploading] = useState(false)
   const [editor, setEditor] = useState<{ setId: number; question: EditableQuestion } | null>(null)
   const [expandedJobs, setExpandedJobs] = useState<Set<number> | null>(null)
+  const [importPanelOpen, setImportPanelOpen] = useState(true)
+  const [expandedSets, setExpandedSets] = useState<Set<number>>(new Set())
   const [showAllJobs, setShowAllJobs] = useState(false)
   const [reorderingSets, setReorderingSets] = useState(false)
   const [reorderingQuestionSetId, setReorderingQuestionSetId] = useState<number | null>(null)
   const [activeSetId, setActiveSetId] = useState<number | null>(null)
   const knownJobIds = useRef<Set<number>>(new Set())
+  const knownSetIds = useRef<Set<number>>(new Set())
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -107,6 +110,12 @@ export function QuestionLibraryPanel() {
       api<ExerciseReport>('/api/admin/exercise-reports/summary'),
     ])
     setSets(setItems); setJobs(importItems); setLlm(status); setReport(reportData)
+    setExpandedSets((current) => {
+      const next = new Set(current)
+      setItems.forEach((item) => { if (!knownSetIds.current.has(item.id)) next.add(item.id) })
+      knownSetIds.current = new Set(setItems.map((item) => item.id))
+      return next
+    })
     setExpandedJobs((current) => {
       const next = new Set(current ?? [])
       importItems.forEach((job, index) => {
@@ -219,10 +228,10 @@ export function QuestionLibraryPanel() {
       <div><span>未掌握错题</span><strong>{report?.unresolved_wrong_count ?? 0}</strong></div>
     </div>
     <section className="card pdf-import-card">
-      <div className="pdf-import-heading"><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div>
-      <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>
+      <div className="pdf-import-heading"><button type="button" className="pdf-import-disclosure" aria-expanded={importPanelOpen} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
+      {importPanelOpen && <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>}
       </div>
-      {jobs.length > 0 && <div className="import-job-list">{visibleJobs.map((job) => {
+      {importPanelOpen && jobs.length > 0 && <div className="import-job-list">{visibleJobs.map((job) => {
         const open = expandedJobs?.has(job.id) ?? false
         return <article className={`import-job-card ${jobStatusClass(job)}`} key={job.id}>
           <header><button type="button" className="import-job-disclosure" aria-expanded={open} onClick={() => setExpandedJobs((current) => { const next = new Set(current ?? []); if (next.has(job.id)) next.delete(job.id); else next.add(job.id); return next })}><ChevronDown /><span><strong>{job.source_filename || `任务 #${job.id}`}</strong><small>任务 #{job.id} · {formatTime(job.created_at)}{job.page_count ? ` · ${job.page_count} 页` : ''}{job.question_count != null ? ` · ${job.question_count} 题` : ''}</small></span><i className={`import-status ${jobStatusClass(job)}`}>{jobStatus(job)}</i></button>
@@ -239,19 +248,21 @@ export function QuestionLibraryPanel() {
     <form className="inline-form card" onSubmit={createSet}><label>题套名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />手动新建题套</button></form>
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={({ active }) => setActiveSetId(Number(active.id))} onDragCancel={() => setActiveSetId(null)} onDragEnd={(event) => void finishSetReorder(event)}>
     <SortableContext items={sets.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-    <div className={`question-set-admin-list${reorderingSets ? ' is-reordering' : ''}`} aria-busy={reorderingSets}>{sets.map((set) => <SortableSetCard item={set} disabled={reorderingSets || sets.length < 2} key={set.id}>
-      <header><div className="grow"><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 编程 {set.counts.programming ?? 0}</small></div>
+    <div className={`question-set-admin-list${reorderingSets ? ' is-reordering' : ''}`} aria-busy={reorderingSets}>{sets.map((set) => {
+      const setOpen = expandedSets.has(set.id)
+      return <SortableSetCard item={set} disabled={reorderingSets || sets.length < 2} key={set.id}>
+      <header><button type="button" className="question-set-disclosure grow" aria-expanded={setOpen} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
         {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: blankQuestion(set.questions?.length ?? 0) })}><Plus />题目</button><button className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></>}
         {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
         {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
         {set.status !== 'published' && <button className="danger-button" aria-label={`永久删除题套 ${set.title}`} onClick={() => window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。') && void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除')}><Trash2 /></button>}
       </header>
-      {set.questions && set.questions.length > 0 && <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void finishQuestionReorder(set.id, event)}><SortableContext items={set.questions.map((question) => question.id)} strategy={verticalListSortingStrategy}><div className="question-admin-list">{set.questions.map((question, index) => <SortableQuestionRow question={question} disabled={set.status !== 'draft' || reorderingQuestionSetId != null} key={question.id}>
+      {setOpen && set.questions && set.questions.length > 0 && <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void finishQuestionReorder(set.id, event)}><SortableContext items={set.questions.map((question) => question.id)} strategy={verticalListSortingStrategy}><div className="question-admin-list">{set.questions.map((question, index) => <SortableQuestionRow question={question} disabled={set.status !== 'draft' || reorderingQuestionSetId != null} key={question.id}>
         <span className="question-number">{index + 1}</span><div className="grow"><strong>{labels[question.type]} · {question.points} 分 {question.reviewed ? '· 已复核' : '· 待复核'}</strong><p>{question.stem_markdown.slice(0, 100)}</p></div>
         {question.type === 'programming' && set.status === 'draft' && <button className="ghost" title="用参考程序生成候选输出" onClick={() => void generateOutputs(question.id)}><Play />生成输出</button>}
         {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: JSON.parse(JSON.stringify(question)) })}><Pencil />编辑</button><button className="danger-button" onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
       </SortableQuestionRow>)}</div></SortableContext></DndContext>}
-    </SortableSetCard>)}</div>
+    </SortableSetCard>})}</div>
     </SortableContext>
     <DragOverlay>{activeSet && <div className="question-set-drag-overlay card"><GripVertical /><div><strong>{activeSet.title}</strong><small>{activeSet.question_count} 题 · {activeSet.total_points} 分</small></div></div>}</DragOverlay>
     </DndContext>
