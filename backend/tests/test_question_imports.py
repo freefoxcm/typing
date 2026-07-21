@@ -1,12 +1,13 @@
 from pathlib import Path
 
+import httpx
 import pymupdf
 import pytest
 
 from app.config import Settings
 from app.database import Base, create_db
 from app.models import QuestionAsset
-from app.question_imports import _extract_pages, _json_content, materialize_draft
+from app.question_imports import _extract_pages, _import_error_detail, _json_content, materialize_draft
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -50,3 +51,27 @@ def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
         assert list((tmp_path / "assets").glob("question-*.png"))
     document.close()
     engine.dispose()
+
+
+def test_import_error_detail_includes_upstream_body_and_redacts_secrets():
+    request = httpx.Request(
+        "POST",
+        "https://example.test/v1/chat/completions?api_key=visible-secret",
+        headers={"Authorization": "Bearer sk-do-not-log-this-secret"},
+    )
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"x-request-id": "request-123"},
+        json={"error": {"message": "unknown model", "debug_key": "sk-another-secret-value"}},
+    )
+    error = httpx.HTTPStatusError("bad response", request=request, response=response)
+
+    detail = _import_error_detail(error)
+
+    assert "HTTP 400" in detail
+    assert "unknown model" in detail
+    assert "request_id=request-123" in detail
+    assert "visible-secret" not in detail
+    assert "do-not-log" not in detail
+    assert "another-secret" not in detail

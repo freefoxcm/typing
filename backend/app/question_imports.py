@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,44 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionImportJob, QuestionOption, QuestionSet
+
+
+logger = logging.getLogger("uvicorn.error")
+
+
+def _redact_secret(value: str) -> str:
+    text = re.sub(r"Bearer\s+\S+", "Bearer ***", value, flags=re.IGNORECASE)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "sk-***", text)
+    text = re.sub(r"([?&](?:api[_-]?key|token)=)[^&\s；,}\"']+", r"\1***", text, flags=re.IGNORECASE)
+    return text
+
+
+def _import_error_detail(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        request_id = (
+            response.headers.get("x-request-id")
+            or response.headers.get("request-id")
+            or response.headers.get("x-minimax-request-id")
+        )
+        try:
+            body = json.dumps(response.json(), ensure_ascii=False)
+        except (ValueError, TypeError):
+            body = response.text
+        parts = [
+            f"上游模型接口返回 HTTP {response.status_code}",
+            f"{response.request.method} {response.request.url}",
+        ]
+        if request_id:
+            parts.append(f"request_id={request_id}")
+        if body.strip():
+            parts.append(body.strip())
+        return _redact_secret("；".join(parts))[:2000]
+    if isinstance(exc, httpx.TimeoutException):
+        return _redact_secret(f"请求识别模型超时：{exc}")[:2000]
+    if isinstance(exc, httpx.RequestError):
+        return _redact_secret(f"无法连接识别模型：{exc}")[:2000]
+    return _redact_secret(f"{type(exc).__name__}: {exc}")[:2000]
 
 
 def import_llm_configured(settings: Settings) -> bool:
@@ -250,6 +289,13 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
                 return
             path = Path(settings.question_asset_dir) / asset.storage_key
             asset_id = asset.id
+        logger.info(
+            "PDF import job %s started: model=%s base_url=%s file=%s",
+            job_id,
+            settings.import_llm_model,
+            settings.import_llm_base_url,
+            path.name,
+        )
         document, pages, payload = await parse_pdf(settings, path)
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
@@ -262,14 +308,31 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
             job.status = "ready"
             job.processing_started_at = None
             db.commit()
+            logger.info(
+                "PDF import job %s completed: pages=%s questions=%s question_set_id=%s",
+                job_id,
+                len(pages),
+                len(payload.get("questions", [])),
+                question_set.id,
+            )
     except Exception as exc:
+        error_detail = _import_error_detail(exc)
+        final_status = "pending"
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
             if job:
-                job.error = re.sub(r"Bearer\s+\S+", "Bearer ***", str(exc))[:2000]
+                job.error = error_detail
                 job.status = "failed" if job.attempts >= settings.import_llm_max_retries else "pending"
                 job.processing_started_at = None if job.status == "failed" else datetime.utcnow() + timedelta(seconds=min(300, 2 ** job.attempts))
+                final_status = job.status
                 db.commit()
+        logger.error(
+            "PDF import job %s %s after processing error: %s",
+            job_id,
+            "failed" if final_status == "failed" else "will retry",
+            error_detail,
+            exc_info=True,
+        )
     finally:
         if document is not None:
             document.close()
