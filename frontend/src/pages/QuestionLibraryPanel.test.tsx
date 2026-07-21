@@ -25,6 +25,11 @@ describe('QuestionLibraryPanel', () => {
     render(<QuestionLibraryPanel />)
     expect(await screen.findByText(/尚未配置 IMPORT_LLM/)).toBeInTheDocument()
     expect(screen.getByText('上传 PDF').closest('label')?.querySelector('input[type="file"]')).toBeDisabled()
+    const disclosure = screen.getByRole('button', { name: /PDF 智能识别/ })
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(disclosure)
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('上传 PDF')).not.toBeInTheDocument()
   })
 
   it('creates a manual draft question set', async () => {
@@ -102,6 +107,13 @@ describe('QuestionLibraryPanel', () => {
     })
 
     render(<QuestionLibraryPanel />)
+    const setDisclosure = await screen.findByRole('button', { name: /^导入题套/ })
+    expect(setDisclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('判断题')).toBeInTheDocument()
+    fireEvent.click(setDisclosure)
+    expect(setDisclosure).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('判断题')).not.toBeInTheDocument()
+    fireEvent.click(setDisclosure)
     fireEvent.click(await screen.findByRole('button', { name: /编辑/ }))
 
     expect(screen.queryByLabelText('顺序')).not.toBeInTheDocument()

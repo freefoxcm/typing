@@ -20,6 +20,8 @@ describe('ExerciseHomeSection', () => {
 
   it('opens random practice in a modal and validates available counts', async () => {
     render(<MemoryRouter><ExerciseHomeSection sets={sets} /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: /随机组题/ })).toHaveClass('primary')
+    expect(screen.getByRole('button', { name: /错题重练/ })).toHaveClass('primary')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /随机组题/ }))
     expect(screen.getByRole('dialog', { name: '随机组题' })).toBeInTheDocument()
