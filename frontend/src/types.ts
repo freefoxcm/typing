@@ -67,3 +67,71 @@ export type Report = {
   attempts: { id: number; child_id: number; lesson_id: number | null; word_set_id?: number | null; word_id?: number | null; mode?: 'course' | 'word'; cpm: number; accuracy: number; errors: number; duration_ms: number; created_at: string }[]
 }
 
+export type ExerciseQuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'programming'
+export type QuestionOption = { id?: number; label: string; content_markdown: string; correct?: boolean; sort_order: number }
+export type ProgrammingCase = { id?: number; input_data: string; expected_output: string; is_sample: boolean; weight: number; confirmed?: boolean; note?: string }
+export type ProgrammingSpec = {
+  input_markdown: string
+  output_markdown: string
+  constraints_markdown: string
+  starter_code: string
+  reference_solution?: string
+  time_limit_ms: number
+  memory_limit_mb: number
+  cases: ProgrammingCase[]
+}
+export type ExerciseQuestion = {
+  id: number
+  question_set_id?: number
+  question_set_title?: string
+  type: ExerciseQuestionType
+  stem_markdown: string
+  explanation_markdown?: string
+  points: number
+  sort_order: number
+  reviewed?: boolean
+  correct_bool?: boolean | null
+  source_page?: number | null
+  source_asset_id?: number | null
+  show_source_crop?: boolean
+  options: QuestionOption[]
+  programming?: ProgrammingSpec | null
+}
+export type QuestionSetSummary = {
+  id: number
+  title: string
+  description: string
+  status: 'draft' | 'published' | 'archived'
+  question_count: number
+  counts: Record<ExerciseQuestionType, number>
+  total_points: number
+  best_score?: number | null
+  best_max_score?: number | null
+  attempts?: number
+  source_pdf_asset_id?: number | null
+  questions?: ExerciseQuestion[]
+}
+export type ExerciseSessionItem = {
+  id: number
+  sort_order: number
+  points: number
+  question: ExerciseQuestion
+  answer: {
+    selected_option_ids: number[]
+    bool_answer: boolean | null
+    code: string
+    status: string
+    awarded_points?: number
+    details?: { correct?: boolean; passed?: number; total?: number; cases?: { id?: number; status: string; duration_ms?: number; weight?: number }[] }
+  }
+}
+export type ExerciseSession = {
+  id: number
+  title: string
+  mode: 'set' | 'random' | 'wrong'
+  status: 'in_progress' | 'judging' | 'completed'
+  score: number | null
+  max_score: number
+  items: ExerciseSessionItem[]
+}
+

@@ -10,8 +10,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings, get_settings
 from .database import Base, create_db
-from .routers import admin, admin_words, auth, library, practice
+from .routers import admin, admin_exercises, admin_words, auth, exercises, library, practice
 from .seed import bootstrap
+from .question_imports import question_import_worker
 from .word_enrichment import enrichment_worker
 
 
@@ -25,13 +26,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             Base.metadata.create_all(engine)
         with session_factory() as db:
             bootstrap(db, settings)
-        worker = asyncio.create_task(enrichment_worker(session_factory, settings))
+        workers = [
+            asyncio.create_task(enrichment_worker(session_factory, settings)),
+            asyncio.create_task(question_import_worker(session_factory, settings)),
+        ]
         try:
             yield
         finally:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
+            for worker in workers:
+                worker.cancel()
+            for worker in workers:
+                with suppress(asyncio.CancelledError):
+                    await worker
         engine.dispose()
 
     app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
@@ -59,6 +65,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(practice.router)
     app.include_router(admin.router)
     app.include_router(admin_words.router)
+    app.include_router(admin_exercises.router)
+    app.include_router(exercises.router)
 
     dist = Path(settings.frontend_dist)
     assets = dist / "assets"

@@ -6,4 +6,5 @@ pydantic-settings==2.9.1
 argon2-cffi==25.1.0
 python-multipart==0.0.20
 httpx==0.28.1
+PyMuPDF==1.28.0
 

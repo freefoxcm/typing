@@ -12,13 +12,14 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { BarChart3, BookOpen, ChevronDown, Download, FileUp, GripVertical, Languages, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
+import { BarChart3, BookOpen, ChevronDown, Download, FileQuestion, FileUp, GripVertical, Languages, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import { errorLabel } from '../typing'
 import type { Child, Course, Lesson, Prompt, Report, WordSetSummary } from '../types'
 import { WordLibraryPanel } from './WordLibraryPanel'
+import { QuestionLibraryPanel } from './QuestionLibraryPanel'
 
-type Tab = 'children' | 'library' | 'words' | 'import' | 'reports'
+type Tab = 'children' | 'library' | 'words' | 'questions' | 'import' | 'reports'
 type TransferTab = 'typing' | 'words'
 type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
@@ -48,6 +49,7 @@ export function AdminPage() {
           <button className={tab === 'children' ? 'active' : ''} onClick={() => setTab('children')}><Users />学生档案</button>
           <button className={tab === 'library' ? 'active' : ''} onClick={() => setTab('library')}><BookOpen />打字词库</button>
           <button className={tab === 'words' ? 'active' : ''} onClick={() => setTab('words')}><Languages />单词词库</button>
+          <button className={tab === 'questions' ? 'active' : ''} onClick={() => setTab('questions')}><FileQuestion />习题题库</button>
           <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><FileUp />导入导出</button>
           <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}><BarChart3 />学习报告</button>
         </nav>
@@ -58,6 +60,7 @@ export function AdminPage() {
         {tab === 'children' && <ChildrenPanel children={children} action={action} reload={loadChildren} />}
         {tab === 'library' && <LibraryPanel courses={courses} action={action} reload={loadLibrary} />}
         {tab === 'words' && <WordLibraryPanel />}
+        {tab === 'questions' && <QuestionLibraryPanel />}
         {tab === 'import' && <ImportPanel courses={courses} reload={loadLibrary} action={action} />}
         {tab === 'reports' && <ReportsPanel children={children} report={report} loadReport={loadReport} />}
       </section>
