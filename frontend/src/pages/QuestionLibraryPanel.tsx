@@ -11,7 +11,6 @@ import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionO
 
 type ImportJob = { id: number; status: string; question_set_id?: number; page_count?: number; question_count?: number; source_filename?: string; error?: string; attempts: number; created_at: string; warnings?: string[]; counts?: Partial<Record<ExerciseQuestionType, number>>; retried_pages?: number[] }
 type LlmStatus = { configured: boolean; base_url: string; model: string; batch_pages: number }
-type ExerciseReport = { session_count: number; average_percent: number; unresolved_wrong_count: number }
 type EditableQuestion = Omit<ExerciseQuestion, 'id'> & { id?: number }
 
 const labels: Record<ExerciseQuestionType, string> = {
@@ -81,7 +80,6 @@ export function QuestionLibraryPanel() {
   const [sets, setSets] = useState<QuestionSetSummary[]>([])
   const [jobs, setJobs] = useState<ImportJob[]>([])
   const [llm, setLlm] = useState<LlmStatus | null>(null)
-  const [report, setReport] = useState<ExerciseReport | null>(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [title, setTitle] = useState('')
@@ -102,13 +100,12 @@ export function QuestionLibraryPanel() {
   )
 
   const reload = useCallback(async () => {
-    const [setItems, importItems, status, reportData] = await Promise.all([
+    const [setItems, importItems, status] = await Promise.all([
       api<QuestionSetSummary[]>('/api/admin/question-sets'),
       api<ImportJob[]>('/api/admin/question-imports'),
       api<LlmStatus>('/api/admin/import-llm/status'),
-      api<ExerciseReport>('/api/admin/exercise-reports/summary'),
     ])
-    setSets(setItems); setJobs(importItems); setLlm(status); setReport(reportData)
+    setSets(setItems); setJobs(importItems); setLlm(status)
     setExpandedJobs((current) => {
       const next = new Set(current ?? [])
       importItems.forEach((job, index) => {
@@ -213,13 +210,8 @@ export function QuestionLibraryPanel() {
   const activeSet = sets.find((item) => item.id === activeSetId)
 
   return <>
-    <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div><a className="ghost link-button" href="/api/admin/exercise-reports/export.csv">导出习题成绩</a></header>
+    <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div></header>
     {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
-    <div className="exercise-admin-metrics">
-      <div><span>已完成练习</span><strong>{report?.session_count ?? 0}</strong></div>
-      <div><span>平均得分率</span><strong>{report?.average_percent ?? 0}%</strong></div>
-      <div><span>未掌握错题</span><strong>{report?.unresolved_wrong_count ?? 0}</strong></div>
-    </div>
     <section className={`card pdf-import-card library-disclosure-card${importPanelOpen ? ' expanded' : ' collapsed'}`}>
       <header className="pdf-import-heading"><button type="button" className="course-disclosure pdf-import-disclosure" aria-expanded={importPanelOpen} aria-label={`${importPanelOpen ? '收起' : '展开'} PDF 智能识别`} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown className="disclosure-chevron" /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
       {importPanelOpen && <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>}

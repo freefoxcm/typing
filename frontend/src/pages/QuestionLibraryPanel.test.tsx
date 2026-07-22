@@ -32,6 +32,14 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText('上传 PDF').closest('label')?.querySelector('input[type="file"]')).toBeDisabled()
   })
 
+  it('keeps learning statistics and score export out of the question library', async () => {
+    render(<QuestionLibraryPanel />)
+    await screen.findByText('题套、识别与自动判题')
+    expect(screen.queryByText('平均得分率')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '导出习题成绩' })).not.toBeInTheDocument()
+    expect(mockedApi.mock.calls.some(([path]) => path === '/api/admin/exercise-reports/summary')).toBe(false)
+  })
+
   it('creates a manual draft question set', async () => {
     render(<QuestionLibraryPanel />)
     await screen.findByText('手动新建题套')

@@ -13,8 +13,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings, get_settings
 from ..database import get_db
+from ..exercise_imports import ExerciseImportResult, parse_exercise_import
 from ..exercise_library import publication_errors, question_dict, question_set_dict, replace_question
-from ..exercise_schemas import QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite
+from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -78,6 +79,21 @@ def _get_set(db: Session, set_id: int) -> QuestionSet:
     return item
 
 
+def _exercise_import_preview(result: ExerciseImportResult, mode: str, target: QuestionSet | None = None) -> dict:
+    counts = result.counts
+    return {
+        "valid": result.valid,
+        "mode": mode,
+        "question_set_count": len(result.question_sets),
+        "question_count": sum(counts.values()),
+        "counts": counts,
+        "target": {"id": target.id, "title": target.title} if target else None,
+        "question_sets": [{"title": item.title, "question_count": len(item.questions)} for item in result.question_sets],
+        "warnings": result.warnings,
+        "errors": result.errors,
+    }
+
+
 def _editable(question_set: QuestionSet) -> None:
     if question_set.status == "published":
         raise HTTPException(status_code=409, detail="请先撤回已发布题套再编辑")
@@ -93,6 +109,59 @@ def import_llm_status(_principal: Principal = Depends(require_admin), settings: 
         "model": settings.import_llm_model,
         "batch_pages": settings.import_llm_batch_pages,
     }
+
+
+@router.post("/api/admin/exercise-import/preview")
+def preview_exercise_import(payload: ExerciseImportRequest, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    result = parse_exercise_import(payload.format, payload.content)
+    target = None
+    if payload.mode == "append":
+        target = db.get(QuestionSet, payload.target_question_set_id)
+        if not target:
+            result.errors.append("目标题套不存在")
+        elif target.status != "draft":
+            result.errors.append("只能追加到草稿题套")
+        if len(result.question_sets) > 1:
+            result.errors.append("追加模式一次只能导入一个题套")
+    return _exercise_import_preview(result, payload.mode, target)
+
+
+@router.post("/api/admin/exercise-import")
+def commit_exercise_import(payload: ExerciseImportRequest, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    result = parse_exercise_import(payload.format, payload.content)
+    target = None
+    if payload.mode == "append":
+        target = _get_set(db, int(payload.target_question_set_id or 0))
+        _editable(target)
+        if len(result.question_sets) != 1:
+            result.errors.append("追加模式一次只能导入一个题套")
+    if not result.valid:
+        raise HTTPException(status_code=422, detail={"message": "习题导入内容无效", "errors": result.errors[:200]})
+
+    created_ids: list[int] = []
+    if target:
+        next_order = max((item.sort_order for item in target.questions), default=-1) + 1
+        for offset, payload_question in enumerate(result.question_sets[0].questions):
+            question = Question(question_set_id=target.id, type=payload_question.type, stem_markdown=payload_question.stem_markdown)
+            replace_question(question, payload_question)
+            question.sort_order = next_order + offset
+            db.add(question)
+        created_ids.append(target.id)
+    else:
+        max_set_order = db.scalar(select(func.max(QuestionSet.sort_order)))
+        next_set_order = 0 if max_set_order is None else max_set_order + 1
+        for set_offset, imported_set in enumerate(result.question_sets):
+            question_set = QuestionSet(title=imported_set.title, description=imported_set.description, status="draft", sort_order=next_set_order + set_offset)
+            db.add(question_set)
+            db.flush()
+            created_ids.append(question_set.id)
+            for question_offset, payload_question in enumerate(imported_set.questions):
+                question = Question(question_set_id=question_set.id, type=payload_question.type, stem_markdown=payload_question.stem_markdown)
+                replace_question(question, payload_question)
+                question.sort_order = question_offset
+                db.add(question)
+    db.commit()
+    return {**_exercise_import_preview(result, payload.mode, target), "question_set_ids": created_ids}
 
 
 @router.post("/api/admin/question-imports", status_code=202)
@@ -379,22 +448,35 @@ def question_asset(asset_id: int, principal: Principal = Depends(current_princip
 
 
 @router.get("/api/admin/exercise-reports/summary")
-def exercise_report(days: int = 30, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+def exercise_report(days: int = 30, child_id: int | None = None, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     days = max(1, min(3650, days))
     since = datetime.utcnow() - timedelta(days=days)
-    sessions = db.scalars(select(ExerciseSession).where(ExerciseSession.created_at >= since, ExerciseSession.status == "completed").order_by(ExerciseSession.created_at.desc())).all()
-    wrong_count = db.scalar(select(func.count(WrongQuestion.id)).where(WrongQuestion.mastered.is_(False))) or 0
-    average = round(sum((item.score / item.max_score * 100) if item.max_score else 0 for item in sessions) / len(sessions), 1) if sessions else 0
+    query = select(ExerciseSession).where(ExerciseSession.created_at >= since)
+    if child_id:
+        query = query.where(ExerciseSession.child_id == child_id)
+    sessions = db.scalars(query.order_by(ExerciseSession.created_at.desc())).all()
+    completed = [item for item in sessions if item.status == "completed"]
+    wrong_query = select(func.count(WrongQuestion.id)).where(WrongQuestion.mastered.is_(False))
+    if child_id:
+        wrong_query = wrong_query.where(WrongQuestion.child_id == child_id)
+    wrong_count = db.scalar(wrong_query) or 0
+    average = round(sum((item.score / item.max_score * 100) if item.max_score else 0 for item in completed) / len(completed), 1) if completed else 0
+    status_counts = {status: sum(item.status == status for item in sessions) for status in ("in_progress", "judging", "completed")}
     return {
-        "session_count": len(sessions), "average_percent": average, "unresolved_wrong_count": wrong_count,
-        "recent": [{"id": item.id, "child_id": item.child_id, "title": item.title, "score": item.score, "max_score": item.max_score, "completed_at": item.completed_at} for item in sessions[:50]],
+        "session_count": len(completed), "total_session_count": len(sessions), "status_counts": status_counts,
+        "completion_rate": round(len(completed) / len(sessions) * 100, 1) if sessions else 0,
+        "average_percent": average, "unresolved_wrong_count": wrong_count,
+        "recent": [{"id": item.id, "child_id": item.child_id, "mode": item.mode, "status": item.status, "title": item.title, "score": item.score, "max_score": item.max_score, "created_at": item.created_at, "completed_at": item.completed_at} for item in sessions[:100]],
     }
 
 
 @router.get("/api/admin/exercise-reports/export.csv")
-def export_exercise_report(days: int = 30, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+def export_exercise_report(days: int = 30, child_id: int | None = None, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     since = datetime.utcnow() - timedelta(days=max(1, min(3650, days)))
-    sessions = db.scalars(select(ExerciseSession).where(ExerciseSession.created_at >= since).order_by(ExerciseSession.created_at.desc())).all()
+    query = select(ExerciseSession).where(ExerciseSession.created_at >= since)
+    if child_id:
+        query = query.where(ExerciseSession.child_id == child_id)
+    sessions = db.scalars(query.order_by(ExerciseSession.created_at.desc())).all()
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["session_id", "child_id", "mode", "status", "title", "score", "max_score", "created_at", "completed_at"])

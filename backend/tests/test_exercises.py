@@ -63,7 +63,7 @@ def create_objective_set(client: TestClient) -> tuple[int, int, int]:
 def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):
     with make_client(tmp_path) as client:
         admin_login(client)
-        create_child(client)
+        child_id = create_child(client)
         set_id, single_id, _ = create_objective_set(client)
         child_login(client)
 
@@ -93,6 +93,43 @@ def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):
         client.patch(f"/api/exercises/sessions/{retry['id']}/answers/{retry['items'][0]['id']}", json={"selected_option_ids": [correct_option], "bool_answer": None, "code": ""})
         client.post(f"/api/exercises/sessions/{retry['id']}/submit")
         assert client.get("/api/exercises/wrong-questions").json() == []
+
+        in_progress = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}})
+        assert in_progress.status_code == 201
+        client.post("/api/auth/logout")
+        admin_login(client)
+        report = client.get(f"/api/admin/exercise-reports/summary?days=30&child_id={child_id}").json()
+        assert report["session_count"] == 2
+        assert report["total_session_count"] == 3
+        assert report["status_counts"] == {"in_progress": 1, "judging": 0, "completed": 2}
+        assert report["completion_rate"] == 66.7
+        assert report["average_percent"] == 75.0
+        assert report["unresolved_wrong_count"] == 0
+
+
+def test_structured_exercise_import_previews_commits_and_rejects_non_draft_append(tmp_path):
+    content = """题套：基础判断
+类型：判断题
+题目：Python 区分大小写。
+答案：正确
+分值：2"""
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        preview = client.post("/api/admin/exercise-import/preview", json={"format": "txt", "content": content, "mode": "create"})
+        assert preview.status_code == 200
+        assert preview.json()["valid"] is True
+        assert preview.json()["counts"]["true_false"] == 1
+
+        committed = client.post("/api/admin/exercise-import", json={"format": "txt", "content": content, "mode": "create"})
+        assert committed.status_code == 200
+        imported_id = committed.json()["question_set_ids"][0]
+        imported = client.get(f"/api/admin/question-sets/{imported_id}").json()
+        assert imported["status"] == "draft"
+        assert imported["questions"][0]["reviewed"] is False
+
+        assert client.post(f"/api/admin/question-sets/{imported_id}/archive").status_code == 200
+        blocked = client.post("/api/admin/exercise-import", json={"format": "txt", "content": content, "mode": "append", "target_question_set_id": imported_id})
+        assert blocked.status_code == 409
 
 
 def test_random_session_validates_availability(tmp_path):

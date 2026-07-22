@@ -6,6 +6,19 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 QuestionType = Literal["single_choice", "multiple_choice", "true_false", "programming"]
 
 
+class ExerciseImportRequest(BaseModel):
+    format: Literal["txt", "csv", "json"]
+    content: str = Field(min_length=1, max_length=10_000_000)
+    mode: Literal["create", "append"] = "create"
+    target_question_set_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        if self.mode == "append" and self.target_question_set_id is None:
+            raise ValueError("追加模式必须选择目标草稿题套")
+        return self
+
+
 class QuestionSetWrite(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     description: str = Field(default="", max_length=5000)
