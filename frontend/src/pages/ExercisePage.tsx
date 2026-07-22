@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, Play, Send, XCircle } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, Play, Save, Send, XCircle } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, jsonBody } from '../api'
 import type { ExerciseSession, ExerciseSessionItem } from '../types'
 
@@ -45,6 +45,7 @@ export function pythonIndentEdit(value: string, selectionStart: number, selectio
 
 export function ExercisePage() {
   const { sessionId } = useParams()
+  const navigate = useNavigate()
   const [session, setSession] = useState<ExerciseSession | null>(null)
   const [index, setIndex] = useState(0)
   const [error, setError] = useState('')
@@ -52,9 +53,20 @@ export function ExercisePage() {
   const [submitting, setSubmitting] = useState(false)
   const [sampleResults, setSampleResults] = useState<Record<number, SampleResult>>({})
   const [codeDrafts, setCodeDrafts] = useState<Record<number, string>>({})
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
+  const sessionRef = useRef<ExerciseSession | null>(null)
+  const initializedSessionRef = useRef<string | undefined>(undefined)
+  const pendingCodesRef = useRef(new Map<number, string>())
+  const codeTimersRef = useRef(new Map<number, number>())
 
   const load = useCallback(() => api<ExerciseSession>(`/api/exercises/sessions/${sessionId}`).then((data) => {
+    sessionRef.current = data
     setSession(data)
+    if (initializedSessionRef.current !== sessionId) {
+      const firstUnanswered = data.items.findIndex((candidate) => candidate.answer.status === 'unanswered')
+      setIndex(firstUnanswered >= 0 ? firstUnanswered : Math.max(0, data.items.length - 1))
+      initializedSessionRef.current = sessionId
+    }
     setCodeDrafts((current) => {
       const next = { ...current }
       for (const candidate of data.items) {
@@ -71,24 +83,86 @@ export function ExercisePage() {
     const timer = window.setInterval(() => void load(), 1200)
     return () => window.clearInterval(timer)
   }, [session?.status, load])
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!pendingCodesRef.current.size) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [])
+  useEffect(() => () => {
+    for (const timer of codeTimersRef.current.values()) window.clearTimeout(timer)
+  }, [])
   const item = session?.items[index]
   const unanswered = useMemo(() => session?.items.filter((candidate) => candidate.answer.status === 'unanswered').length ?? 0, [session])
 
-  const updateLocal = (itemId: number, patch: Partial<ExerciseSessionItem['answer']>) => setSession((current) => current ? ({ ...current, items: current.items.map((candidate) => candidate.id === itemId ? { ...candidate, answer: { ...candidate.answer, ...patch } } : candidate) }) : current)
-  const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>) => {
+  const updateLocal = (itemId: number, patch: Partial<ExerciseSessionItem['answer']>) => setSession((current) => {
+    if (!current) return current
+    const next = { ...current, items: current.items.map((candidate) => candidate.id === itemId ? { ...candidate, answer: { ...candidate.answer, ...patch } } : candidate) }
+    sessionRef.current = next
+    return next
+  })
+  const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>, showMessage = true) => {
     const next = { ...target.answer, ...patch }
     updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || next.code.trim() ? 'answered' : 'unanswered' })
     try {
       await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'PATCH', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, code: next.code }) })
-      setMessage('答案已保存'); window.setTimeout(() => setMessage(''), 1000)
-    } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败') }
+      if (showMessage) { setMessage('答案已保存'); window.setTimeout(() => setMessage(''), 1000) }
+      return true
+    } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败'); return false }
+  }
+  const persistCode = async (itemId: number, code: string) => {
+    const timer = codeTimersRef.current.get(itemId)
+    if (timer) window.clearTimeout(timer)
+    codeTimersRef.current.delete(itemId)
+    const target = sessionRef.current?.items.find((candidate) => candidate.id === itemId)
+    if (!target || target.answer.code === code && !pendingCodesRef.current.has(itemId)) return true
+    setSaveState('saving')
+    let saved = false
+    try {
+      saved = await save(target, { code }, false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '代码保存失败')
+    }
+    if (saved && pendingCodesRef.current.get(itemId) === code) pendingCodesRef.current.delete(itemId)
+    setSaveState(saved && pendingCodesRef.current.size === 0 ? 'saved' : saved ? 'saving' : 'error')
+    return saved
+  }
+  const scheduleCodeSave = (itemId: number, code: string) => {
+    pendingCodesRef.current.set(itemId, code)
+    setSaveState('saving')
+    const currentTimer = codeTimersRef.current.get(itemId)
+    if (currentTimer) window.clearTimeout(currentTimer)
+    codeTimersRef.current.set(itemId, window.setTimeout(() => void persistCode(itemId, code), 600))
+  }
+  const flushPendingSaves = async () => {
+    const pending = [...pendingCodesRef.current.entries()]
+    if (!pending.length) return true
+    const results = await Promise.all(pending.map(([itemId, code]) => persistCode(itemId, code)))
+    return results.every(Boolean) && pendingCodesRef.current.size === 0
+  }
+  const goToIndex = async (nextIndex: number) => {
+    if (!await flushPendingSaves()) return
+    setIndex(nextIndex)
+  }
+  const saveAndExit = async () => {
+    try {
+      if (!await flushPendingSaves()) return
+      navigate('/')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '答案保存失败')
+      setSaveState('error')
+    }
   }
 
   const runSamples = async (target: ExerciseSessionItem) => {
     setError(''); setSampleResults((current) => ({ ...current, [target.id]: { status: 'queued' } }))
     try {
       const code = codeDrafts[target.id] ?? target.answer.code ?? target.question.programming?.starter_code ?? ''
-      await save(target, { code })
+      pendingCodesRef.current.set(target.id, code)
+      if (!await persistCode(target.id, code)) throw new Error('代码保存失败，请重试')
       const queued = await api<{ job_id: string }>(`/api/exercises/sessions/${sessionId}/sample-runs`, { method: 'POST', ...jsonBody({ session_item_id: target.id, code }) })
       for (let attempt = 0; attempt < 60; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 700))
@@ -103,6 +177,7 @@ export function ExercisePage() {
     if (!session) return
     if (unanswered && !window.confirm(`还有 ${unanswered} 道题未作答，未答题将按 0 分计算。确认提交？`)) return
     if (!unanswered && !window.confirm('提交后不能再修改答案，确认提交整套练习？')) return
+    if (!await flushPendingSaves()) return
     setSubmitting(true); setError('')
     try {
       const result = await api<{ status: string }>(`/api/exercises/sessions/${session.id}/submit`, { method: 'POST' })
@@ -113,22 +188,27 @@ export function ExercisePage() {
 
   if (!session || !item) return <div className="page"><p className={error ? 'notice error' : 'notice'}>{error || '正在准备习题…'}</p></div>
   const complete = session.status === 'completed'
+  const editable = session.status === 'in_progress'
+  const abandoned = session.status === 'abandoned'
   return <div className="page exercise-page">
-    <header className="exercise-header"><Link className="back-link" to="/"><ArrowLeft />返回首页</Link><div><p className="eyebrow">{complete ? '练习结果' : session.mode === 'set' ? '整套练习' : session.mode === 'random' ? '随机练习' : '错题重练'}</p><h1>{session.title}</h1></div><div className="exercise-score">{complete ? <><strong>{session.score}</strong><span>/ {session.max_score} 分</span></> : <><strong>{index + 1}</strong><span>/ {session.items.length}</span></>}</div></header>
+    <header className="exercise-header">{editable ? <button className="back-link exercise-save-exit" onClick={() => void saveAndExit()}><ArrowLeft />保存并退出</button> : <Link className="back-link" to="/"><ArrowLeft />返回首页</Link>}<div><p className="eyebrow">{complete ? '练习结果' : abandoned ? '练习已放弃' : session.mode === 'set' ? '整套练习' : session.mode === 'random' ? '随机练习' : '错题重练'}</p><h1>{session.title}</h1></div><div className="exercise-score">{complete ? <><strong>{session.score}</strong><span>/ {session.max_score} 分</span></> : <><strong>{index + 1}</strong><span>/ {session.items.length}</span></>}</div></header>
     {error && <p className="notice error">{error}</p>}{message && <p className="notice success">{message}</p>}
     {session.status === 'judging' && <div className="judging-banner"><Clock3 /><div><strong>正在自动判题</strong><p>隐藏测试点在隔离环境中运行，结果会自动刷新。</p></div></div>}
-    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => <button className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''}`} onClick={() => setIndex(itemIndex)} key={candidate.id}>{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>)}</aside>
+    {abandoned && <div className="abandoned-banner"><XCircle /><div><strong>本次练习已放弃</strong><p>已保存的作答记录仍会保留，但不能继续修改、提交或查看正确答案。</p></div></div>}
+    {editable && <div className={`exercise-save-state ${saveState}`} aria-live="polite"><Save />{saveState === 'saving' ? '正在保存…' : saveState === 'error' ? '保存失败，请重试' : '所有答案已保存'}</div>}
+    {editable && unanswered === 0 && <p className="exercise-ready-submit">全部题目均已作答，尚未提交。检查无误后请提交整套练习。</p>}
+    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => <button className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''}`} onClick={() => void goToIndex(itemIndex)} key={candidate.id}>{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>)}</aside>
       <main className="exercise-question-card card"><div className="question-heading"><span>{questionTypeLabel(item.question.type)}</span><strong>{item.points} 分</strong><small>{item.question.question_set_title}</small></div>
         {item.question.show_source_crop && item.question.source_asset_id && <img className="exercise-source-image" src={`/api/question-assets/${item.question.source_asset_id}`} alt="原题题面" />}
         <MarkdownText value={item.question.stem_markdown} />
         {item.question.type === 'single_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="radio" name={`question-${item.id}`} checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={() => void save(item, { selected_option_ids: [option.id!] })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'multiple_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="checkbox" checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={(e) => void save(item, { selected_option_ids: e.target.checked ? [...item.answer.selected_option_ids, option.id!] : item.answer.selected_option_ids.filter((id) => id !== option.id) })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'true_false' && <div className="judgment-options"><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === true ? 'selected' : ''} onClick={() => void save(item, { bool_answer: true })}><CheckCircle2 />正确</button><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === false ? 'selected' : ''} onClick={() => void save(item, { bool_answer: false })}><XCircle />错误</button></div>}
-        {item.question.type === 'programming' && item.question.programming && <ProgrammingAnswer item={item} complete={complete} sessionStatus={session.status} code={codeDrafts[item.id] ?? item.answer.code ?? item.question.programming.starter_code ?? ''} sampleResult={sampleResults[item.id]} onCodeChange={(code) => { setCodeDrafts((current) => ({ ...current, [item.id]: code })); updateLocal(item.id, { code, status: code.trim() ? 'answered' : 'unanswered' }) }} onSave={(code) => void save(item, { code })} onRun={() => void runSamples(item)} />}
+        {item.question.type === 'programming' && item.question.programming && <ProgrammingAnswer item={item} complete={complete} sessionStatus={session.status} code={codeDrafts[item.id] ?? item.answer.code ?? item.question.programming.starter_code ?? ''} sampleResult={sampleResults[item.id]} onCodeChange={(code) => { setCodeDrafts((current) => ({ ...current, [item.id]: code })); updateLocal(item.id, { code, status: code.trim() ? 'answered' : 'unanswered' }); scheduleCodeSave(item.id, code) }} onSave={(code) => void persistCode(item.id, code)} onRun={() => void runSamples(item)} />}
         {complete && <ResultPanel item={item} />}
-        <footer className="exercise-question-footer"><button className="ghost" disabled={index === 0} onClick={() => setIndex(index - 1)}><ChevronLeft />上一题</button>{index < session.items.length - 1 ? <button className="primary" onClick={() => setIndex(index + 1)}>下一题<ChevronRight /></button> : !complete && <button className="primary" disabled={submitting || session.status !== 'in_progress'} onClick={() => void submit()}><Send />提交整套练习</button>}</footer>
+        <footer className="exercise-question-footer"><button className="ghost" disabled={index === 0} onClick={() => void goToIndex(index - 1)}><ChevronLeft />上一题</button>{index < session.items.length - 1 ? <button className="primary" onClick={() => void goToIndex(index + 1)}>下一题<ChevronRight /></button> : editable && <button className="primary" disabled={submitting} onClick={() => void submit()}><Send />提交整套练习</button>}</footer>
       </main></div>
-    {!complete && index < session.items.length - 1 && <div className="exercise-submit-row"><span>{unanswered ? `还有 ${unanswered} 题未答` : '全部题目均已作答'}</span><button className="primary" disabled={submitting || session.status !== 'in_progress'} onClick={() => void submit()}><Send />提交整套练习</button></div>}
+    {editable && index < session.items.length - 1 && <div className="exercise-submit-row"><span>{unanswered ? `还有 ${unanswered} 题未答` : '全部题目均已作答'}</span><button className="primary" disabled={submitting} onClick={() => void submit()}><Send />提交整套练习</button></div>}
   </div>
 }
 
@@ -155,7 +235,7 @@ function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, 
       target.selectionEnd = edit.selectionEnd
     })
   }
-  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div>{samples.length > 0 ? <section className="public-samples"><h3>公开样例</h3>{samples.map((sample, index) => <div className="public-sample" key={sample.id ?? index}><strong>样例 {index + 1}</strong><div><label>标准输入<pre>{sample.input_data || '（无输入）'}</pre></label><label>期望输出<pre>{sample.expected_output || '（无输出）'}</pre></label></div></div>)}</section> : <p className="notice">该题未配置有效的公开样例，请联系管理员补充。</p>}<label>Python 3.13 代码<textarea aria-label="Python 3.13 代码" className="code-editor" spellCheck={false} rows={16} value={code} disabled={complete || sessionStatus !== 'in_progress'} onKeyDown={applyIndent} onChange={(event) => onCodeChange(event.target.value)} onBlur={() => onSave(code)} /></label>{!complete && <button className="ghost" disabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
+  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div>{samples.length > 0 ? <section className="public-samples"><h3>公开样例</h3>{samples.map((sample, index) => <div className="public-sample" key={sample.id ?? index}><strong>样例 {index + 1}</strong><div><label>标准输入<pre>{sample.input_data || '（无输入）'}</pre></label><label>期望输出<pre>{sample.expected_output || '（无输出）'}</pre></label></div></div>)}</section> : <p className="notice">该题未配置有效的公开样例，请联系管理员补充。</p>}<label>Python 3.13 代码<textarea aria-label="Python 3.13 代码" className="code-editor" spellCheck={false} rows={16} value={code} disabled={complete || sessionStatus !== 'in_progress'} onKeyDown={applyIndent} onChange={(event) => onCodeChange(event.target.value)} onBlur={() => onSave(code)} /></label>{sessionStatus === 'in_progress' && <button className="ghost" disabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
 }
 
 function inlineMarkdown(text: string, prefix: string): React.ReactNode[] {

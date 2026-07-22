@@ -108,6 +108,23 @@ def _session_dict(session: ExerciseSession) -> dict[str, Any]:
     }
 
 
+def _session_summary(session: ExerciseSession) -> dict[str, Any]:
+    answers = [item.answer for item in session.items if item.answer]
+    last_activity_at = max(
+        [session.created_at, *(answer.updated_at for answer in answers)],
+    )
+    return {
+        "id": session.id,
+        "title": session.title,
+        "mode": session.mode,
+        "status": session.status,
+        "answered_count": sum(answer.status != "unanswered" for answer in answers),
+        "total_count": len(session.items),
+        "created_at": session.created_at.isoformat(),
+        "last_activity_at": last_activity_at.isoformat(),
+    }
+
+
 @router.get("/question-sets")
 def list_question_sets(principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
     sets = db.scalars(_published_sets_query().order_by(QuestionSet.sort_order, QuestionSet.id)).unique().all()
@@ -140,6 +157,23 @@ def wrong_questions(principal: Principal = Depends(require_child), db: Session =
         .order_by(WrongQuestion.last_wrong_at.desc())
     ).all()
     return [{"question_id": item.question_id, "wrong_count": item.wrong_count, "last_wrong_at": item.last_wrong_at} for item in items]
+
+
+@router.get("/active-sessions")
+def active_sessions(principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    sessions = db.scalars(
+        select(ExerciseSession)
+        .where(
+            ExerciseSession.child_id == principal.actor_id,
+            ExerciseSession.status.in_(("in_progress", "judging")),
+        )
+        .options(selectinload(ExerciseSession.items).selectinload(ExerciseSessionItem.answer))
+    ).unique().all()
+    return sorted(
+        (_session_summary(item) for item in sessions),
+        key=lambda item: item["last_activity_at"],
+        reverse=True,
+    )
 
 
 def _select_questions(db: Session, child_id: int, payload: SessionCreate) -> tuple[list[Question], str]:
@@ -183,6 +217,19 @@ def _select_questions(db: Session, child_id: int, payload: SessionCreate) -> tup
 
 @router.post("/sessions", status_code=201)
 def create_session(payload: SessionCreate, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    existing = db.scalars(
+        select(ExerciseSession)
+        .where(
+            ExerciseSession.child_id == principal.actor_id,
+            ExerciseSession.status == "in_progress",
+        )
+        .options(selectinload(ExerciseSession.items).selectinload(ExerciseSessionItem.answer))
+    ).unique().all()
+    if existing:
+        raise HTTPException(status_code=409, detail={
+            "message": "已有未完成的习题练习，请先继续或放弃原练习",
+            "active_sessions": [_session_summary(item) for item in existing],
+        })
     questions, title = _select_questions(db, principal.actor_id, payload)
     session = ExerciseSession(
         child_id=principal.actor_id,
@@ -205,6 +252,18 @@ def create_session(payload: SessionCreate, principal: Principal = Depends(requir
         ))
     db.commit()
     return _session_dict(_owned_session(db, session.id, principal.actor_id))
+
+
+@router.post("/sessions/{session_id}/abandon")
+def abandon_session(session_id: int, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status == "abandoned":
+        return {"id": session.id, "status": session.status}
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="只有进行中的练习可以放弃")
+    session.status = "abandoned"
+    db.commit()
+    return {"id": session.id, "status": session.status}
 
 
 @router.get("/sessions/{session_id}")

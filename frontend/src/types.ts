@@ -86,7 +86,7 @@ export type ReportOverview = { days: number; students: ReportOverviewRow[] }
 export type ExerciseAdminReport = {
   session_count: number
   total_session_count: number
-  status_counts: Record<'in_progress' | 'judging' | 'completed', number>
+  status_counts: Record<'in_progress' | 'judging' | 'completed' | 'abandoned', number>
   completion_rate: number
   average_percent: number
   unresolved_wrong_count: number
@@ -156,9 +156,25 @@ export type ExerciseSession = {
   id: number
   title: string
   mode: 'set' | 'random' | 'wrong'
-  status: 'in_progress' | 'judging' | 'completed'
+  status: ExerciseSessionStatus
   score: number | null
   max_score: number
+  created_at?: string
+  submitted_at?: string | null
+  completed_at?: string | null
   items: ExerciseSessionItem[]
+}
+
+export type ExerciseSessionStatus = 'in_progress' | 'judging' | 'completed' | 'abandoned'
+
+export type ExerciseSessionSummary = {
+  id: number
+  title: string
+  mode: ExerciseSession['mode']
+  status: 'in_progress' | 'judging'
+  answered_count: number
+  total_count: number
+  created_at: string
+  last_activity_at: string
 }
 

@@ -12,7 +12,7 @@ const detailTabs: { id: DetailTab; label: string; icon: typeof BookOpen }[] = [
 ]
 const emptyReport: Report = { attempt_count: 0, practice_minutes: 0, average_cpm: 0, accuracy: 0, weak_keys: [], attempts: [] }
 const emptyExercise: ExerciseAdminReport = {
-  session_count: 0, total_session_count: 0, status_counts: { in_progress: 0, judging: 0, completed: 0 },
+  session_count: 0, total_session_count: 0, status_counts: { in_progress: 0, judging: 0, completed: 0, abandoned: 0 },
   completion_rate: 0, average_percent: 0, unresolved_wrong_count: 0, recent: [],
 }
 
@@ -91,6 +91,6 @@ function TypingDetail({ report, mode }: { report: Report; mode: 'course' | 'word
 }
 
 function ExerciseDetail({ report }: { report: ExerciseAdminReport }) {
-  const statusLabel: Record<string, string> = { in_progress: '进行中', judging: '判题中', completed: '已完成' }
+  const statusLabel: Record<string, string> = { in_progress: '进行中', judging: '判题中', completed: '已完成', abandoned: '已放弃' }
   return <div role="tabpanel" aria-labelledby="report-tab-exercise"><div className="report-metrics"><div><span>已完成练习</span><strong>{report.session_count}</strong></div><div><span>完成率</span><strong>{report.completion_rate}%</strong></div><div><span>平均得分率</span><strong>{report.average_percent}%</strong></div><div><span>当前未掌握错题</span><strong>{report.unresolved_wrong_count}</strong></div></div><div className="report-columns exercise-report-columns"><section className="card"><h3>练习状态</h3><div className="exercise-status-list">{Object.entries(report.status_counts).map(([status, count]) => <div key={status}><span>{statusLabel[status] ?? status}</span><strong>{count}</strong></div>)}</div><p className="muted">完成率按已完成数 ÷ 全部已创建练习计算。</p></section><section className="card"><h3>最近习题练习</h3>{report.recent.length ? <div className="exercise-attempt-table">{report.recent.slice(0, 20).map((item) => <div key={item.id}><span><strong>{item.title}</strong><small>{new Date(item.created_at).toLocaleDateString()}</small></span><em className={`report-status ${item.status}`}>{statusLabel[item.status] ?? item.status}</em><span>{item.status === 'completed' ? `${item.score} / ${item.max_score}` : '—'}</span><time>{item.completed_at ? new Date(item.completed_at).toLocaleString('zh-CN', { hour12: false }) : '尚未完成'}</time></div>)}</div> : <p className="muted">该时间范围内暂无习题练习。</p>}</section></div></div>
 }

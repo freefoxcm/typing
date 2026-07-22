@@ -101,10 +101,62 @@ def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):
         report = client.get(f"/api/admin/exercise-reports/summary?days=30&child_id={child_id}").json()
         assert report["session_count"] == 2
         assert report["total_session_count"] == 3
-        assert report["status_counts"] == {"in_progress": 1, "judging": 0, "completed": 2}
+        assert report["status_counts"] == {"in_progress": 1, "judging": 0, "completed": 2, "abandoned": 0}
         assert report["completion_rate"] == 66.7
         assert report["average_percent"] == 75.0
         assert report["unresolved_wrong_count"] == 0
+
+
+def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        child_id = create_child(client)
+        other = client.post("/api/admin/children", json={"name": "小雨", "pin": "5678", "active": True}).json()
+        set_id, _, _ = create_objective_set(client)
+        child_login(client)
+
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}}).json()
+        first = session["items"][0]
+        option_id = first["question"]["options"][0]["id"]
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/answers/{first['id']}", json={
+            "selected_option_ids": [option_id], "bool_answer": None, "code": "",
+        }).status_code == 200
+
+        active = client.get("/api/exercises/active-sessions").json()
+        assert [(item["id"], item["answered_count"], item["total_count"]) for item in active] == [(session["id"], 1, 2)]
+        assert active[0]["last_activity_at"] >= active[0]["created_at"]
+
+        duplicate = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}})
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"]["active_sessions"][0]["id"] == session["id"]
+
+        client.post("/api/auth/logout")
+        assert client.post("/api/auth/child/login", json={"name": "小雨", "pin": "5678"}).status_code == 200
+        assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").status_code == 404
+        client.post("/api/auth/logout")
+        assert client.post("/api/auth/child/login", json={"name": "小宇", "pin": "1234"}).status_code == 200
+
+        abandoned = client.post(f"/api/exercises/sessions/{session['id']}/abandon")
+        assert abandoned.json()["status"] == "abandoned"
+        assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").json()["status"] == "abandoned"
+        assert client.get("/api/exercises/active-sessions").json() == []
+        stored = client.get(f"/api/exercises/sessions/{session['id']}").json()
+        assert stored["status"] == "abandoned"
+        assert "correct" not in stored["items"][0]["question"]["options"][0]
+
+        replacement = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}})
+        assert replacement.status_code == 201
+        client.post("/api/auth/logout")
+        admin_login(client)
+        report = client.get(f"/api/admin/exercise-reports/summary?days=30&child_id={child_id}").json()
+        assert report["total_session_count"] == 2
+        assert report["completion_rate"] == 0
+        assert report["status_counts"]["abandoned"] == 1
+        assert report["status_counts"]["in_progress"] == 1
+        unified_csv = client.get(f"/api/admin/reports/export.csv?view=exercise&days=30&child_id={child_id}")
+        compatible_csv = client.get(f"/api/admin/exercise-reports/export.csv?days=30&child_id={child_id}")
+        assert "abandoned" in unified_csv.content.decode("utf-8-sig")
+        assert "abandoned" in compatible_csv.content.decode("utf-8-sig")
 
 
 def test_structured_exercise_import_previews_commits_and_rejects_non_draft_append(tmp_path):

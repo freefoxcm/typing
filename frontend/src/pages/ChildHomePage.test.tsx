@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { api } from '../api'
-import type { Course, Me } from '../types'
+import type { Course, ExerciseSessionSummary, Me } from '../types'
 import { ChildHomePage } from './ChildHomePage'
 
 vi.mock('../api', async (importOriginal) => {
@@ -17,6 +17,10 @@ const courses: Course[] = [
 ]
 const wordSets = [{ id: 9, title: '计算机英语', description: '', word_count: 12, attempts: 3, best_cpm: 80 }]
 const questionSets = [{ id: 8, title: 'Python 练习', description: '', status: 'published' as const, question_count: 2, total_points: 4, counts: { single_choice: 1, multiple_choice: 0, true_false: 1, programming: 0 } }]
+const activeExercises: ExerciseSessionSummary[] = [{
+  id: 77, title: '未完成的 Python 练习', mode: 'set', status: 'in_progress', answered_count: 1, total_count: 4,
+  created_at: '2026-07-21T08:00:00', last_activity_at: '2026-07-22T09:30:00',
+}]
 
 describe('ChildHomePage', () => {
   beforeEach(() => {
@@ -64,7 +68,8 @@ describe('ChildHomePage', () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/library/courses') return courses
       if (path === '/api/library/word-sets') return wordSets
-      return questionSets
+      if (path === '/api/exercises/question-sets') return questionSets
+      return []
     })
     render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
     const wordsTab = await screen.findByRole('tab', { name: '单词练习' })
@@ -95,6 +100,16 @@ describe('ChildHomePage', () => {
     expect(screen.getAllByRole('tab')).toEqual([exercisesTab])
     expect(exercisesTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('heading', { name: '读题、思考、动手编程' })).toBeInTheDocument()
+  })
+
+  it('keeps the exercise area available when only an unfinished session exists', async () => {
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/active-sessions' ? activeExercises : [])
+    render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
+    const exercisesTab = await screen.findByRole('tab', { name: '习题练习' })
+    expect(exercisesTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('heading', { name: '继续上次练习' })).toBeInTheDocument()
+    expect(screen.getByText('未完成的 Python 练习')).toBeInTheDocument()
+    expect(screen.getByText('已完成 1 / 4 题')).toBeInTheDocument()
   })
 
   it('keeps the existing empty state when no practice content is available', async () => {
