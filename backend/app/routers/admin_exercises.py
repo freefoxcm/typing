@@ -461,7 +461,7 @@ def exercise_report(days: int = 30, child_id: int | None = None, _principal: Pri
         wrong_query = wrong_query.where(WrongQuestion.child_id == child_id)
     wrong_count = db.scalar(wrong_query) or 0
     average = round(sum((item.score / item.max_score * 100) if item.max_score else 0 for item in completed) / len(completed), 1) if completed else 0
-    status_counts = {status: sum(item.status == status for item in sessions) for status in ("in_progress", "judging", "completed")}
+    status_counts = {status: sum(item.status == status for item in sessions) for status in ("in_progress", "judging", "completed", "abandoned")}
     return {
         "session_count": len(completed), "total_session_count": len(sessions), "status_counts": status_counts,
         "completion_rate": round(len(completed) / len(sessions) * 100, 1) if sessions else 0,

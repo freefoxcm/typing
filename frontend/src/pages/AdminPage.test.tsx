@@ -42,6 +42,7 @@ describe('AdminPage', () => {
       if (path === '/api/admin/library') return courses
       if (path.startsWith('/api/admin/reports/overview')) return { days: 30, students: [{ child_id: 1, child_name: '小宇', active: true, course_attempt_count: 2, word_attempt_count: 1, practice_minutes: 8, average_cpm: 88, accuracy: 96, exercise_total: 3, exercise_completed: 2, exercise_completion_rate: 66.7, exercise_average_percent: 85, unresolved_wrong_count: 1 }] }
       if (path.startsWith('/api/admin/reports/summary')) return report
+      if (path.startsWith('/api/admin/exercise-reports/summary')) return { session_count: 2, total_session_count: 3, status_counts: { in_progress: 0, judging: 0, completed: 2, abandoned: 1 }, completion_rate: 66.7, average_percent: 85, unresolved_wrong_count: 1, recent: [{ id: 9, child_id: 1, mode: 'set', status: 'abandoned', title: '未完成题套', score: 0, max_score: 10, created_at: '2026-07-22T08:00:00', completed_at: null }] }
       return {}
     })
   })
@@ -80,6 +81,9 @@ describe('AdminPage', () => {
     expect(screen.getByRole('tab', { name: '打字练习' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: '单词练习' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '习题练习' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '习题练习' }))
+    expect(await screen.findAllByText('已放弃')).not.toHaveLength(0)
+    expect(screen.getByText('未完成题套')).toBeInTheDocument()
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
   })
 

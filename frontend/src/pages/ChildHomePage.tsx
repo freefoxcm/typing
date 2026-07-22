@@ -2,7 +2,7 @@ import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'r
 import { ArrowRight, BookCheck, BookOpen, ChevronDown, Gauge, Keyboard, Languages, Sparkles, Target } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import type { Course, Me, QuestionSetSummary, WordSetSummary } from '../types'
+import type { Course, ExerciseSessionSummary, Me, QuestionSetSummary, WordSetSummary } from '../types'
 import { ExerciseHomeSection } from './ExerciseHomeSection'
 
 type PracticeArea = 'words' | 'typing' | 'exercises'
@@ -17,12 +17,23 @@ export function ChildHomePage({ me }: { me: Me }) {
   const [courses, setCourses] = useState<Course[]>([])
   const [wordSets, setWordSets] = useState<WordSetSummary[]>([])
   const [questionSets, setQuestionSets] = useState<QuestionSetSummary[]>([])
+  const [activeExerciseSessions, setActiveExerciseSessions] = useState<ExerciseSessionSummary[]>([])
   const [expandedCourses, setExpandedCourses] = useState<Set<number>>(() => new Set())
   const [activeArea, setActiveArea] = useState<PracticeArea | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
-    Promise.all([api<Course[]>('/api/library/courses'), api<WordSetSummary[]>('/api/library/word-sets'), api<QuestionSetSummary[]>('/api/exercises/question-sets')])
-      .then(([courseItems, wordSetItems, questionSetItems]) => { setCourses(courseItems); setWordSets(wordSetItems); setQuestionSets(questionSetItems.filter((item) => item.status === 'published')) })
+    Promise.all([
+      api<Course[]>('/api/library/courses'),
+      api<WordSetSummary[]>('/api/library/word-sets'),
+      api<QuestionSetSummary[]>('/api/exercises/question-sets'),
+      api<ExerciseSessionSummary[]>('/api/exercises/active-sessions'),
+    ])
+      .then(([courseItems, wordSetItems, questionSetItems, sessionItems]) => {
+        setCourses(courseItems)
+        setWordSets(wordSetItems)
+        setQuestionSets(questionSetItems.filter((item) => item.status === 'published'))
+        setActiveExerciseSessions(sessionItems)
+      })
       .catch((e) => setError(e.message))
   }, [])
   const toggleCourse = (courseId: number) => setExpandedCourses((current) => {
@@ -35,7 +46,7 @@ export function ChildHomePage({ me }: { me: Me }) {
   const availableAreas: PracticeArea[] = [
     ...(wordSets.length > 0 ? ['words' as const] : []),
     ...(courses.length > 0 ? ['typing' as const] : []),
-    ...(questionSets.length > 0 ? ['exercises' as const] : []),
+    ...(questionSets.length > 0 || activeExerciseSessions.length > 0 ? ['exercises' as const] : []),
   ]
   const selectedArea = activeArea && availableAreas.includes(activeArea) ? activeArea : (availableAreas[0] ?? null)
   const selectAdjacentArea = (event: ReactKeyboardEvent<HTMLButtonElement>, area: PracticeArea) => {
@@ -63,7 +74,7 @@ export function ChildHomePage({ me }: { me: Me }) {
         <div><BookOpen /><span><strong>{courses.length + wordSets.length + questionSets.length}</strong>可选练习</span></div>
       </section>
       {error && <p className="notice error">{error}</p>}
-      {courses.length === 0 && wordSets.length === 0 && questionSets.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的内容</h2><p>请管理员进入后台添加课程、单词集或习题题套。</p></div>}
+      {courses.length === 0 && wordSets.length === 0 && questionSets.length === 0 && activeExerciseSessions.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的内容</h2><p>请管理员进入后台添加课程、单词集或习题题套。</p></div>}
       {availableAreas.length > 0 && <section className="practice-hub" aria-label="练习模式">
         <div className="practice-tabs" role="tablist" aria-label="选择练习模式">
           {availableAreas.map((area) => {
@@ -100,7 +111,7 @@ export function ChildHomePage({ me }: { me: Me }) {
         })}
         </div>
       </section>}
-      {questionSets.length > 0 && <section className="practice-panel practice-theme-exercises" role="tabpanel" id="practice-panel-exercises" aria-labelledby="practice-tab-exercises" hidden={selectedArea !== 'exercises'}><ExerciseHomeSection sets={questionSets} /></section>}
+      {(questionSets.length > 0 || activeExerciseSessions.length > 0) && <section className="practice-panel practice-theme-exercises" role="tabpanel" id="practice-panel-exercises" aria-labelledby="practice-tab-exercises" hidden={selectedArea !== 'exercises'}><ExerciseHomeSection sets={questionSets} activeSessions={activeExerciseSessions} onActiveSessionsChange={setActiveExerciseSessions} /></section>}
       </section>}
     </div>
   )
