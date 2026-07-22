@@ -9,7 +9,7 @@ import { VirtualKeyboard } from './VirtualKeyboard'
 
 export type PracticeRunnerItem = { id: number; content: string }
 type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'transitioning' | 'complete'
-const ITEM_TRANSITION_DELAY_MS = 1600
+const ITEM_TRANSITION_DELAY_MS = 500
 const ROUND_TRANSITION_DELAY_MS = 5000
 
 export function PracticeRunner<T extends PracticeRunnerItem>({
