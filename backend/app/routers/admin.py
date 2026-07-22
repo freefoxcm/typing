@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..database import get_db
 from ..imports import parse_import
 from ..models import AttemptError, AuthSession, ChildProfile, Course, ExerciseSession, Lesson, PracticeAttempt, Prompt, WrongQuestion
-from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LessonWrite, PromptWrite
+from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LearningDataReset, LessonWrite, PromptWrite
 from ..security import Principal, hash_secret, require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -70,6 +70,30 @@ def delete_child(child_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="孩子档案不存在")
     db.delete(child)
     db.commit()
+
+
+@router.post("/children/{child_id}/reset-learning-data")
+def reset_learning_data(child_id: int, payload: LearningDataReset, db: Session = Depends(get_db)):
+    child = db.get(ChildProfile, child_id)
+    if not child:
+        raise HTTPException(status_code=404, detail="学生档案不存在")
+    if payload.confirm_name != child.name:
+        raise HTTPException(status_code=409, detail="确认姓名与学生姓名不一致")
+
+    deleted = {
+        "practice_attempts": db.scalar(select(func.count(PracticeAttempt.id)).where(PracticeAttempt.child_id == child_id)) or 0,
+        "exercise_sessions": db.scalar(select(func.count(ExerciseSession.id)).where(ExerciseSession.child_id == child_id)) or 0,
+        "wrong_questions": db.scalar(select(func.count(WrongQuestion.id)).where(WrongQuestion.child_id == child_id)) or 0,
+    }
+    try:
+        db.execute(delete(WrongQuestion).where(WrongQuestion.child_id == child_id))
+        db.execute(delete(ExerciseSession).where(ExerciseSession.child_id == child_id))
+        db.execute(delete(PracticeAttempt).where(PracticeAttempt.child_id == child_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {"child_id": child_id, **deleted}
 
 
 @router.get("/library")

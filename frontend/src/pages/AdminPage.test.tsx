@@ -87,6 +87,77 @@ describe('AdminPage', () => {
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
   })
 
+  it('requires an exact name before permanently resetting one students learning data', async () => {
+    let finishReset!: (value: unknown) => void
+    const pendingReset = new Promise((resolve) => { finishReset = resolve })
+    const baseApi = mockedApi.getMockImplementation()!
+    mockedApi.mockImplementation(async (...args) => {
+      if (args[0] === '/api/admin/children/1/reset-learning-data') return pendingReset
+      return baseApi(...args)
+    })
+
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '学习报告' }))
+    expect(screen.queryByRole('button', { name: '重置学习数据' })).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /小宇/ }))
+    const trigger = await screen.findByRole('button', { name: '重置学习数据' })
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: '重置学习数据' })).toBeInTheDocument()
+    expect(screen.getByText('警告：即将永久清空「小宇」的全部学习数据，此操作不可恢复。')).toBeInTheDocument()
+    expect(screen.getByText('终止进行中和判题中的习题练习')).toBeInTheDocument()
+    expect(screen.getByText('学生账号、PIN 和公共题库不会受到影响')).toBeInTheDocument()
+    const nameInput = screen.getByLabelText(/请输入学生姓名/)
+    const confirm = screen.getByRole('button', { name: '确认永久重置' })
+    expect(nameInput).toHaveFocus()
+    expect(confirm).toBeDisabled()
+    fireEvent.change(nameInput, { target: { value: '小雨' } })
+    expect(confirm).toBeDisabled()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '重置学习数据' })).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('tab', { name: '习题练习' }))
+    fireEvent.change(screen.getByLabelText('时间范围'), { target: { value: '90' } })
+    fireEvent.change(screen.getByLabelText(/请输入学生姓名/), { target: { value: '小宇' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认永久重置' }))
+    expect(screen.getByRole('button', { name: '正在重置…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '关闭重置学习数据警告' })).toBeDisabled()
+    expect(mockedApi).toHaveBeenCalledWith(
+      '/api/admin/children/1/reset-learning-data',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ confirm_name: '小宇' }) }),
+    )
+
+    finishReset({ child_id: 1, deleted: { practice_attempts: 2, exercise_sessions: 3, wrong_questions: 1 } })
+    expect(await screen.findByText('小宇 的学习数据已重置')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '重置学习数据' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '习题练习' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('时间范围')).toHaveValue('90')
+    expect(screen.getByLabelText('学生')).toHaveValue('1')
+  })
+
+  it('keeps the reset warning and confirmation input when the request fails', async () => {
+    const baseApi = mockedApi.getMockImplementation()!
+    mockedApi.mockImplementation(async (...args) => {
+      if (args[0] === '/api/admin/children/1/reset-learning-data') throw new Error('数据库暂时不可用')
+      return baseApi(...args)
+    })
+
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '学习报告' }))
+    fireEvent.click(await screen.findByRole('button', { name: /小宇/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '重置学习数据' }))
+    const nameInput = screen.getByLabelText(/请输入学生姓名/)
+    fireEvent.change(nameInput, { target: { value: '小宇' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认永久重置' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('数据库暂时不可用')
+    expect(screen.getByRole('dialog', { name: '重置学习数据' })).toBeInTheDocument()
+    expect(nameInput).toHaveValue('小宇')
+  })
+
   it('uses the renamed library wording and keeps imports out of the word library', async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/children') return []

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, BookOpen, Download, FileQuestion, Languages } from 'lucide-react'
-import { api } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, ArrowLeft, BookOpen, Download, FileQuestion, Languages, Trash2, X } from 'lucide-react'
+import { api, jsonBody } from '../api'
 import { errorLabel } from '../typing'
 import type { Child, ExerciseAdminReport, Report, ReportOverview, ReportOverviewRow } from '../types'
 
@@ -25,6 +25,13 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
   const [exerciseReport, setExerciseReport] = useState<ExerciseAdminReport>(emptyExercise)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetName, setResetName] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetting, setResetting] = useState(false)
+  const resetTriggerRef = useRef<HTMLButtonElement>(null)
+  const resetInputRef = useRef<HTMLInputElement>(null)
 
   const loadOverview = useCallback(async () => {
     setLoading(true); setError('')
@@ -56,9 +63,50 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? detailTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + detailTabs.length) % detailTabs.length
     selectTab(detailTabs[next].id, true)
   }
+  const closeReset = () => {
+    if (resetting) return
+    setResetOpen(false); setResetName(''); setResetError('')
+    window.setTimeout(() => resetTriggerRef.current?.focus())
+  }
+  const openReset = () => {
+    setMessage(''); setError(''); setResetName(''); setResetError(''); setResetOpen(true)
+  }
+  useEffect(() => {
+    if (!resetOpen) return
+    resetInputRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !resetting) closeReset()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [resetOpen, resetting])
+  useEffect(() => {
+    setResetOpen(false); setResetName(''); setResetError('')
+  }, [childId])
+  const resetLearningData = async () => {
+    if (!selected || resetName.trim() !== selected.child_name) return
+    setResetting(true); setResetError(''); setMessage('')
+    try {
+      await api(`/api/admin/children/${selected.child_id}/reset-learning-data`, { method: 'POST', ...jsonBody({ confirm_name: resetName.trim() }) })
+      const [overviewData, detailData] = await Promise.all([
+        api<ReportOverview>(`/api/admin/reports/overview?days=${days}`),
+        detailTab === 'exercise'
+          ? api<ExerciseAdminReport>(`/api/admin/exercise-reports/summary?days=${days}&child_id=${selected.child_id}`)
+          : api<Report>(`/api/admin/reports/summary?days=${days}&mode=${detailTab}&child_id=${selected.child_id}`),
+      ])
+      setOverview(overviewData)
+      if (detailTab === 'exercise') setExerciseReport(detailData as ExerciseAdminReport)
+      else setReport(detailData as Report)
+      setResetOpen(false); setResetName('')
+      setMessage(`${selected.child_name} 的学习数据已重置`)
+      window.setTimeout(() => resetTriggerRef.current?.focus())
+    } catch (e) { setResetError(e instanceof Error ? e.message : '学习数据重置失败') }
+    finally { setResetting(false) }
+  }
 
   return <>
-    <header className="section-title"><div><p className="eyebrow">学习报告</p><h2>{selected ? `${selected.child_name} 的学习详情` : '每位学生的学习进展'}</h2><p>{selected ? '分别查看打字、单词与习题表现。' : '先总览所有学生，再进入个人详情。'}</p></div><a className="ghost link-button" href={`/api/admin/reports/export.csv?${exportQuery}`}><Download />导出当前视图</a></header>
+    <header className="section-title"><div><p className="eyebrow">学习报告</p><h2>{selected ? `${selected.child_name} 的学习详情` : '每位学生的学习进展'}</h2><p>{selected ? '分别查看打字、单词与习题表现。' : '先总览所有学生，再进入个人详情。'}</p></div><div className="report-header-actions">{selected && <button ref={resetTriggerRef} className="danger-button report-reset-trigger" onClick={openReset}><Trash2 />重置学习数据</button>}<a className="ghost link-button" href={`/api/admin/reports/export.csv?${exportQuery}`}><Download />导出当前视图</a></div></header>
+    {message && <p className="notice success">{message}</p>}
     {error && <p className="notice error">{error}</p>}
     <div className="report-filters card">
       {childId && <button className="ghost report-back" onClick={() => setChildId('')}><ArrowLeft />学生总览</button>}
@@ -71,6 +119,7 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
       <div className="report-detail-tabs" role="tablist" aria-label="学习报告类型">{detailTabs.map(({ id, label, icon: Icon }) => <button id={`report-tab-${id}`} role="tab" aria-selected={detailTab === id} tabIndex={detailTab === id ? 0 : -1} key={id} onClick={() => selectTab(id)} onKeyDown={(event) => handleTabKey(event, id)}><Icon />{label}</button>)}</div>
       {detailTab === 'exercise' ? <ExerciseDetail report={exerciseReport} /> : <TypingDetail report={report} mode={detailTab} />}
     </>}
+    {resetOpen && selected && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeReset() }}><div className="report-reset-modal card" role="dialog" aria-modal="true" aria-labelledby="report-reset-title" aria-describedby="report-reset-warning"><header><div className="report-reset-title"><span><AlertTriangle /></span><div><p className="eyebrow">不可恢复的操作</p><h2 id="report-reset-title">重置学习数据</h2></div></div><button className="ghost" aria-label="关闭重置学习数据警告" disabled={resetting} onClick={closeReset}><X /></button></header><p className="report-reset-warning" id="report-reset-warning"><strong>警告：即将永久清空「{selected.child_name}」的全部学习数据，此操作不可恢复。</strong></p><ul><li>永久删除全部打字、单词和习题练习记录</li><li>终止进行中和判题中的习题练习</li><li>清空已掌握与未掌握的错题记录</li><li>学生账号、PIN 和公共题库不会受到影响</li></ul><p className="muted">如需留档，请先取消并分别导出相关报告。</p><label className="report-reset-confirm">请输入学生姓名 <strong>{selected.child_name}</strong> 以确认<input ref={resetInputRef} value={resetName} disabled={resetting} autoComplete="off" onChange={(event) => setResetName(event.target.value)} /></label>{resetError && <p className="notice error" role="alert">{resetError}</p>}<div className="button-row"><button className="ghost" disabled={resetting} onClick={closeReset}>取消</button><button className="danger-button report-reset-confirm-button" disabled={resetting || resetName.trim() !== selected.child_name} onClick={() => void resetLearningData()}><Trash2 />{resetting ? '正在重置…' : '确认永久重置'}</button></div></div></div>}
   </>
 }
 
