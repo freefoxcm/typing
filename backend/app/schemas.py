@@ -30,6 +30,15 @@ class ChildUpdate(BaseModel):
     active: bool | None = None
 
 
+class LearningDataReset(BaseModel):
+    confirm_name: str = Field(min_length=1, max_length=80)
+
+    @field_validator("confirm_name", mode="before")
+    @classmethod
+    def strip_confirm_name(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
 class CourseWrite(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=2000)

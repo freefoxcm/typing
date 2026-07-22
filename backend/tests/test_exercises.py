@@ -6,7 +6,20 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
-from app.models import ExerciseSessionItem, QuestionAsset, QuestionImportJob, QuestionSet, WrongQuestion
+from app.models import (
+    AttemptError,
+    ChildProfile,
+    ExerciseAnswer,
+    ExerciseSession,
+    ExerciseSessionItem,
+    PracticeAttempt,
+    QuestionAsset,
+    QuestionImportJob,
+    QuestionSet,
+    Word,
+    WordSet,
+    WrongQuestion,
+)
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -157,6 +170,115 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         compatible_csv = client.get(f"/api/admin/exercise-reports/export.csv?days=30&child_id={child_id}")
         assert "abandoned" in unified_csv.content.decode("utf-8-sig")
         assert "abandoned" in compatible_csv.content.decode("utf-8-sig")
+
+
+def test_admin_can_reset_one_students_learning_data_without_touching_profile_or_libraries(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        child_id = create_child(client)
+        other_id = client.post("/api/admin/children", json={"name": "小雨", "pin": "5678", "active": True}).json()["id"]
+        set_id, question_id, _ = create_objective_set(client)
+
+        with client.app.state.session_factory() as db:
+            word_set = WordSet(title="重置测试词库", description="公共词库", active=True)
+            word = Word(word_set=word_set, spelling="reset", normalized_spelling="reset", enrichment_status="complete")
+            db.add(word_set)
+            db.flush()
+
+            typing_attempt = PracticeAttempt(
+                child_id=child_id, prompt_snapshot="asdf", duration_ms=60000, char_count=80,
+                error_count=1, cpm=80, accuracy=98.8,
+                errors=[AttemptError(expected_char="a", actual_char="s", count=1)],
+            )
+            word_attempt = PracticeAttempt(
+                child_id=child_id, word_set_id=word_set.id, word_id=word.id, prompt_snapshot="reset",
+                duration_ms=30000, char_count=25, error_count=1, cpm=50, accuracy=96,
+                errors=[AttemptError(expected_char="e", actual_char="r", count=1)],
+            )
+            other_attempt = PracticeAttempt(
+                child_id=other_id, prompt_snapshot="keep", duration_ms=30000, char_count=30,
+                error_count=0, cpm=60, accuracy=100,
+            )
+            db.add_all([typing_attempt, word_attempt, other_attempt])
+
+            target_sessions = []
+            for index, status in enumerate(("in_progress", "judging", "completed", "abandoned")):
+                target_sessions.append(ExerciseSession(
+                    child_id=child_id, mode="set", status=status, title=f"待删除 {status}",
+                    config_json="{}", score=1 if status == "completed" else 0, max_score=2,
+                    items=[ExerciseSessionItem(
+                        question_id=question_id, question_set_id=set_id, sort_order=0, points=2,
+                        snapshot_json="{}", answer=ExerciseAnswer(answer_json="{}", status="answered"),
+                    )],
+                ))
+            other_session = ExerciseSession(
+                child_id=other_id, mode="set", status="completed", title="保留练习",
+                config_json="{}", score=2, max_score=2,
+            )
+            db.add_all([*target_sessions, other_session])
+            db.add_all([
+                WrongQuestion(child_id=child_id, question_id=question_id, wrong_count=2, mastered=False),
+                WrongQuestion(child_id=other_id, question_id=question_id, wrong_count=1, mastered=True),
+            ])
+            db.commit()
+            attempt_ids = [typing_attempt.id, word_attempt.id]
+            error_ids = [error.id for attempt in (typing_attempt, word_attempt) for error in attempt.errors]
+            session_ids = [session.id for session in target_sessions]
+            item_ids = [session.items[0].id for session in target_sessions]
+            answer_ids = [session.items[0].answer.id for session in target_sessions]
+            word_set_id = word_set.id
+
+        missing = client.post("/api/admin/children/99999/reset-learning-data", json={"confirm_name": "不存在"})
+        assert missing.status_code == 404
+        mismatch = client.post(f"/api/admin/children/{child_id}/reset-learning-data", json={"confirm_name": "小雨"})
+        assert mismatch.status_code == 409
+
+        with client.app.state.session_factory() as db:
+            assert len(db.scalars(select(PracticeAttempt).where(PracticeAttempt.child_id == child_id)).all()) == 2
+            assert len(db.scalars(select(ExerciseSession).where(ExerciseSession.child_id == child_id)).all()) == 4
+            assert len(db.scalars(select(WrongQuestion).where(WrongQuestion.child_id == child_id)).all()) == 1
+
+        child_login(client)
+        forbidden = client.post(f"/api/admin/children/{child_id}/reset-learning-data", json={"confirm_name": "小宇"})
+        assert forbidden.status_code == 403
+        client.post("/api/auth/logout")
+        admin_login(client)
+
+        reset = client.post(f"/api/admin/children/{child_id}/reset-learning-data", json={"confirm_name": "  小宇  "})
+        assert reset.status_code == 200
+        assert reset.json() == {
+            "child_id": child_id,
+            "practice_attempts": 2,
+            "exercise_sessions": 4,
+            "wrong_questions": 1,
+        }
+
+        with client.app.state.session_factory() as db:
+            assert db.get(ChildProfile, child_id) is not None
+            assert db.get(QuestionSet, set_id) is not None
+            assert db.get(WordSet, word_set_id) is not None
+            assert all(db.get(PracticeAttempt, record_id) is None for record_id in attempt_ids)
+            assert all(db.get(AttemptError, record_id) is None for record_id in error_ids)
+            assert all(db.get(ExerciseSession, record_id) is None for record_id in session_ids)
+            assert all(db.get(ExerciseSessionItem, record_id) is None for record_id in item_ids)
+            assert all(db.get(ExerciseAnswer, record_id) is None for record_id in answer_ids)
+            assert db.scalars(select(WrongQuestion).where(WrongQuestion.child_id == child_id)).all() == []
+            assert len(db.scalars(select(PracticeAttempt).where(PracticeAttempt.child_id == other_id)).all()) == 1
+            assert len(db.scalars(select(ExerciseSession).where(ExerciseSession.child_id == other_id)).all()) == 1
+            assert len(db.scalars(select(WrongQuestion).where(WrongQuestion.child_id == other_id)).all()) == 1
+
+        repeated = client.post(f"/api/admin/children/{child_id}/reset-learning-data", json={"confirm_name": "小宇"})
+        assert repeated.status_code == 200
+        assert repeated.json() == {
+            "child_id": child_id,
+            "practice_attempts": 0,
+            "exercise_sessions": 0,
+            "wrong_questions": 0,
+        }
+
+        child_login(client)
+        replacement = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}})
+        assert replacement.status_code == 201
 
 
 def test_structured_exercise_import_previews_commits_and_rejects_non_draft_append(tmp_path):
