@@ -83,6 +83,26 @@ describe('WordLibraryPanel', () => {
     expect(screen.getByText(/使用上下方向键移动/)).toBeInTheDocument()
   })
 
+  it('keeps the enrichment refresh action inside the LLM status card and shows progress', async () => {
+    render(<WordLibraryPanel />)
+    const button = await screen.findByRole('button', { name: '刷新补全状态' })
+    expect(button.closest('.llm-status')).not.toBeNull()
+    expect(button.closest('.section-title')).toBeNull()
+
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockedApi.mockImplementation(async (path) => {
+      await gate
+      if (path === '/api/admin/word-sets') return wordSets
+      if (path === '/api/admin/llm/status') return { configured: false, base_url: 'https://api.openai.com/v1', model: '' }
+      return {}
+    })
+    fireEvent.click(button)
+    expect(screen.getByRole('button', { name: '正在刷新…' })).toBeDisabled()
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新补全状态' })).toBeEnabled())
+  })
+
   it('adds a word from its word-set card and expands the refreshed set', async () => {
     render(<WordLibraryPanel />)
     const addButton = await screen.findByRole('button', { name: '向单词集 编程词汇 添加单词' })

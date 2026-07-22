@@ -40,6 +40,7 @@ describe('AdminPage', () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/children') return [{ id: 1, name: '小宇', active: true }]
       if (path === '/api/admin/library') return courses
+      if (path.startsWith('/api/admin/reports/overview')) return { days: 30, students: [{ child_id: 1, child_name: '小宇', active: true, course_attempt_count: 2, word_attempt_count: 1, practice_minutes: 8, average_cpm: 88, accuracy: 96, exercise_total: 3, exercise_completed: 2, exercise_completion_rate: 66.7, exercise_average_percent: 85, unresolved_wrong_count: 1 }] }
       if (path.startsWith('/api/admin/reports/summary')) return report
       return {}
     })
@@ -72,10 +73,13 @@ describe('AdminPage', () => {
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '学习报告' }))
-    expect(await screen.findByLabelText('学生')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '全部学生' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '打字练习' })).toHaveValue('course')
-    expect(screen.queryByRole('option', { name: '课程练习' })).not.toBeInTheDocument()
+    const student = await screen.findByRole('button', { name: /小宇/ })
+    expect(screen.getByText('2 / 1')).toBeInTheDocument()
+    fireEvent.click(student)
+    expect(await screen.findByLabelText('学生')).toHaveValue('1')
+    expect(screen.getByRole('tab', { name: '打字练习' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '单词练习' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '习题练习' })).toBeInTheDocument()
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
   })
 
@@ -161,8 +165,10 @@ describe('AdminPage', () => {
 
     const typingTab = screen.getByRole('tab', { name: '打字词库' })
     const wordTab = screen.getByRole('tab', { name: '单词词库' })
+    const questionTab = screen.getByRole('tab', { name: '习题题库' })
     expect(typingTab).toHaveAttribute('aria-selected', 'true')
     expect(wordTab).toHaveAttribute('aria-selected', 'false')
+    expect(questionTab).toHaveAttribute('aria-selected', 'false')
     expect(await screen.findByRole('heading', { name: '导入课程与练习' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '导出打字词库' })).toHaveAttribute('href', '/api/admin/export')
     expect(screen.getByLabelText('打字词库文件内容')).toBeInTheDocument()
@@ -175,6 +181,12 @@ describe('AdminPage', () => {
     expect(await screen.findByRole('heading', { name: '导入单词与释义' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '导出单词词库' })).toHaveAttribute('href', '/api/admin/word-export')
     expect(await screen.findByLabelText('单词词库文件内容')).toBeInTheDocument()
+
+    fireEvent.keyDown(wordTab, { key: 'End' })
+    await waitFor(() => expect(questionTab).toHaveAttribute('aria-selected', 'true'))
+    expect(questionTab).toHaveFocus()
+    expect(screen.getByRole('heading', { name: '导入结构化习题' })).toBeInTheDocument()
+    expect(screen.getByLabelText('习题题库文件内容')).toBeInTheDocument()
   })
 
   it('previews and imports typing and word data through their existing APIs', async () => {
@@ -250,6 +262,31 @@ describe('AdminPage', () => {
     expect(confirm).toHaveBeenCalledWith('替换模式会删除该单词集的现有词条，确认继续？')
     expect(mockedApi.mock.calls.some(([path]) => path === '/api/admin/import')).toBe(false)
     expect(mockedApi.mock.calls.some(([path]) => path === '/api/admin/word-import')).toBe(false)
+  })
+
+  it('previews and imports structured exercises into a new draft set', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/children') return []
+      if (path === '/api/admin/library') return courses
+      if (path === '/api/admin/word-sets') return []
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '草稿题套', description: '', status: 'draft', question_count: 0, counts: {}, total_points: 0 }]
+      if (path === '/api/admin/exercise-import/preview') return { valid: true, question_set_count: 1, question_count: 1, counts: { single_choice: 1, multiple_choice: 0, true_false: 0, programming: 0 }, errors: [], warnings: [] }
+      if (path === '/api/admin/exercise-import') return { valid: true, question_set_ids: [10] }
+      return {}
+    })
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
+    fireEvent.click(screen.getByRole('tab', { name: '习题题库' }))
+    fireEvent.change(screen.getByLabelText('习题题库文件内容'), { target: { value: '题套：基础题\n类型：判断\n题目：Python 区分大小写。\n答案：正确' } })
+    fireEvent.click(screen.getByRole('button', { name: '预览习题题库' }))
+
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      '/api/admin/exercise-import/preview',
+      expect.objectContaining({ method: 'POST', body: expect.stringContaining('"mode":"create"') }),
+    ))
+    expect(await screen.findByText(/1 个题套 · 1 道题/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '导入习题题库' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/exercise-import', expect.objectContaining({ method: 'POST' })))
   })
 
   it('shows an empty state when no word set can receive an import', async () => {

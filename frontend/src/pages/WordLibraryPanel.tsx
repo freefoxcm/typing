@@ -76,6 +76,7 @@ export function WordLibraryPanel() {
   const [wordFormSubmitting, setWordFormSubmitting] = useState(false)
   const [activeWordSetId, setActiveWordSetId] = useState<number | null>(null)
   const [reordering, setReordering] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const wordFormTrigger = useRef<HTMLButtonElement | null>(null)
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
@@ -89,6 +90,11 @@ export function WordLibraryPanel() {
     setSets(wordSets); setLlm(llmStatus)
   }, [])
   useEffect(() => { void load().catch((e) => setError(e.message)) }, [load])
+  const refreshStatus = async () => {
+    setRefreshing(true); setError('')
+    try { await load() } catch (e) { setError(e instanceof Error ? e.message : '刷新失败') }
+    finally { setRefreshing(false) }
+  }
 
   const action = async (work: () => Promise<unknown>, success: string) => {
     setError(''); setMessage('')
@@ -155,8 +161,8 @@ export function WordLibraryPanel() {
 
   return <>
     {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
-    <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div><button className="ghost" onClick={() => void load()}><RefreshCcw />刷新状态</button></header>
-    <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div>
+    <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div></header>
+    <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><div className="llm-status-copy"><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div><button className="ghost" onClick={() => void refreshStatus()} disabled={refreshing} aria-busy={refreshing}><RefreshCcw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在刷新…' : '刷新补全状态'}</button></div>
     <form className="inline-form card" onSubmit={createSet}><label>单词集名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建单词集</button></form>
     <DndContext
       sensors={sensors}

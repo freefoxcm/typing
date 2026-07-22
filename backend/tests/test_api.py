@@ -56,6 +56,14 @@ def test_child_practice_and_report_flow(tmp_path):
         report = client.get(f'/api/admin/reports/summary?child_id={child_id}&days=30').json()
         assert report['attempt_count'] == 1
         assert report['weak_keys'][0] == {'char': 'f', 'count': 2}
+        overview = client.get('/api/admin/reports/overview?days=30').json()['students']
+        student = next(item for item in overview if item['child_id'] == child_id)
+        assert student['course_attempt_count'] == 1
+        assert student['word_attempt_count'] == 0
+        assert student['exercise_total'] == 0
+        exported = client.get('/api/admin/reports/export.csv?view=overview&days=30')
+        assert exported.status_code == 200
+        assert 'course_attempts' in exported.content.decode('utf-8-sig')
 
 
 def test_child_login_uses_name_without_exposing_roster(tmp_path):

@@ -67,6 +67,32 @@ export type Report = {
   attempts: { id: number; child_id: number; lesson_id: number | null; word_set_id?: number | null; word_id?: number | null; mode?: 'course' | 'word'; cpm: number; accuracy: number; errors: number; duration_ms: number; created_at: string }[]
 }
 
+export type ReportOverviewRow = {
+  child_id: number
+  child_name: string
+  active: boolean
+  course_attempt_count: number
+  word_attempt_count: number
+  practice_minutes: number
+  average_cpm: number
+  accuracy: number
+  exercise_total: number
+  exercise_completed: number
+  exercise_completion_rate: number
+  exercise_average_percent: number
+  unresolved_wrong_count: number
+}
+export type ReportOverview = { days: number; students: ReportOverviewRow[] }
+export type ExerciseAdminReport = {
+  session_count: number
+  total_session_count: number
+  status_counts: Record<'in_progress' | 'judging' | 'completed', number>
+  completion_rate: number
+  average_percent: number
+  unresolved_wrong_count: number
+  recent: { id: number; child_id: number; mode: string; status: string; title: string; score: number; max_score: number; created_at: string; completed_at: string | null }[]
+}
+
 export type ExerciseQuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'programming'
 export type QuestionOption = { id?: number; label: string; content_markdown: string; correct?: boolean; sort_order: number }
 export type ProgrammingCase = { id?: number; input_data: string; expected_output: string; is_sample: boolean; weight: number; confirmed?: boolean; note?: string }

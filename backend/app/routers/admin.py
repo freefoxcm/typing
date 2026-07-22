@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..imports import parse_import
-from ..models import AttemptError, AuthSession, ChildProfile, Course, Lesson, PracticeAttempt, Prompt
+from ..models import AttemptError, AuthSession, ChildProfile, Course, ExerciseSession, Lesson, PracticeAttempt, Prompt, WrongQuestion
 from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LessonWrite, PromptWrite
 from ..security import Principal, hash_secret, require_admin
 
@@ -294,6 +294,52 @@ def _report_query(db: Session, child_id: int | None, days: int, mode: str = "all
     return db.scalars(query.options(selectinload(PracticeAttempt.errors)).order_by(PracticeAttempt.created_at.desc())).all()
 
 
+def _report_overview_rows(db: Session, days: int) -> list[dict]:
+    since = datetime.utcnow() - timedelta(days=days)
+    children = db.scalars(select(ChildProfile).order_by(ChildProfile.name, ChildProfile.id)).all()
+    attempts = db.scalars(select(PracticeAttempt).where(PracticeAttempt.created_at >= since)).all()
+    sessions = db.scalars(select(ExerciseSession).where(ExerciseSession.created_at >= since)).all()
+    wrong_counts = dict(db.execute(
+        select(WrongQuestion.child_id, func.count(WrongQuestion.id))
+        .where(WrongQuestion.mastered.is_(False))
+        .group_by(WrongQuestion.child_id)
+    ).all())
+    attempts_by_child: defaultdict[int, list[PracticeAttempt]] = defaultdict(list)
+    sessions_by_child: defaultdict[int, list[ExerciseSession]] = defaultdict(list)
+    for item in attempts:
+        attempts_by_child[item.child_id].append(item)
+    for item in sessions:
+        sessions_by_child[item.child_id].append(item)
+    rows: list[dict] = []
+    for child in children:
+        child_attempts = attempts_by_child[child.id]
+        child_sessions = sessions_by_child[child.id]
+        completed = [item for item in child_sessions if item.status == "completed"]
+        total_chars = sum(item.char_count for item in child_attempts)
+        total_errors = sum(item.error_count for item in child_attempts)
+        rows.append({
+            "child_id": child.id,
+            "child_name": child.name,
+            "active": child.active,
+            "course_attempt_count": sum(item.word_id is None for item in child_attempts),
+            "word_attempt_count": sum(item.word_id is not None for item in child_attempts),
+            "practice_minutes": round(sum(item.duration_ms for item in child_attempts) / 60000, 1),
+            "average_cpm": round(sum(item.cpm for item in child_attempts) / len(child_attempts)) if child_attempts else 0,
+            "accuracy": round(total_chars / max(1, total_chars + total_errors) * 100, 2),
+            "exercise_total": len(child_sessions),
+            "exercise_completed": len(completed),
+            "exercise_completion_rate": round(len(completed) / len(child_sessions) * 100, 1) if child_sessions else 0,
+            "exercise_average_percent": round(sum(item.score / item.max_score * 100 if item.max_score else 0 for item in completed) / len(completed), 1) if completed else 0,
+            "unresolved_wrong_count": wrong_counts.get(child.id, 0),
+        })
+    return rows
+
+
+@router.get("/reports/overview")
+def report_overview(days: int = Query(default=30, ge=1, le=3650), db: Session = Depends(get_db)):
+    return {"days": days, "students": _report_overview_rows(db, days)}
+
+
 @router.get("/reports/summary")
 def report_summary(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), mode: str = Query(default="all", pattern=r"^(all|course|word)$"), db: Session = Depends(get_db)):
     attempts = _report_query(db, child_id, days, mode)
@@ -326,13 +372,35 @@ def report_summary(child_id: int | None = None, days: int = Query(default=30, ge
 
 
 @router.get("/reports/export.csv")
-def export_report(child_id: int | None = None, days: int = Query(default=30, ge=1, le=3650), mode: str = Query(default="all", pattern=r"^(all|course|word)$"), db: Session = Depends(get_db)):
-    attempts = _report_query(db, child_id, days, mode)
+def export_report(
+    child_id: int | None = None,
+    days: int = Query(default=30, ge=1, le=3650),
+    mode: str = Query(default="all", pattern=r"^(all|course|word)$"),
+    view: str | None = Query(default=None, pattern=r"^(overview|course|word|exercise)$"),
+    db: Session = Depends(get_db),
+):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["attempt_id", "child_id", "mode", "course_id", "lesson_id", "word_set_id", "word_id", "created_at", "duration_ms", "characters", "errors", "cpm", "accuracy"])
-    for item in attempts:
-        writer.writerow([item.id, item.child_id, "word" if item.word_id else "course", item.course_id, item.lesson_id, item.word_set_id, item.word_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.error_count, item.cpm, item.accuracy])
+    if view == "overview":
+        writer.writerow(["child_id", "child_name", "course_attempts", "word_attempts", "practice_minutes", "average_cpm", "accuracy", "exercise_completed", "exercise_total", "exercise_completion_rate", "exercise_average_percent", "unresolved_wrong_count"])
+        for item in _report_overview_rows(db, days):
+            writer.writerow([item["child_id"], item["child_name"], item["course_attempt_count"], item["word_attempt_count"], item["practice_minutes"], item["average_cpm"], item["accuracy"], item["exercise_completed"], item["exercise_total"], item["exercise_completion_rate"], item["exercise_average_percent"], item["unresolved_wrong_count"]])
+    elif view == "exercise":
+        since = datetime.utcnow() - timedelta(days=days)
+        query = select(ExerciseSession).where(ExerciseSession.created_at >= since)
+        if child_id:
+            query = query.where(ExerciseSession.child_id == child_id)
+        sessions = db.scalars(query.order_by(ExerciseSession.created_at.desc())).all()
+        writer.writerow(["session_id", "child_id", "mode", "status", "title", "score", "max_score", "score_percent", "created_at", "completed_at"])
+        for item in sessions:
+            percent = round(item.score / item.max_score * 100, 1) if item.status == "completed" and item.max_score else ""
+            writer.writerow([item.id, item.child_id, item.mode, item.status, item.title, item.score, item.max_score, percent, item.created_at.isoformat(), item.completed_at.isoformat() if item.completed_at else ""])
+    else:
+        selected_mode = view if view in {"course", "word"} else mode
+        attempts = _report_query(db, child_id, days, selected_mode)
+        writer.writerow(["attempt_id", "child_id", "mode", "course_id", "lesson_id", "word_set_id", "word_id", "created_at", "duration_ms", "characters", "errors", "cpm", "accuracy"])
+        for item in attempts:
+            writer.writerow([item.id, item.child_id, "word" if item.word_id else "course", item.course_id, item.lesson_id, item.word_set_id, item.word_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.error_count, item.cpm, item.accuracy])
     data = output.getvalue().encode("utf-8-sig")
     return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kidtype-report.csv"})
 
