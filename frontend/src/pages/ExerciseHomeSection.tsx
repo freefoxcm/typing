@@ -13,6 +13,7 @@ export function ExerciseHomeSection({ sets }: { sets: QuestionSetSummary[] }) {
   const [randomOpen, setRandomOpen] = useState(false)
   const randomTriggerRef = useRef<HTMLButtonElement>(null)
   const randomDialogRef = useRef<HTMLDivElement>(null)
+  const selectionInitializedRef = useRef(sets.length > 0)
   const available = useMemo(() => sets.reduce((sum, item) => sum + item.question_count, 0), [sets])
   const availableByType = useMemo(() => sets.filter((item) => selected.includes(item.id)).reduce<Record<ExerciseQuestionType, number>>((totals, item) => {
     for (const type of Object.keys(totals) as ExerciseQuestionType[]) totals[type] += item.counts[type] ?? 0
@@ -24,6 +25,12 @@ export function ExerciseHomeSection({ sets }: { sets: QuestionSetSummary[] }) {
     const exceeded = (Object.keys(counts) as ExerciseQuestionType[]).find((type) => counts[type] > availableByType[type])
     return exceeded ? `${{ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', programming: '编程题' }[exceeded]}最多可选 ${availableByType[exceeded]} 道` : ''
   }, [availableByType, counts, selected.length])
+
+  useEffect(() => {
+    if (selectionInitializedRef.current || !sets.length) return
+    setSelected(sets.map((item) => item.id))
+    selectionInitializedRef.current = true
+  }, [sets])
 
   useEffect(() => {
     if (!randomOpen) return
@@ -49,7 +56,7 @@ export function ExerciseHomeSection({ sets }: { sets: QuestionSetSummary[] }) {
   const toggle = (setId: number) => setSelected((current) => current.includes(setId) ? current.filter((id) => id !== setId) : [...current, setId])
   if (!sets.length) return null
   return <section className="exercise-home-section">
-    <header className="section-title"><div><p className="eyebrow">习题练习</p><h2>读题、思考、动手编程</h2><p>{available} 道已发布习题，完成整套题或按题型随机练习。</p></div><div className="exercise-home-actions"><button ref={randomTriggerRef} className="primary" onClick={() => { setError(''); setRandomOpen(true) }}><Dice5 />随机组题</button><button className="primary" disabled={starting} onClick={() => void start({ mode: 'wrong', question_set_ids: [], counts: {} })}><RotateCcw />错题重练</button></div></header>
+    <header className="section-title practice-section-title"><div className="practice-title-copy"><span className="practice-title-icon" aria-hidden="true"><BookCheck /></span><div><p className="eyebrow">习题练习</p><h2>读题、思考、动手编程</h2><p>{available} 道已发布习题，完成整套题或按题型随机练习。</p></div></div><div className="exercise-home-actions"><button ref={randomTriggerRef} className="primary" onClick={() => { setError(''); setRandomOpen(true) }}><Dice5 />随机组题</button><button className="primary" disabled={starting} onClick={() => void start({ mode: 'wrong', question_set_ids: [], counts: {} })}><RotateCcw />错题重练</button></div></header>
     {error && !randomOpen && <p className="notice error">{error}</p>}
     <div className="question-set-grid">{sets.map((item) => <article className="question-set-card" key={item.id}><BookCheck /><div className="grow"><h3>{item.title}</h3><p>{item.description || `${item.question_count} 道题`}</p><span>{item.question_count} 题 · {item.total_points} 分{item.attempts ? ` · 已练 ${item.attempts} 次` : ''}</span></div><button className="primary" disabled={starting} onClick={() => void start({ mode: 'set', question_set_ids: [item.id], counts: {} })}>整套练习</button></article>)}</div>
     {randomOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setRandomOpen(false); window.setTimeout(() => randomTriggerRef.current?.focus()) } }}><div ref={randomDialogRef} className="random-practice-modal card" role="dialog" aria-modal="true" aria-labelledby="random-practice-title">
