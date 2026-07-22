@@ -18,6 +18,13 @@ const sets: QuestionSetSummary[] = [{
 describe('ExerciseHomeSection', () => {
   beforeEach(() => mockedApi.mockReset())
 
+  it('selects every question set when sets arrive after the initial render', async () => {
+    const { rerender } = render(<MemoryRouter><ExerciseHomeSection sets={[]} /></MemoryRouter>)
+    rerender(<MemoryRouter><ExerciseHomeSection sets={sets} /></MemoryRouter>)
+    fireEvent.click(await screen.findByRole('button', { name: /随机组题/ }))
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Python 基础' })).toBeChecked())
+  })
+
   it('opens random practice in a modal and validates available counts', async () => {
     render(<MemoryRouter><ExerciseHomeSection sets={sets} /></MemoryRouter>)
     expect(screen.getByRole('button', { name: /随机组题/ })).toHaveClass('primary')
