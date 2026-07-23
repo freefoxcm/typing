@@ -109,7 +109,7 @@ export function ExercisePage() {
     const next = { ...target.answer, ...patch }
     updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || next.code.trim() ? 'answered' : 'unanswered' })
     try {
-      await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'PATCH', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, code: next.code }) })
+      await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, code: next.code }) })
       if (showMessage) { setMessage('答案已保存'); window.setTimeout(() => setMessage(''), 1000) }
       return true
     } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败'); return false }

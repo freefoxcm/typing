@@ -197,7 +197,7 @@ def test_concurrent_first_answer_saves_are_idempotent(tmp_path, monkeypatch):
 
         monkeypatch.setattr(exercises_router, "_owned_session", synchronized_owned_session)
         with ThreadPoolExecutor(max_workers=2) as executor:
-            responses = list(executor.map(lambda _: client.patch(path, json=payload), range(2)))
+            responses = list(executor.map(lambda _: client.post(path, json=payload), range(2)))
         monkeypatch.setattr(exercises_router, "_owned_session", original_owned_session)
 
         assert [response.status_code for response in responses] == [200, 200]
