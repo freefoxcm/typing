@@ -58,6 +58,7 @@ export function ExercisePage() {
   const initializedSessionRef = useRef<string | undefined>(undefined)
   const pendingCodesRef = useRef(new Map<number, string>())
   const codeTimersRef = useRef(new Map<number, number>())
+  const codeSavesRef = useRef(new Map<number, { code: string; promise: Promise<boolean> }>())
 
   const load = useCallback(() => api<ExerciseSession>(`/api/exercises/sessions/${sessionId}`).then((data) => {
     sessionRef.current = data
@@ -113,22 +114,35 @@ export function ExercisePage() {
       return true
     } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败'); return false }
   }
-  const persistCode = async (itemId: number, code: string) => {
+  const persistCode = async (itemId: number, code: string): Promise<boolean> => {
     const timer = codeTimersRef.current.get(itemId)
     if (timer) window.clearTimeout(timer)
     codeTimersRef.current.delete(itemId)
+    const inFlight = codeSavesRef.current.get(itemId)
+    if (inFlight) {
+      if (inFlight.code === code) return inFlight.promise
+      return inFlight.promise.then(() => persistCode(itemId, code))
+    }
     const target = sessionRef.current?.items.find((candidate) => candidate.id === itemId)
     if (!target || target.answer.code === code && !pendingCodesRef.current.has(itemId)) return true
     setSaveState('saving')
-    let saved = false
+    const promise = (async () => {
+      let saved = false
+      try {
+        saved = await save(target, { code }, false)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '代码保存失败')
+      }
+      if (saved && pendingCodesRef.current.get(itemId) === code) pendingCodesRef.current.delete(itemId)
+      setSaveState(saved && pendingCodesRef.current.size === 0 ? 'saved' : saved ? 'saving' : 'error')
+      return saved
+    })()
+    codeSavesRef.current.set(itemId, { code, promise })
     try {
-      saved = await save(target, { code }, false)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '代码保存失败')
+      return await promise
+    } finally {
+      if (codeSavesRef.current.get(itemId)?.promise === promise) codeSavesRef.current.delete(itemId)
     }
-    if (saved && pendingCodesRef.current.get(itemId) === code) pendingCodesRef.current.delete(itemId)
-    setSaveState(saved && pendingCodesRef.current.size === 0 ? 'saved' : saved ? 'saving' : 'error')
-    return saved
   }
   const scheduleCodeSave = (itemId: number, code: string) => {
     pendingCodesRef.current.set(itemId, code)

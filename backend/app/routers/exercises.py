@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings, get_settings
@@ -287,14 +288,28 @@ def save_answer(session_id: int, item_id: int, payload: AnswerWrite, principal: 
     option_ids = {int(option["id"]) for option in snapshot.get("options", [])}
     if any(option_id not in option_ids for option_id in payload.selected_option_ids):
         raise HTTPException(status_code=422, detail="答案包含无效选项")
-    answer = item.answer or ExerciseAnswer(session_item_id=item.id)
-    answer.answer_json = json.dumps({"selected_option_ids": payload.selected_option_ids, "bool_answer": payload.bool_answer}, ensure_ascii=False)
-    answer.code = payload.code
-    answer.status = "answered" if payload.selected_option_ids or payload.bool_answer is not None or payload.code.strip() else "unanswered"
-    if not item.answer:
-        db.add(answer)
+    answer_json = json.dumps({"selected_option_ids": payload.selected_option_ids, "bool_answer": payload.bool_answer}, ensure_ascii=False)
+    status = "answered" if payload.selected_option_ids or payload.bool_answer is not None or payload.code.strip() else "unanswered"
+    if db.get_bind().dialect.name == "sqlite":
+        statement = sqlite_insert(ExerciseAnswer).values(
+            session_item_id=item.id,
+            answer_json=answer_json,
+            code=payload.code,
+            status=status,
+        ).on_conflict_do_update(
+            index_elements=[ExerciseAnswer.session_item_id],
+            set_={"answer_json": answer_json, "code": payload.code, "status": status, "updated_at": datetime.utcnow()},
+        )
+        db.execute(statement)
+    else:
+        answer = item.answer or ExerciseAnswer(session_item_id=item.id)
+        answer.answer_json = answer_json
+        answer.code = payload.code
+        answer.status = status
+        if not item.answer:
+            db.add(answer)
     db.commit()
-    return {"ok": True, "status": answer.status}
+    return {"ok": True, "status": status}
 
 
 @router.post("/sessions/{session_id}/sample-runs", status_code=202)

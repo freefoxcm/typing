@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -6,6 +8,7 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
+from app.routers import exercises as exercises_router
 from app.models import (
     AttemptError,
     ChildProfile,
@@ -170,6 +173,37 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         compatible_csv = client.get(f"/api/admin/exercise-reports/export.csv?days=30&child_id={child_id}")
         assert "abandoned" in unified_csv.content.decode("utf-8-sig")
         assert "abandoned" in compatible_csv.content.decode("utf-8-sig")
+
+
+def test_concurrent_first_answer_saves_are_idempotent(tmp_path, monkeypatch):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        create_child(client)
+        set_id, _, _ = create_objective_set(client)
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}}).json()
+        item = session["items"][0]
+        option_id = item["question"]["options"][0]["id"]
+        path = f"/api/exercises/sessions/{session['id']}/answers/{item['id']}"
+        payload = {"selected_option_ids": [option_id], "bool_answer": None, "code": ""}
+
+        original_owned_session = exercises_router._owned_session
+        simultaneous = threading.Barrier(2)
+
+        def synchronized_owned_session(db, session_id, child_id):
+            result = original_owned_session(db, session_id, child_id)
+            simultaneous.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(exercises_router, "_owned_session", synchronized_owned_session)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _: client.patch(path, json=payload), range(2)))
+        monkeypatch.setattr(exercises_router, "_owned_session", original_owned_session)
+
+        assert [response.status_code for response in responses] == [200, 200]
+        with client.app.state.session_factory() as db:
+            answers = db.scalars(select(ExerciseAnswer).where(ExerciseAnswer.session_item_id == item["id"])).all()
+            assert len(answers) == 1
 
 
 def test_admin_can_reset_one_students_learning_data_without_touching_profile_or_libraries(tmp_path):
