@@ -52,7 +52,7 @@ describe('ExercisePage', () => {
     fireEvent.click(screen.getByText('input'))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/exercises/sessions/7/answers/71',
-      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ selected_option_ids: [32], bool_answer: null, code: '' }) }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ selected_option_ids: [32], bool_answer: null, code: '' }) }),
     ))
   })
 
