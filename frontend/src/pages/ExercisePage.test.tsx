@@ -154,6 +154,28 @@ describe('ExercisePage', () => {
     expect(await screen.findByText('学生首页')).toBeInTheDocument()
   })
 
+  it('coalesces blur and sample-run saves for the same code', async () => {
+    const programming = makeProgrammingSession()
+    let releaseSave: () => void = () => undefined
+    const pendingSave = new Promise<{ ok: boolean }>((resolve) => { releaseSave = () => resolve({ ok: true }) })
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/answers/72') return await pendingSave
+      if (path === '/api/exercises/sessions/7/sample-runs') return { job_id: 'sample-1' }
+      return { status: 'complete', cases: [] }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    const runButton = screen.getByRole('button', { name: /运行公开样例/ })
+    fireEvent.change(editor, { target: { value: 'print("once")' } })
+    fireEvent.blur(editor)
+    fireEvent.click(runButton)
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/answers/72', expect.anything()))
+    expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/answers/72')).toHaveLength(1)
+    releaseSave()
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/sample-runs', expect.anything()))
+  })
+
   it('shows an abandoned session as read-only without revealing answers', async () => {
     const abandoned: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
     abandoned.status = 'abandoned'
