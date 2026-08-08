@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '../api'
 import { QuestionLibraryPanel, reorderQuestionList, reorderQuestionSetList, saveQuestionOrder, saveQuestionSetOrder } from './QuestionLibraryPanel'
 
@@ -101,6 +101,129 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '已复核 1' }))
     expect(screen.getByText('已经复核题')).toBeInTheDocument()
     expect(screen.queryByText('等待复核题')).not.toBeInTheDocument()
+  })
+
+  it('keeps review filters independent for each draft set and shows empty states', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [
+        { id: 5, title: '题套甲', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: [
+          { id: 51, question_set_id: 5, type: 'true_false', stem_markdown: '甲待复核', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+          { id: 52, question_set_id: 5, type: 'true_false', stem_markdown: '甲已复核', points: 2, sort_order: 1, reviewed: true, correct_bool: true, options: [], programming: null },
+        ] },
+        { id: 6, title: '题套乙', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [
+          { id: 61, question_set_id: 6, type: 'true_false', stem_markdown: '乙待复核', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+        ] },
+        { id: 7, title: '已发布题套', description: '', status: 'published', question_count: 0, total_points: 0, counts: {}, questions: [] },
+      ]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    const firstFilter = await screen.findByRole('group', { name: '题套甲复核状态过滤' })
+    const secondFilter = screen.getByRole('group', { name: '题套乙复核状态过滤' })
+    expect(screen.queryByRole('group', { name: '已发布题套复核状态过滤' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '已复核 1' }))
+    expect(await screen.findByText('甲已复核')).toBeInTheDocument()
+    const firstSetCard = firstFilter.closest('article') as HTMLElement
+    expect(within(firstSetCard).getByRole('button', { name: '拖动题目调整顺序' })).toBeDisabled()
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '全部 2' }))
+    expect(within(firstSetCard).getAllByRole('button', { name: '拖动题目调整顺序' })[0]).not.toBeDisabled()
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '已复核 1' }))
+    expect(within(secondFilter).getByRole('button', { name: '待复核 1' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(secondFilter).getByRole('button', { name: '已复核 0' }))
+    expect(screen.getByText('当前题套没有已复核题目')).toBeInTheDocument()
+    expect(within(firstFilter).getByRole('button', { name: '已复核 1' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('navigates only inside the active set and keeps the editor open after saving a draft', async () => {
+    const firstSetQuestions = [
+      { id: 71, question_set_id: 7, type: 'true_false' as const, stem_markdown: '第一题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 3, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 72, question_set_id: 7, type: 'true_false' as const, stem_markdown: '第二题', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: false, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [
+        { id: 7, title: '当前题套', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: firstSetQuestions },
+        { id: 8, title: '其他题套', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [{ ...firstSetQuestions[0], id: 81, question_set_id: 8, stem_markdown: '不应进入的题目' }] },
+      ]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/71' && options?.method === 'PUT') return { ...firstSetQuestions[0], ...JSON.parse(String(options.body)) }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 当前题套' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    expect(screen.getByRole('heading', { level: 2, name: '当前题套' })).toBeInTheDocument()
+    expect(screen.getByText('第 1 / 2 题')).toBeInTheDocument()
+    const sourceSwitch = screen.getByLabelText('向学生显示原题截图')
+    expect(sourceSwitch.closest('.question-source-heading')).not.toBeNull()
+    fireEvent.click(sourceSwitch)
+    expect(sourceSwitch).toBeChecked()
+    fireEvent.click(sourceSwitch)
+    expect(sourceSwitch).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }))
+    expect(screen.getByLabelText('题面')).toHaveValue('第二题')
+    expect(screen.queryByDisplayValue('不应进入的题目')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '上一题' }))
+    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '第一题（已修改）' } })
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/71', expect.objectContaining({ method: 'PUT' })))
+    expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
+    expect(screen.getByLabelText('题面')).toHaveValue('第一题（已修改）')
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
+  })
+
+  it('persists the source panel state while reviewing the current set and protects dirty Escape', async () => {
+    const questions = [
+      { id: 91, question_set_id: 9, type: 'true_false' as const, stem_markdown: '一', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 4, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 92, question_set_id: 9, type: 'true_false' as const, stem_markdown: '二', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: true, source_asset_id: 5, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '折叠测试', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 折叠测试' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    fireEvent.click(screen.getByRole('button', { name: '收起原题区域' }))
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }))
+    expect(screen.getByRole('form', { name: '题目编辑器' }).querySelector('.question-editor-body')).toHaveClass('source-collapsed')
+    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '二（修改）' } })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(confirm).toHaveBeenCalledWith('有尚未保存的修改，确认关闭？')
+    expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('reviews forward with the keyboard and closes after the last item in the set queue', async () => {
+    const questions = [
+      { id: 101, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核一', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 102, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核二', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 10, title: '快捷复核', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (/^\/api\/admin\/questions\/\d+$/.test(path) && options?.method === 'PUT') return { ...questions.find((item) => path.endsWith(String(item.id))), ...JSON.parse(String(options.body)), reviewed: false }
+      if (/^\/api\/admin\/questions\/\d+\/review$/.test(path)) return { ...questions.find((item) => path.includes(`/${item.id}/`)), reviewed: true }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 快捷复核' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(screen.getByLabelText('题面')).toHaveValue('复核二'))
+    expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(screen.queryByRole('form', { name: '题目编辑器' })).not.toBeInTheDocument())
+    expect(screen.getByText('当前过滤队列已复核完成')).toBeInTheDocument()
+    expect(mockedApi.mock.calls.filter(([path]) => /\/review$/.test(path))).toHaveLength(2)
   })
 
   it('reorders sets and questions and saves complete id lists', async () => {

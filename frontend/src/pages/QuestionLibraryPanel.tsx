@@ -5,7 +5,7 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Code2, Copy, FileUp, GripVertical, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Code2, Copy, FileUp, GripVertical, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionBlank, QuestionOption, QuestionSetSummary } from '../types'
 
@@ -13,6 +13,7 @@ type ImportJob = { id: number; status: string; question_set_id?: number; page_co
 type LlmStatus = { configured: boolean; base_url: string; model: string; batch_pages: number }
 type EditableQuestion = Omit<ExerciseQuestion, 'id'> & { id?: number }
 type ReviewFilter = 'pending' | 'reviewed' | 'all'
+type EditorState = { setId: number; setTitle: string; question: EditableQuestion; filter: ReviewFilter; queueIds: number[] }
 type ReferenceCasePreview = { id: number; status: string; stable: boolean; current_output: string; candidate_output: string; runs?: { status: string; stdout?: string; stderr?: string }[] }
 type ReferencePreview = { job_id: string; question_id: number; status: string; stale: boolean; cases: ReferenceCasePreview[] }
 
@@ -79,6 +80,8 @@ function SortableQuestionRow({ question, disabled, children }: { question: Exerc
 const jobStatus = (job: ImportJob) => job.status === 'ready' ? (job.warnings?.length ? '完成，需核对' : '识别完成') : job.status === 'processing' ? '正在识别' : job.status === 'pending' ? '等待识别' : '识别失败'
 const jobStatusClass = (job: ImportJob) => job.status === 'ready' && job.warnings?.length ? 'warning' : job.status
 const formatTime = (value: string) => new Date(value).toLocaleString('zh-CN', { hour12: false })
+const questionMatchesFilter = (question: ExerciseQuestion, filter: ReviewFilter) => filter === 'all' || (filter === 'reviewed' ? question.reviewed : !question.reviewed)
+const cloneQuestion = <T extends EditableQuestion>(question: T): T => JSON.parse(JSON.stringify(question)) as T
 
 export function QuestionLibraryPanel() {
   const [sets, setSets] = useState<QuestionSetSummary[]>([])
@@ -89,7 +92,7 @@ export function QuestionLibraryPanel() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [uploading, setUploading] = useState(false)
-  const [editor, setEditor] = useState<{ setId: number; question: EditableQuestion } | null>(null)
+  const [editor, setEditor] = useState<EditorState | null>(null)
   const [expandedJobs, setExpandedJobs] = useState<Set<number> | null>(null)
   const [importPanelOpen, setImportPanelOpen] = useState(false)
   const [expandedSets, setExpandedSets] = useState<Set<number>>(new Set())
@@ -97,7 +100,7 @@ export function QuestionLibraryPanel() {
   const [reorderingSets, setReorderingSets] = useState(false)
   const [reorderingQuestionSetId, setReorderingQuestionSetId] = useState<number | null>(null)
   const [activeSetId, setActiveSetId] = useState<number | null>(null)
-  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('pending')
+  const [reviewFilters, setReviewFilters] = useState<Record<number, ReviewFilter>>({})
   const [referencePreview, setReferencePreview] = useState<ReferencePreview | null>(null)
   const knownJobIds = useRef<Set<number>>(new Set())
   const sensors = useSensors(
@@ -152,37 +155,57 @@ export function QuestionLibraryPanel() {
     } catch (e) { setError(e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
   }
 
-  const draftQuestions = useMemo(() => sets.flatMap((set) => set.status === 'draft' ? (set.questions || []).map((question) => ({ setId: set.id, question })) : []), [sets])
-  const reviewCounts = useMemo(() => ({ pending: draftQuestions.filter((item) => !item.question.reviewed).length, reviewed: draftQuestions.filter((item) => item.question.reviewed).length }), [draftQuestions])
+  const setReviewFilterForSet = (setId: number, filter: ReviewFilter) => {
+    setReviewFilters((current) => ({ ...current, [setId]: filter }))
+    setExpandedSets((current) => new Set(current).add(setId))
+  }
+
+  const openQuestionEditor = (set: QuestionSetSummary, question: ExerciseQuestion) => {
+    const filter = reviewFilters[set.id] ?? 'pending'
+    const queueIds = (set.questions || []).filter((item) => questionMatchesFilter(item, filter)).map((item) => item.id)
+    setEditor({ setId: set.id, setTitle: set.title, question: cloneQuestion(question), filter, queueIds })
+  }
+
+  const openNewQuestion = (set: QuestionSetSummary) => {
+    setEditor({ setId: set.id, setTitle: set.title, question: blankQuestion(set.questions?.length ?? 0), filter: reviewFilters[set.id] ?? 'pending', queueIds: [] })
+  }
 
   const saveQuestion = async (question: EditableQuestion, review = false, advance = false) => {
     if (!editor) return
     const path = question.id ? `/api/admin/questions/${question.id}` : `/api/admin/question-sets/${editor.setId}/questions`
     setError(''); setMessage('')
     try {
-      const saved = await api<ExerciseQuestion>(path, { method: question.id ? 'PUT' : 'POST', ...jsonBody(question) })
-      if (review) await api(`/api/admin/questions/${saved.id}/review`, { method: 'PATCH', ...jsonBody({ reviewed: true }) })
-      const currentIndex = draftQuestions.findIndex((item) => item.question.id === saved.id)
-      const next = advance ? [...draftQuestions.slice(currentIndex + 1), ...draftQuestions.slice(0, Math.max(0, currentIndex))].find((item) => !item.question.reviewed && item.question.id !== saved.id) : undefined
+      let saved = await api<ExerciseQuestion>(path, { method: question.id ? 'PUT' : 'POST', ...jsonBody(question) })
+      if (review) saved = await api<ExerciseQuestion>(`/api/admin/questions/${saved.id}/review`, { method: 'PATCH', ...jsonBody({ reviewed: true }) })
+      const currentIndex = editor.queueIds.indexOf(saved.id)
+      const nextId = advance && currentIndex >= 0 ? editor.queueIds[currentIndex + 1] : undefined
+      const next = nextId == null ? undefined : sets.find((item) => item.id === editor.setId)?.questions?.find((item) => item.id === nextId)
       await reload()
-      if (next) setEditor({ setId: next.setId, question: JSON.parse(JSON.stringify(next.question)) })
-      else setEditor(null)
-      setMessage(review ? (next ? '已复核，已进入下一道待复核题' : '题目已复核') : (question.id ? '题目已保存并恢复为待复核' : '题目已添加'))
+      if (advance) {
+        if (next) setEditor((current) => current ? { ...current, question: cloneQuestion(next) } : current)
+        else setEditor(null)
+      } else if (question.id) {
+        setEditor((current) => current ? { ...current, question: cloneQuestion(saved) } : current)
+      } else {
+        setEditor(null)
+      }
+      setMessage(review ? (next ? '已复核，已进入当前题套的下一题' : '当前过滤队列已复核完成') : (question.id ? '题目草稿已保存' : '题目已添加'))
     } catch (e) { setError(e instanceof Error ? e.message : '题目保存失败') }
   }
 
   const navigateEditor = (offset: number) => {
     if (!editor?.question.id) return
-    const index = draftQuestions.findIndex((item) => item.question.id === editor.question.id)
+    const index = editor.queueIds.indexOf(editor.question.id)
     if (index < 0) return
-    const next = draftQuestions[index + offset]
-    if (next) setEditor({ setId: next.setId, question: JSON.parse(JSON.stringify(next.question)) })
+    const nextId = editor.queueIds[index + offset]
+    const next = sets.find((item) => item.id === editor.setId)?.questions?.find((item) => item.id === nextId)
+    if (next) setEditor((current) => current ? { ...current, question: cloneQuestion(next) } : current)
   }
 
   const uploadSourceImage = async (questionId: number, file: File) => {
     const body = new FormData(); body.append('file', file)
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/source-image`, { method: 'PUT', body })
-    setEditor((current) => current ? { ...current, question: JSON.parse(JSON.stringify(updated)) } : current)
+    setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
     await reload(); setMessage('原题图片已替换，题目已恢复为待复核')
     return updated
   }
@@ -250,6 +273,7 @@ export function QuestionLibraryPanel() {
 
   const visibleJobs = showAllJobs ? jobs : jobs.slice(0, 10)
   const activeSet = sets.find((item) => item.id === activeSetId)
+  const editorQueueIndex = editor?.question.id ? editor.queueIds.indexOf(editor.question.id) : -1
 
   return <>
     <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div></header>
@@ -273,17 +297,19 @@ export function QuestionLibraryPanel() {
       })}{jobs.length > 10 && <button type="button" className="ghost import-show-all" onClick={() => setShowAllJobs((current) => !current)}>{showAllJobs ? '收起历史任务' : `显示全部 ${jobs.length} 项`}</button>}</div>}
     </section>
     <form className="inline-form card" onSubmit={createSet}><label>题套名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />手动新建题套</button></form>
-    <section className="card review-queue-toolbar"><div><h3>人工复核队列</h3><p>待复核 {reviewCounts.pending} 题 · 已复核 {reviewCounts.reviewed} 题</p></div><div className="review-filter" role="group" aria-label="复核状态过滤">{([
-      ['pending', `待复核 ${reviewCounts.pending}`], ['reviewed', `已复核 ${reviewCounts.reviewed}`], ['all', '全部'],
-    ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : 'ghost'} onClick={() => setReviewFilter(value)} key={value}>{label}</button>)}</div></section>
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={({ active }) => setActiveSetId(Number(active.id))} onDragCancel={() => setActiveSetId(null)} onDragEnd={(event) => void finishSetReorder(event)}>
     <SortableContext items={sets.map((item) => item.id)} strategy={verticalListSortingStrategy}>
     <div className={`question-set-admin-list${reorderingSets ? ' is-reordering' : ''}`} aria-busy={reorderingSets}>{sets.map((set) => {
       const setOpen = expandedSets.has(set.id)
-      const visibleQuestions = set.status !== 'draft' ? (set.questions || []) : (set.questions || []).filter((question) => reviewFilter === 'all' || (reviewFilter === 'reviewed' ? question.reviewed : !question.reviewed))
+      const reviewFilter = reviewFilters[set.id] ?? 'pending'
+      const pendingCount = (set.questions || []).filter((question) => !question.reviewed).length
+      const reviewedCount = (set.questions || []).filter((question) => question.reviewed).length
+      const visibleQuestions = set.status !== 'draft' ? (set.questions || []) : (set.questions || []).filter((question) => questionMatchesFilter(question, reviewFilter))
       return <SortableSetCard item={set} expanded={setOpen} disabled={reorderingSets || sets.length < 2} key={set.id}>
       <header><button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
-        {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: blankQuestion(set.questions?.length ?? 0) })}><Plus />题目</button><button className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></>}
+        {set.status === 'draft' && <div className="question-set-review-tools"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
+          ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
+        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions"><button className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></div></div>}
         {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
         {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
         {set.status !== 'published' && <button className="danger-button" aria-label={`永久删除题套 ${set.title}`} onClick={() => window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。') && void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除')}><Trash2 /></button>}
@@ -291,23 +317,27 @@ export function QuestionLibraryPanel() {
       {setOpen && visibleQuestions.length > 0 && <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void finishQuestionReorder(set.id, event)}><SortableContext items={visibleQuestions.map((question) => question.id)} strategy={verticalListSortingStrategy}><div className="question-admin-list">{visibleQuestions.map((question) => <SortableQuestionRow question={question} disabled={reviewFilter !== 'all' || set.status !== 'draft' || reorderingQuestionSetId != null} key={question.id}>
         <span className="question-number">{question.sort_order + 1}</span><div className="grow"><strong>{labels[question.type]} · {question.points} 分 {question.reviewed ? '· 已复核' : '· 待复核'}</strong><p>{question.stem_markdown.slice(0, 100)}</p>{!!question.recognition_warnings?.length && <small className="recognition-warning">识别提示：{question.recognition_warnings[0]}</small>}</div>
         {question.type === 'programming' && set.status === 'draft' && <button className="ghost" title="用参考程序生成候选输出" onClick={() => void generateOutputs(question.id)}><Play />生成输出</button>}
-        {set.status === 'draft' && <><button className="ghost" onClick={() => setEditor({ setId: set.id, question: JSON.parse(JSON.stringify(question)) })}><Pencil />编辑</button><button className="danger-button" onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
+        {set.status === 'draft' && <><button className="ghost" onClick={() => openQuestionEditor(set, question)}><Pencil />编辑</button><button className="danger-button" onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
       </SortableQuestionRow>)}</div></SortableContext></DndContext>}
+      {setOpen && visibleQuestions.length === 0 && <div className="question-filter-empty">{set.status === 'draft' ? `当前题套没有${reviewFilter === 'pending' ? '待复核' : reviewFilter === 'reviewed' ? '已复核' : ''}题目` : '当前题套暂无题目'}</div>}
     </SortableSetCard>})}</div>
     </SortableContext>
     <DragOverlay>{activeSet && <div className="question-set-drag-overlay card"><GripVertical /><div><strong>{activeSet.title}</strong><small>{activeSet.question_count} 题 · {activeSet.total_points} 分</small></div></div>}</DragOverlay>
     </DndContext>
-    {editor && <QuestionEditor key={editor.question.id ?? `new-${editor.setId}`} value={editor.question} canPrevious={!!editor.question.id && draftQuestions.findIndex((item) => item.question.id === editor.question.id) > 0} canNext={!!editor.question.id && draftQuestions.findIndex((item) => item.question.id === editor.question.id) < draftQuestions.length - 1} onCancel={() => setEditor(null)} onSave={(value) => void saveQuestion(value)} onSaveReviewNext={(value) => void saveQuestion(value, true, true)} onNavigate={navigateEditor} onUploadImage={uploadSourceImage} />}
+    {editor && <QuestionEditor key={`editor-${editor.setId}`} value={editor.question} setTitle={editor.setTitle} currentPosition={editorQueueIndex >= 0 ? editorQueueIndex + 1 : 0} queueSize={editor.queueIds.length} canPrevious={!!editor.question.id && editorQueueIndex > 0} canNext={!!editor.question.id && editorQueueIndex >= 0 && editorQueueIndex < editor.queueIds.length - 1} onCancel={() => setEditor(null)} onSave={(value) => saveQuestion(value)} onSaveReviewNext={(value) => saveQuestion(value, true, true)} onNavigate={navigateEditor} onUploadImage={uploadSourceImage} />}
     {referencePreview && <ReferenceOutputModal preview={referencePreview} onCancel={() => setReferencePreview(null)} onApply={() => void applyReferenceOutputs()} />}
   </>
 }
 
-function QuestionEditor({ value, canPrevious, canNext, onCancel, onSave, onSaveReviewNext, onNavigate, onUploadImage }: { value: EditableQuestion; canPrevious: boolean; canNext: boolean; onCancel: () => void; onSave: (value: EditableQuestion) => void; onSaveReviewNext: (value: EditableQuestion) => void; onNavigate: (offset: number) => void; onUploadImage: (questionId: number, file: File) => Promise<ExerciseQuestion> }) {
-  const [question, setQuestion] = useState<EditableQuestion>(() => JSON.parse(JSON.stringify(value)))
+function QuestionEditor({ value, setTitle, currentPosition, queueSize, canPrevious, canNext, onCancel, onSave, onSaveReviewNext, onNavigate, onUploadImage }: { value: EditableQuestion; setTitle: string; currentPosition: number; queueSize: number; canPrevious: boolean; canNext: boolean; onCancel: () => void; onSave: (value: EditableQuestion) => Promise<void>; onSaveReviewNext: (value: EditableQuestion) => Promise<void>; onNavigate: (offset: number) => void; onUploadImage: (questionId: number, file: File) => Promise<ExerciseQuestion> }) {
+  const [question, setQuestion] = useState<EditableQuestion>(() => cloneQuestion(value))
   const [uploadingImage, setUploadingImage] = useState(false)
+  const [sourceCollapsed, setSourceCollapsed] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => setQuestion(cloneQuestion(value)), [value])
   const dirty = JSON.stringify(question) !== JSON.stringify(value)
-  const updateOption = (index: number, patch: Partial<QuestionOption>) => setQuestion((current) => ({ ...current, options: current.options.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
-  const updateCase = (index: number, patch: Partial<ProgrammingCase>) => setQuestion((current) => ({ ...current, programming: current.programming ? { ...current.programming, cases: current.programming.cases.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) } : null }))
+  const updateOption = (index: number, patch: Partial<QuestionOption>) => setQuestion((current) => ({ ...current, reviewed: false, options: current.options.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }))
+  const updateCase = (index: number, patch: Partial<ProgrammingCase>) => setQuestion((current) => ({ ...current, reviewed: false, programming: current.programming ? { ...current.programming, cases: current.programming.cases.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) } : null }))
   const changeType = (type: ExerciseQuestionType) => setQuestion((current) => ({
     ...current, type, reviewed: false,
     options: type === 'single_choice' || type === 'multiple_choice' ? (current.options.length >= 2 ? current.options : blankQuestion().options) : [],
@@ -316,29 +346,34 @@ function QuestionEditor({ value, canPrevious, canNext, onCancel, onSave, onSaveR
     correct_bool: type === 'true_false' ? (current.correct_bool ?? true) : null,
     points: type === 'programming' && current.points === 2 ? 25 : current.points,
   }))
-  const close = () => { if (!dirty || window.confirm('有尚未保存的修改，确认关闭？')) onCancel() }
+  const close = useCallback(() => { if (!dirty || window.confirm('有尚未保存的修改，确认关闭？')) onCancel() }, [dirty, onCancel])
   const navigate = (offset: number) => { if (!dirty || window.confirm('有尚未保存的修改，确认切换题目？')) onNavigate(offset) }
+  const save = async (review = false) => {
+    if (saving) return
+    setSaving(true)
+    try { await (review ? onSaveReviewNext(question) : onSave(question)) } finally { setSaving(false) }
+  }
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return
-      if (event.key.toLowerCase() === 's') { event.preventDefault(); onSave(question) }
-      if (event.key === 'Enter' && question.id) { event.preventDefault(); onSaveReviewNext(question) }
+      if (event.key === 'Escape') { event.preventDefault(); close(); return }
+      if (!(event.ctrlKey || event.metaKey) || saving) return
+      if (event.key.toLowerCase() === 's') { event.preventDefault(); void save(false) }
+      if (event.key === 'Enter' && question.id) { event.preventDefault(); void save(true) }
     }
     window.addEventListener('keydown', handle)
     return () => window.removeEventListener('keydown', handle)
-  }, [question, onSave, onSaveReviewNext])
-  return <div className="modal-backdrop" role="presentation"><form className="question-editor-modal card" onSubmit={(e) => { e.preventDefault(); onSave(question) }}>
-    <header><div><p className="eyebrow">题目编辑</p><h2>{question.id ? '校对题目' : '添加题目'}</h2><span className={`status-pill ${question.reviewed ? 'published' : 'draft'}`}>{question.reviewed ? '已复核' : '待复核'}</span></div><div className="button-row"><button type="button" className="ghost" disabled={!canPrevious} onClick={() => navigate(-1)}><ChevronLeft />上一题</button><button type="button" className="ghost" disabled={!canNext} onClick={() => navigate(1)}>下一题<ChevronRight /></button><button type="button" className="ghost" aria-label="关闭" onClick={close}><X /></button></div></header>
-    <div className="question-editor-body"><aside className="question-source-panel"><h3>原题图片</h3>{question.source_asset_id ? <img className="question-source-preview" src={`/api/question-assets/${question.source_asset_id}`} alt="原题截图" /> : <p className="notice">当前题目没有原题图片</p>}{question.id && <label className="file-picker"><FileUp />{uploadingImage ? '正在上传…' : '本地图片替换'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploadingImage} onChange={async (event) => { const file = event.target.files?.[0]; if (!file || !question.id) return; setUploadingImage(true); try { const updated = await onUploadImage(question.id, file); setQuestion(JSON.parse(JSON.stringify(updated))) } finally { setUploadingImage(false) } }} /></label>}{question.recognition_confidence != null && <p>识别置信度：{Math.round(question.recognition_confidence * 100)}%</p>}{question.recognition_warnings?.map((warning) => <p className="notice warning" key={warning}>{warning}</p>)}</aside><div className="question-editor-fields">
-    <div className="question-editor-grid"><label>题型<select value={question.type} onChange={(e) => changeType(e.target.value as ExerciseQuestionType)}>{Object.entries(labels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>分值<input type="number" min="1" value={question.points} onChange={(e) => setQuestion({ ...question, points: Number(e.target.value), reviewed: false })} /></label></div>
-    <label>题面<textarea rows={7} value={question.stem_markdown} onChange={(e) => setQuestion({ ...question, stem_markdown: e.target.value, reviewed: false })} required /></label>
-    {question.source_asset_id && <label className="check-label"><input type="checkbox" checked={question.show_source_crop ?? false} onChange={(e) => setQuestion({ ...question, show_source_crop: e.target.checked })} />向学生显示原题截图</label>}
-    {(question.type === 'single_choice' || question.type === 'multiple_choice') && <section className="option-editor"><h3>选项与答案</h3>{question.options.map((option, index) => <div key={index}><input aria-label={`选项 ${index + 1} 标签`} value={option.label} onChange={(e) => updateOption(index, { label: e.target.value })} /><textarea aria-label={`选项 ${index + 1} 内容`} rows={2} value={option.content_markdown} onChange={(e) => updateOption(index, { content_markdown: e.target.value })} required /><label className="check-label"><input type={question.type === 'single_choice' ? 'radio' : 'checkbox'} name="correct-option" checked={option.correct ?? false} onChange={(e) => setQuestion((current) => ({ ...current, reviewed: false, options: current.options.map((item, itemIndex) => ({ ...item, correct: question.type === 'single_choice' ? itemIndex === index : itemIndex === index ? e.target.checked : item.correct })) }))} />正确</label><button type="button" className="danger-button" onClick={() => setQuestion({ ...question, options: question.options.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 /></button></div>)}<button type="button" className="ghost" onClick={() => setQuestion({ ...question, options: [...question.options, { label: String.fromCharCode(65 + question.options.length), content_markdown: '', correct: false, sort_order: question.options.length }] })}><Plus />添加选项</button></section>}
-    {question.type === 'true_false' && <label>正确答案<select required value={question.correct_bool == null ? '' : String(question.correct_bool)} onChange={(e) => setQuestion({ ...question, correct_bool: e.target.value === '' ? null : e.target.value === 'true', reviewed: false })}><option value="" disabled>请选择正确答案</option><option value="true">正确</option><option value="false">错误</option></select></label>}
-    {question.type === 'fill_blank' && <FillBlankEditor question={question} setQuestion={setQuestion} />}
-    {question.type === 'programming' && question.programming && <ProgrammingEditor program={question.programming} setProgram={(programming) => setQuestion({ ...question, programming, reviewed: false })} updateCase={updateCase} />}
-    <label>答案解析<textarea rows={5} value={question.explanation_markdown ?? ''} onChange={(e) => setQuestion({ ...question, explanation_markdown: e.target.value })} /></label>
-    </div></div><div className="button-row"><button type="button" className="ghost" onClick={close}>取消</button><button className="ghost">保存草稿 <small>Ctrl+S</small></button>{question.id && <button type="button" className="primary" onClick={() => onSaveReviewNext(question)}><CheckCircle2 />保存并复核下一题 <small>Ctrl+Enter</small></button>}</div>
+  }, [close, question, saving])
+  return <div className="modal-backdrop question-editor-backdrop" role="presentation"><form className="question-editor-modal card" aria-label="题目编辑器" onSubmit={(e) => { e.preventDefault(); void save(false) }}>
+    <header className="question-editor-header"><div><p className="eyebrow">题目编辑</p><div className="question-editor-title-row"><h2>{setTitle}</h2><span className={`status-pill ${question.reviewed ? 'published' : 'draft'}`}>{question.reviewed ? '已复核' : '待复核'}</span>{question.id && queueSize > 0 && <span className="question-editor-position">第 {currentPosition} / {queueSize} 题</span>}</div><p>{question.id ? '校对题面与答案后完成复核' : '添加一道新题目'}</p></div><div className="question-editor-header-actions"><button type="button" className="ghost" aria-label={sourceCollapsed ? '展开原题区域' : '收起原题区域'} title={sourceCollapsed ? '展开原题区域' : '收起原题区域'} onClick={() => setSourceCollapsed((current) => !current)}>{sourceCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}<span>{sourceCollapsed ? '展开原图' : '收起原图'}</span></button><button type="button" className="ghost editor-close" aria-label="关闭" title="关闭（Esc）" onClick={close}><X /></button></div></header>
+    <div className={`question-editor-body${sourceCollapsed ? ' source-collapsed' : ''}`}><aside className="question-source-panel">{sourceCollapsed ? <button type="button" className="source-panel-rail" aria-label="展开原题区域" onClick={() => setSourceCollapsed(false)}><PanelLeftOpen /><span>原题</span></button> : <><div className="question-source-heading"><h3>原题图片</h3>{question.source_asset_id && <label className="source-visibility-toggle"><input type="checkbox" aria-label="向学生显示原题截图" checked={question.show_source_crop ?? false} onChange={(e) => setQuestion({ ...question, show_source_crop: e.target.checked, reviewed: false })} /><span>向学生显示</span></label>}</div><div className="question-source-canvas">{question.source_asset_id ? <img className="question-source-preview" src={`/api/question-assets/${question.source_asset_id}`} alt="原题截图" /> : <p className="notice">当前题目没有原题图片</p>}</div><div className="question-source-meta">{question.id && <label className="file-picker"><FileUp />{uploadingImage ? '正在上传…' : '本地图片替换'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploadingImage} onChange={async (event) => { const file = event.target.files?.[0]; if (!file || !question.id) return; setUploadingImage(true); try { const updated = await onUploadImage(question.id, file); setQuestion(cloneQuestion(updated)) } finally { setUploadingImage(false) } }} /></label>}{question.recognition_confidence != null && <p className="recognition-confidence">识别置信度：<strong>{Math.round(question.recognition_confidence * 100)}%</strong></p>}{question.recognition_warnings?.map((warning) => <p className="notice warning" key={warning}>{warning}</p>)}</div></>}</aside><div className="question-editor-fields">
+      <section className="question-editor-section"><h3>基础信息</h3><div className="question-basic-grid"><label>题型<select value={question.type} onChange={(e) => changeType(e.target.value as ExerciseQuestionType)}>{Object.entries(labels).map(([type, label]) => <option value={type} key={type}>{label}</option>)}</select></label><label>分值<input type="number" min="1" value={question.points} onChange={(e) => setQuestion({ ...question, points: Number(e.target.value), reviewed: false })} /></label></div></section>
+      <section className="question-editor-section"><h3>题目内容</h3><label>题面<textarea className="question-stem-input" rows={8} value={question.stem_markdown} onChange={(e) => setQuestion({ ...question, stem_markdown: e.target.value, reviewed: false })} required /></label></section>
+      <section className="question-editor-section"><h3>答案设置</h3>{(question.type === 'single_choice' || question.type === 'multiple_choice') && <section className="option-editor"><h4>选择题答案</h4>{question.options.map((option, index) => <div key={index}><input aria-label={`选项 ${index + 1} 标签`} value={option.label} onChange={(e) => updateOption(index, { label: e.target.value })} /><textarea aria-label={`选项 ${index + 1} 内容`} rows={2} value={option.content_markdown} onChange={(e) => updateOption(index, { content_markdown: e.target.value })} required /><label className="check-label"><input type={question.type === 'single_choice' ? 'radio' : 'checkbox'} name="correct-option" checked={option.correct ?? false} onChange={(e) => setQuestion((current) => ({ ...current, reviewed: false, options: current.options.map((item, itemIndex) => ({ ...item, correct: question.type === 'single_choice' ? itemIndex === index : itemIndex === index ? e.target.checked : item.correct })) }))} />正确</label><button type="button" className="danger-button" aria-label={`删除选项 ${index + 1}`} onClick={() => setQuestion({ ...question, reviewed: false, options: question.options.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 /></button></div>)}<button type="button" className="ghost" onClick={() => setQuestion({ ...question, reviewed: false, options: [...question.options, { label: String.fromCharCode(65 + question.options.length), content_markdown: '', correct: false, sort_order: question.options.length }] })}><Plus />添加选项</button></section>}
+      {question.type === 'true_false' && <label>正确答案<select required value={question.correct_bool == null ? '' : String(question.correct_bool)} onChange={(e) => setQuestion({ ...question, correct_bool: e.target.value === '' ? null : e.target.value === 'true', reviewed: false })}><option value="" disabled>请选择正确答案</option><option value="true">正确</option><option value="false">错误</option></select></label>}
+      {question.type === 'fill_blank' && <FillBlankEditor question={question} setQuestion={setQuestion} />}
+      {question.type === 'programming' && question.programming && <ProgrammingEditor program={question.programming} setProgram={(programming) => setQuestion({ ...question, programming, reviewed: false })} updateCase={updateCase} />}</section>
+      <section className="question-editor-section"><h3>答案解析</h3><label>解析内容<textarea rows={5} value={question.explanation_markdown ?? ''} onChange={(e) => setQuestion({ ...question, explanation_markdown: e.target.value, reviewed: false })} /></label></section>
+    </div></div><footer className="question-editor-footer">{question.id ? <div className="question-editor-navigation"><button type="button" className="ghost" disabled={!canPrevious || saving} onClick={() => navigate(-1)}><ChevronLeft />上一题</button><span>{queueSize > 0 ? `${currentPosition} / ${queueSize}` : '当前题目'}</span><button type="button" className="ghost" disabled={!canNext || saving} onClick={() => navigate(1)}>下一题<ChevronRight /></button></div> : <span className="muted">新建题目</span>}<div className="question-editor-save-actions">{question.id ? <><button type="submit" className="ghost" disabled={saving} title="保存草稿（Ctrl/Cmd+S）">{saving ? '正在保存…' : '保存草稿'}<kbd>Ctrl+S</kbd></button><button type="button" className="primary" disabled={saving} title="保存并复核（Ctrl/Cmd+Enter）" onClick={() => void save(true)}><CheckCircle2 />{canNext ? '保存并复核下一题' : '保存并完成复核'}<kbd>Ctrl+Enter</kbd></button></> : <button type="submit" className="primary" disabled={saving}>{saving ? '正在保存…' : '保存题目'}</button>}</div></footer>
   </form></div>
 }
 
