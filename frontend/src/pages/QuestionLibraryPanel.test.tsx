@@ -81,6 +81,28 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText('第 4 页需要人工核对')).toBeInTheDocument()
   })
 
+  it('filters the review queue by pending and reviewed state', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{
+        id: 5, title: '复核题套', description: '', status: 'draft', question_count: 2, total_points: 4,
+        counts: { true_false: 2 }, questions: [
+          { id: 51, question_set_id: 5, type: 'true_false', stem_markdown: '等待复核题', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+          { id: 52, question_set_id: 5, type: 'true_false', stem_markdown: '已经复核题', points: 2, sort_order: 1, reviewed: true, correct_bool: true, options: [], programming: null },
+        ],
+      }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 复核题套' }))
+    expect(screen.getByText('等待复核题')).toBeInTheDocument()
+    expect(screen.queryByText('已经复核题')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '已复核 1' }))
+    expect(screen.getByText('已经复核题')).toBeInTheDocument()
+    expect(screen.queryByText('等待复核题')).not.toBeInTheDocument()
+  })
+
   it('reorders sets and questions and saves complete id lists', async () => {
     const sets = [
       { id: 1, title: 'A', description: '', status: 'draft' as const, question_count: 0, total_points: 0, counts: { single_choice: 0, multiple_choice: 0, true_false: 0, programming: 0 } },

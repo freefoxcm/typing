@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -11,7 +12,7 @@ from app.models import QuestionAsset
 import app.question_imports as question_imports
 from app.exercise_library import question_dict
 from app.models import Question
-from app.question_imports import _extract_pages, _import_error_detail, _json_content, _merge_candidates, _page_batches, _safe_markdown, materialize_draft, parse_pdf
+from app.question_imports import _crop_is_suspicious, _extract_pages, _import_error_detail, _json_content, _merge_candidates, _needs_focused_review, _page_batches, _safe_markdown, materialize_draft, parse_pdf
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -50,6 +51,14 @@ def test_page_batches_limit_request_size_and_overlap_boundaries():
     assert list(_page_batches(pages[:2], 1)) == [[pages[0]], [pages[1]]]
 
 
+def test_focused_review_targets_complex_low_confidence_and_bad_crops():
+    ordinary = {"type": "single_choice", "source_page": 1, "source_end_page": 1, "complete": True, "stem_markdown": "1+1", "confidence": {"stem": .98, "answer": .97, "crop": .96}, "crop_regions": [{"source_page": 1, "bbox": [.1, .1, .9, .4]}]}
+    assert _needs_focused_review(ordinary) is False
+    assert _needs_focused_review({**ordinary, "confidence": {"stem": .7}}) is True
+    assert _needs_focused_review({**ordinary, "type": "programming"}) is True
+    assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [-.1, .1, .9, .4]}]}) is True
+
+
 def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
     path = tmp_path / "paper.pdf"
     make_pdf(path)
@@ -68,6 +77,34 @@ def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
         assert question_set.questions[0].reviewed is False
         assert question_set.questions[0].source_asset_id is not None
         assert list((tmp_path / "assets").glob("question-*.png"))
+    document.close()
+    engine.dispose()
+
+
+def test_cross_page_crop_is_stitched_and_fill_blank_is_materialized(tmp_path):
+    path = tmp_path / "cross-page.pdf"
+    make_pdf(path, 2)
+    document, _ = _extract_pages(path, Settings(import_max_pages=2))
+    engine, session_factory = create_db(f"sqlite:///{tmp_path / 'cross.db'}")
+    Base.metadata.create_all(engine)
+    settings = Settings(question_asset_dir=str(tmp_path / "assets"))
+    payload = {"title": "跨页题", "questions": [{
+        "number": "1", "type": "fill_blank", "stem_markdown": "{{1}}", "points": 2,
+        "source_page": 1, "source_end_page": 2, "has_visual": True,
+        "crop_regions": [{"source_page": 1, "bbox": [0, 0, 1, .3]}, {"source_page": 2, "bbox": [0, 0, 1, .3]}],
+        "blanks": [{"position": 1, "accepted_answers": ["答案"]}],
+    }]}
+    with session_factory() as db:
+        source = QuestionAsset(storage_key="source.pdf", original_name="paper.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+        db.add(source); db.flush()
+        question_set = materialize_draft(db, settings, source, document, payload)
+        db.commit()
+        question = question_set.questions[0]
+        assert question.source_end_page == 2
+        assert json.loads(question.blanks[0].accepted_answers_json) == ["答案"]
+        asset = db.get(QuestionAsset, question.source_asset_id)
+        pixmap = pymupdf.Pixmap((tmp_path / "assets" / asset.storage_key).read_bytes())
+        assert pixmap.height > pixmap.width / 2
     document.close()
     engine.dispose()
 

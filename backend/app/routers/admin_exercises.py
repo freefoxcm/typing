@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -14,8 +15,8 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_imports import ExerciseImportResult, parse_exercise_import
-from ..exercise_library import publication_errors, question_dict, question_set_dict, replace_question
-from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite
+from ..exercise_library import publication_errors, question_dict, question_errors, question_set_dict, replace_question
+from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite, ReferenceOutputApply, ReviewWrite
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -68,6 +69,7 @@ def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
 def _sets_query():
     return select(QuestionSet).options(
         selectinload(QuestionSet.questions).selectinload(Question.options),
+        selectinload(QuestionSet.questions).selectinload(Question.blanks),
         selectinload(QuestionSet.questions).selectinload(Question.programming).selectinload(ProgrammingSpec.cases),
     ).order_by(QuestionSet.sort_order, QuestionSet.id)
 
@@ -368,9 +370,72 @@ def update_question(question_id: int, payload: QuestionWrite, _principal: Princi
     if not item:
         raise HTTPException(status_code=404, detail="题目不存在")
     _editable(db.get(QuestionSet, item.question_set_id))
-    replace_question(item, payload)
+    replace_question(item, payload.model_copy(update={"reviewed": False}))
     db.commit()
     return question_dict(db.get(Question, question_id))
+
+
+@router.patch("/api/admin/questions/{question_id}/review")
+def review_question(question_id: int, payload: ReviewWrite, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    if payload.reviewed:
+        errors = question_errors(item, require_reviewed=False)
+        if errors:
+            raise HTTPException(status_code=422, detail={"message": "题目尚不能标记为已复核", "errors": errors})
+    item.reviewed = payload.reviewed
+    db.commit()
+    return question_dict(item)
+
+
+@router.put("/api/admin/questions/{question_id}/source-image")
+async def replace_source_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    allowed = {"image/png", "image/jpeg", "image/webp", "application/octet-stream"}
+    suffix = Path(file.filename or "").suffix.lower()
+    if file.content_type not in allowed or suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=422, detail="仅支持 PNG、JPEG 或 WebP 图片")
+    limit = settings.question_image_max_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if not data or len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"题目图片不能超过 {settings.question_image_max_mb} MB")
+    try:
+        import pymupdf as fitz
+        pixmap = fitz.Pixmap(data)
+        if pixmap.width <= 0 or pixmap.height <= 0 or pixmap.width * pixmap.height > 40_000_000:
+            raise ValueError("图片尺寸无效或过大")
+        png = pixmap.tobytes("png")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="图片内容无效或无法解析") from exc
+    root = Path(settings.question_asset_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    key = f"question-upload-{item.question_set_id}-{item.id}-{uuid4().hex}.png"
+    (root / key).write_bytes(png)
+    asset = QuestionAsset(
+        question_set_id=item.question_set_id,
+        storage_key=key,
+        original_name=(file.filename or "题目图片.png")[:255],
+        mime_type="image/png",
+        kind="question",
+        size_bytes=len(png),
+    )
+    db.add(asset)
+    db.flush()
+    item.source_asset_id = asset.id
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
 
 
 @router.delete("/api/admin/questions/{question_id}", status_code=204)
@@ -395,9 +460,12 @@ def generate_reference_outputs(question_id: int, _principal: Principal = Depends
     ]
     if not item.programming.reference_solution.strip() or not candidates:
         raise HTTPException(status_code=422, detail="请先填写参考程序和有效的测试输入")
+    fingerprint = _reference_fingerprint(item)
     job_id = enqueue(settings, {
         "kind": "reference",
         "question_id": item.id,
+        "fingerprint": fingerprint,
+        "repeat_count": 2,
         "code": item.programming.reference_solution,
         "time_limit_ms": item.programming.time_limit_ms,
         "memory_limit_mb": item.programming.memory_limit_mb,
@@ -416,14 +484,67 @@ def reference_output(job_id: str, _principal: Principal = Depends(require_admin)
     if not item or not item.programming:
         raise HTTPException(status_code=404, detail="对应编程题不存在")
     by_id = {case.id: case for case in item.programming.cases}
+    cases = []
     for case_result in payload.get("cases", []):
         case = by_id.get(int(case_result.get("id") or 0))
-        if case and case_result.get("status") == "AC":
-            case.expected_output = str(case_result.get("stdout", ""))
+        if not case:
+            continue
+        cases.append({
+            **case_result,
+            "current_output": case.expected_output,
+            "candidate_output": str(case_result.get("stdout", "")),
+        })
+    return {
+        "job_id": job_id,
+        "question_id": question_id,
+        "status": payload.get("status", "failed"),
+        "stale": payload.get("fingerprint") != _reference_fingerprint(item),
+        "cases": cases,
+    }
+
+
+def _reference_fingerprint(item: Question) -> str:
+    program = item.programming
+    if not program:
+        return ""
+    value = {
+        "reference_solution": program.reference_solution,
+        "cases": [{"id": case.id, "input": case.input_data} for case in program.cases if case.input_data.strip() or case.expected_output.strip()],
+    }
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+@router.post("/api/admin/reference-output/{job_id}/apply")
+def apply_reference_output(
+    job_id: str,
+    request: ReferenceOutputApply,
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    payload = judge_result(settings, job_id)
+    if payload is None or payload.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="生成任务尚未完成或不存在")
+    item = db.get(Question, int(payload.get("question_id") or 0))
+    if not item or not item.programming:
+        raise HTTPException(status_code=404, detail="对应编程题不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    if payload.get("fingerprint") != _reference_fingerprint(item):
+        raise HTTPException(status_code=409, detail="参考程序或测试输入已修改，请重新生成输出")
+    results = {int(value.get("id") or 0): value for value in payload.get("cases", [])}
+    by_id = {case.id: case for case in item.programming.cases}
+    for case_id in request.case_ids:
+        result = results.get(case_id)
+        if case_id not in by_id or not result or result.get("status") != "AC" or not result.get("stable"):
+            raise HTTPException(status_code=422, detail=f"测试点 {case_id} 的候选输出不稳定或运行失败")
+    for case_id in request.case_ids:
+        case = by_id[case_id]
+        case.expected_output = str(results[case_id].get("stdout", ""))
+        if not case.is_sample:
             case.confirmed = False
     item.reviewed = False
     db.commit()
-    return {"job_id": job_id, "status": payload.get("status", "failed"), "cases": payload.get("cases", [])}
+    return {"ok": True, "question": question_dict(item)}
 
 
 @router.get("/api/question-assets/{asset_id}")

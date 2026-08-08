@@ -14,8 +14,9 @@
 - 独立单词练习：每轮随机洗牌，输入时同步展示美式音标、常用中文释义和计算机领域释义。
 - 单词资料缺失时可通过 OpenAI 兼容接口在后台自动补全，失败任务可重试。
 - TXT、CSV、JSON 预览导入，JSON 词库备份，CSV 成绩导出。
-- 在线习题：单选、多选、判断和 Python 编程题，支持整套练习、随机组题和错题重练。
-- PDF 试卷通过独立视觉模型识别为可校对草稿；编程题由无网络判题工作器执行公开样例和隐藏测试点。
+- 在线习题：单选、多选、判断、多空填空和 Python 编程题，支持整套练习、随机组题和错题重练。
+- PDF 试卷通过独立视觉模型识别为可校对草稿，复杂题会以高清页面二次校对；原题截图可在复核时本地替换。
+- 编程题由无网络判题工作器执行公开样例和隐藏测试点；参考输出会双跑校验并经管理员确认后写入。
 - SQLite 持久化；密码和 PIN 使用 Argon2 哈希。
 
 ## Docker 部署
@@ -50,11 +51,11 @@ docker compose logs -f judge
 
 ## 数据备份
 
-词库可在管理后台导出 JSON。完整备份应在停止容器后备份 Docker 卷中的 `/data/typing.db`：
+词库可在管理后台导出 JSON。完整备份应在停止容器后备份整个 `kidtype_data` 卷，其中包含数据库和题目图片：
 
 ```bash
 docker compose stop kidtype
-docker run --rm -v kidtype_data:/data -v "$PWD":/backup alpine cp /data/typing.db /backup/typing.db
+docker run --rm -v kidtype_data:/data -v "$PWD":/backup alpine tar -czf /backup/kidtype_data.tar.gz -C /data .
 docker compose start kidtype
 ```
 

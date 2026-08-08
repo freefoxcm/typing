@@ -17,7 +17,7 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
 }) {
   const navigate = useNavigate()
   const [selected, setSelected] = useState<number[]>(() => sets.map((item) => item.id))
-  const [counts, setCounts] = useState<Record<ExerciseQuestionType, number>>({ single_choice: 5, multiple_choice: 0, true_false: 5, programming: 0 })
+  const [counts, setCounts] = useState<Record<ExerciseQuestionType, number>>({ single_choice: 5, multiple_choice: 0, true_false: 5, fill_blank: 0, programming: 0 })
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
   const [randomOpen, setRandomOpen] = useState(false)
@@ -29,12 +29,12 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
   const availableByType = useMemo(() => sets.filter((item) => selected.includes(item.id)).reduce<Record<ExerciseQuestionType, number>>((totals, item) => {
     for (const type of Object.keys(totals) as ExerciseQuestionType[]) totals[type] += item.counts[type] ?? 0
     return totals
-  }, { single_choice: 0, multiple_choice: 0, true_false: 0, programming: 0 }), [selected, sets])
+  }, { single_choice: 0, multiple_choice: 0, true_false: 0, fill_blank: 0, programming: 0 }), [selected, sets])
   const randomError = useMemo(() => {
     if (!selected.length) return '请至少选择一个题套'
     if (Object.values(counts).every((count) => count === 0)) return '随机练习至少需要一道题'
     const exceeded = (Object.keys(counts) as ExerciseQuestionType[]).find((type) => counts[type] > availableByType[type])
-    return exceeded ? `${{ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', programming: '编程题' }[exceeded]}最多可选 ${availableByType[exceeded]} 道` : ''
+    return exceeded ? `${{ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', programming: '编程题' }[exceeded]}最多可选 ${availableByType[exceeded]} 道` : ''
   }, [availableByType, counts, selected.length])
 
   useEffect(() => {
@@ -102,7 +102,7 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
       <header><div><p className="eyebrow">个性化练习</p><h2 id="random-practice-title">随机组题</h2><p>选择题套，再决定每种题型抽取多少道。</p></div><button className="ghost" aria-label="关闭随机组题" onClick={() => { setRandomOpen(false); window.setTimeout(() => randomTriggerRef.current?.focus()) }}><X /></button></header>
       <section><h3>选择题套</h3><div className="random-set-options">{sets.map((item) => <label className="check-label" key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggle(item.id)} />{item.title}</label>)}</div></section>
       <section><h3>设置题量</h3><div className="random-count-grid">{([
-        ['single_choice', '单选'], ['multiple_choice', '多选'], ['true_false', '判断'], ['programming', '编程'],
+        ['single_choice', '单选'], ['multiple_choice', '多选'], ['true_false', '判断'], ['fill_blank', '填空'], ['programming', '编程'],
       ] as [ExerciseQuestionType, string][]).map(([type, label]) => <label key={type}>{type === 'programming' && <Code2 />}{label}<span>可用 {availableByType[type]}</span><input aria-label={`${label}题数量`} type="number" min="0" max={availableByType[type]} value={counts[type]} onChange={(e) => setCounts({ ...counts, [type]: Math.max(0, Number(e.target.value)) })} /></label>)}</div></section>
       {randomError && <p className="random-validation" role="alert">{randomError}</p>}
       {error && <p className="notice error">{error}</p>}

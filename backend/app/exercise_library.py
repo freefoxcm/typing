@@ -1,12 +1,13 @@
 import json
 import html
+import re
 from typing import Any
 
 from .exercise_schemas import QuestionWrite
-from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionOption, QuestionSet
+from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionBlank, QuestionOption, QuestionSet
 
 
-QUESTION_TYPES = {"single_choice", "multiple_choice", "true_false", "programming"}
+QUESTION_TYPES = {"single_choice", "multiple_choice", "true_false", "fill_blank", "programming"}
 
 
 def display_text(value: str | None) -> str:
@@ -23,6 +24,13 @@ def option_dict(item: QuestionOption, include_correct: bool) -> dict[str, Any]:
     }
     if include_correct:
         result["correct"] = item.correct
+    return result
+
+
+def blank_dict(item: QuestionBlank, include_answers: bool) -> dict[str, Any]:
+    result: dict[str, Any] = {"id": item.id, "position": item.position}
+    if include_answers:
+        result["accepted_answers"] = loads_json(item.accepted_answers_json, [])
     return result
 
 
@@ -51,9 +59,13 @@ def question_dict(question: Question, include_answers: bool = True) -> dict[str,
         "points": question.points,
         "sort_order": question.sort_order,
         "source_page": question.source_page,
+        "source_end_page": question.source_end_page,
+        "recognition_confidence": question.recognition_confidence,
+        "recognition_warnings": loads_json(question.recognition_warnings_json, []),
         "source_asset_id": question.source_asset_id,
         "show_source_crop": question.show_source_crop,
         "options": [option_dict(item, include_answers) for item in question.options],
+        "blanks": [blank_dict(item, include_answers) for item in question.blanks],
     }
     if include_answers:
         result.update({"reviewed": question.reviewed, "correct_bool": question.correct_bool})
@@ -106,9 +118,22 @@ def replace_question(question: Question, payload: QuestionWrite) -> None:
     question.reviewed = payload.reviewed
     question.correct_bool = payload.correct_bool if payload.type == "true_false" else None
     question.source_page = payload.source_page
+    question.source_end_page = payload.source_end_page
+    question.recognition_confidence = payload.recognition_confidence
+    question.recognition_warnings_json = json.dumps(payload.recognition_warnings, ensure_ascii=False)
     question.source_asset_id = payload.source_asset_id
     question.show_source_crop = payload.show_source_crop
     question.options = [QuestionOption(**item.model_dump()) for item in payload.options] if payload.type in {"single_choice", "multiple_choice"} else []
+    if payload.type == "fill_blank":
+        existing = {item.position: item for item in question.blanks}
+        next_blanks: list[QuestionBlank] = []
+        for item in payload.blanks:
+            blank = existing.get(item.position) or QuestionBlank(position=item.position)
+            blank.accepted_answers_json = json.dumps(item.accepted_answers, ensure_ascii=False)
+            next_blanks.append(blank)
+        question.blanks = next_blanks
+    else:
+        question.blanks = []
     if payload.type == "programming" and payload.programming:
         values = payload.programming.model_dump(exclude={"cases"})
         spec = question.programming or ProgrammingSpec()
@@ -120,41 +145,54 @@ def replace_question(question: Question, payload: QuestionWrite) -> None:
         question.programming = None
 
 
+def question_errors(question: Question, prefix: str = "题目", require_reviewed: bool = True) -> list[str]:
+    errors: list[str] = []
+    if require_reviewed and not question.reviewed:
+        errors.append(f"{prefix}尚未复核")
+    if question.points <= 0:
+        errors.append(f"{prefix}分值必须大于零")
+    if question.type in {"single_choice", "multiple_choice"}:
+        correct = sum(item.correct for item in question.options)
+        if len(question.options) < 2:
+            errors.append(f"{prefix}至少需要两个选项")
+        if question.type == "single_choice" and correct != 1:
+            errors.append(f"{prefix}必须且只能有一个正确选项")
+        if question.type == "multiple_choice" and correct < 1:
+            errors.append(f"{prefix}至少需要一个正确选项")
+    elif question.type == "true_false" and question.correct_bool is None:
+        errors.append(f"{prefix}缺少判断答案")
+    elif question.type == "fill_blank":
+        markers = [int(item) for item in re.findall(r"\{\{(\d+)\}\}", question.stem_markdown)]
+        positions = [item.position for item in question.blanks]
+        if not positions or markers != positions or positions != list(range(1, len(positions) + 1)):
+            errors.append(f"{prefix}填空占位符与答案配置不一致")
+        for blank in question.blanks:
+            if not [item for item in loads_json(blank.accepted_answers_json, []) if str(item).strip()]:
+                errors.append(f"{prefix}第 {blank.position} 空缺少可接受答案")
+    elif question.type == "programming":
+        if not question.programming or not question.programming.reference_solution.strip():
+            errors.append(f"{prefix}缺少参考程序")
+            return errors
+        empty_samples = [
+            case for case in question.programming.cases
+            if case.is_sample and not case.input_data.strip() and not case.expected_output.strip()
+        ]
+        if empty_samples:
+            errors.append(f"{prefix}存在空的公开样例，请补充输入输出或删除该样例")
+        hidden = [case for case in question.programming.cases if not case.is_sample and case.confirmed]
+        if not hidden:
+            errors.append(f"{prefix}至少需要一个已确认隐藏测试点")
+        elif sum(case.weight for case in hidden) != question.points:
+            errors.append(f"{prefix}隐藏测试点权重之和必须等于题目分值")
+    return errors
+
+
 def publication_errors(question_set: QuestionSet) -> list[str]:
     errors: list[str] = []
     if not question_set.questions:
         return ["题套至少需要一道题"]
     for index, question in enumerate(question_set.questions, start=1):
-        prefix = f"第 {index} 题"
-        if not question.reviewed:
-            errors.append(f"{prefix}尚未复核")
-        if question.points <= 0:
-            errors.append(f"{prefix}分值必须大于零")
-        if question.type in {"single_choice", "multiple_choice"}:
-            correct = sum(item.correct for item in question.options)
-            if len(question.options) < 2:
-                errors.append(f"{prefix}至少需要两个选项")
-            if question.type == "single_choice" and correct != 1:
-                errors.append(f"{prefix}必须且只能有一个正确选项")
-            if question.type == "multiple_choice" and correct < 1:
-                errors.append(f"{prefix}至少需要一个正确选项")
-        elif question.type == "true_false" and question.correct_bool is None:
-            errors.append(f"{prefix}缺少判断答案")
-        elif question.type == "programming":
-            if not question.programming or not question.programming.reference_solution.strip():
-                errors.append(f"{prefix}缺少参考程序")
-                continue
-            empty_samples = [
-                case for case in question.programming.cases
-                if case.is_sample and not case.input_data.strip() and not case.expected_output.strip()
-            ]
-            if empty_samples:
-                errors.append(f"{prefix}存在空的公开样例，请补充输入输出或删除该样例")
-            hidden = [case for case in question.programming.cases if not case.is_sample and case.confirmed]
-            if not hidden:
-                errors.append(f"{prefix}至少需要一个已确认隐藏测试点")
-            elif sum(case.weight for case in hidden) != question.points:
-                errors.append(f"{prefix}隐藏测试点权重之和必须等于题目分值")
+        errors.extend(question_errors(question, f"第 {index} 题"))
     return errors
 
 

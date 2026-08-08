@@ -52,8 +52,28 @@ describe('ExercisePage', () => {
     fireEvent.click(screen.getByText('input'))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/exercises/sessions/7/answers/71',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ selected_option_ids: [32], bool_answer: null, code: '' }) }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ selected_option_ids: [32], bool_answer: null, blank_answers: [], code: '' }) }),
     ))
+  })
+
+  it('renders multiple fill blanks and saves answers by position', async () => {
+    const fillSession: ExerciseSession = {
+      id: 7, title: '填空题', mode: 'set', status: 'in_progress', score: null, max_score: 4,
+      items: [{
+        id: 73, sort_order: 0, points: 4,
+        question: { id: 5, type: 'fill_blank', stem_markdown: '{{1}} 使用 {{2}} 输出。', points: 4, sort_order: 0, options: [], blanks: [{ id: 1, position: 1 }, { id: 2, position: 2 }] },
+        answer: { selected_option_ids: [], bool_answer: null, blank_answers: ['', ''], code: '', status: 'unanswered' },
+      }],
+    }
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? fillSession : { ok: true })
+    renderPage()
+    const first = await screen.findByLabelText('第 1 空')
+    fireEvent.change(first, { target: { value: 'Python' } })
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      '/api/exercises/sessions/7/answers/73',
+      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, blank_answers: ['Python', ''], code: '' }) }),
+    ))
+    expect(screen.getByLabelText('第 2 空')).toBeInTheDocument()
   })
 
   it('shows solutions and awarded points only for a completed session', async () => {
@@ -115,7 +135,7 @@ describe('ExercisePage', () => {
     fireEvent.blur(editor)
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/exercises/sessions/7/answers/72',
-      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, code: 'for i in range(3):\n    print(i)' }) }),
+      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, blank_answers: [], code: 'for i in range(3):\n    print(i)' }) }),
     ))
     fireEvent.change(editor, { target: { value: '' } })
     expect(editor).toHaveValue('')
@@ -130,7 +150,7 @@ describe('ExercisePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存并退出' }))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/exercises/sessions/7/answers/72',
-      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, code: 'print("saved")' }) }),
+      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, blank_answers: [], code: 'print("saved")' }) }),
     ))
     expect(await screen.findByText('学生首页')).toBeInTheDocument()
   })

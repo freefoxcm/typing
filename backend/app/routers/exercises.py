@@ -31,6 +31,7 @@ router = APIRouter(prefix="/api/exercises", tags=["exercises"])
 def _published_sets_query():
     return select(QuestionSet).where(QuestionSet.status == "published").options(
         selectinload(QuestionSet.questions).selectinload(Question.options),
+        selectinload(QuestionSet.questions).selectinload(Question.blanks),
         selectinload(QuestionSet.questions).selectinload(Question.programming).selectinload(ProgrammingSpec.cases),
     )
 
@@ -54,6 +55,8 @@ def _public_snapshot(snapshot: dict[str, Any], reveal: bool) -> dict[str, Any]:
         data["explanation_markdown"] = ""
         for option in data.get("options", []):
             option.pop("correct", None)
+        for blank in data.get("blanks", []):
+            blank.pop("accepted_answers", None)
         if program:
             program["reference_solution"] = ""
             program["cases"] = [case for case in program.get("cases", []) if case.get("is_sample")]
@@ -72,11 +75,12 @@ def _public_snapshot(snapshot: dict[str, Any], reveal: bool) -> dict[str, Any]:
 
 def _answer_dict(answer: ExerciseAnswer | None, reveal: bool) -> dict[str, Any]:
     if not answer:
-        return {"selected_option_ids": [], "bool_answer": None, "code": "", "status": "unanswered"}
+        return {"selected_option_ids": [], "bool_answer": None, "blank_answers": [], "code": "", "status": "unanswered"}
     values = loads_json(answer.answer_json, {})
     result = {
         "selected_option_ids": values.get("selected_option_ids", []),
         "bool_answer": values.get("bool_answer"),
+        "blank_answers": values.get("blank_answers", []),
         "code": answer.code,
         "status": answer.status,
     }
@@ -209,7 +213,7 @@ def _select_questions(db: Session, child_id: int, payload: SessionCreate) -> tup
         raise HTTPException(status_code=422, detail="当前没有未掌握错题")
     questions = db.scalars(
         select(Question).where(Question.id.in_(wrong_ids)).options(
-            selectinload(Question.options), selectinload(Question.programming).selectinload(ProgrammingSpec.cases), selectinload(Question.question_set)
+            selectinload(Question.options), selectinload(Question.blanks), selectinload(Question.programming).selectinload(ProgrammingSpec.cases), selectinload(Question.question_set)
         )
     ).unique().all()
     random.shuffle(questions)
@@ -289,8 +293,8 @@ def save_answer(session_id: int, item_id: int, payload: AnswerWrite, principal: 
     option_ids = {int(option["id"]) for option in snapshot.get("options", [])}
     if any(option_id not in option_ids for option_id in payload.selected_option_ids):
         raise HTTPException(status_code=422, detail="答案包含无效选项")
-    answer_json = json.dumps({"selected_option_ids": payload.selected_option_ids, "bool_answer": payload.bool_answer}, ensure_ascii=False)
-    status = "answered" if payload.selected_option_ids or payload.bool_answer is not None or payload.code.strip() else "unanswered"
+    answer_json = json.dumps({"selected_option_ids": payload.selected_option_ids, "bool_answer": payload.bool_answer, "blank_answers": payload.blank_answers}, ensure_ascii=False)
+    status = "answered" if payload.selected_option_ids or payload.bool_answer is not None or any(item.strip() for item in payload.blank_answers) or payload.code.strip() else "unanswered"
     if db.get_bind().dialect.name == "sqlite":
         statement = sqlite_insert(ExerciseAnswer).values(
             session_item_id=item.id,
@@ -362,9 +366,20 @@ def _score_objective(item: ExerciseSessionItem, answer: ExerciseAnswer) -> None:
         correct = expected == actual
     elif kind == "true_false":
         correct = values.get("bool_answer") is not None and values.get("bool_answer") == snapshot.get("correct_bool")
+    elif kind == "fill_blank":
+        actual = [str(value).replace("\r\n", "\n").replace("\r", "\n").strip() for value in values.get("blank_answers", [])]
+        blanks = snapshot.get("blanks", [])
+        per_blank = []
+        for index, blank in enumerate(blanks):
+            expected = [str(value).replace("\r\n", "\n").replace("\r", "\n").strip() for value in blank.get("accepted_answers", [])]
+            per_blank.append(index < len(actual) and actual[index] in expected)
+        correct = bool(blanks) and len(actual) == len(blanks) and all(per_blank)
     answer.status = "correct" if correct else "incorrect"
     answer.awarded_points = item.points if correct else 0
-    answer.details_json = json.dumps({"correct": correct}, ensure_ascii=False)
+    details = {"correct": correct}
+    if kind == "fill_blank":
+        details["blank_correct"] = per_blank
+    answer.details_json = json.dumps(details, ensure_ascii=False)
 
 
 def _update_wrong(db: Session, child_id: int, item: ExerciseSessionItem, full_credit: bool) -> None:

@@ -14,7 +14,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .config import Settings
-from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionImportJob, QuestionOption, QuestionSet
+from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionBlank, QuestionImportJob, QuestionOption, QuestionSet
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -111,6 +111,7 @@ def _question_type(value: Any) -> str:
         "single": "single_choice", "single_choice": "single_choice", "单选": "single_choice", "单选题": "single_choice",
         "multiple": "multiple_choice", "multiple_choice": "multiple_choice", "多选": "multiple_choice", "多选题": "multiple_choice",
         "true_false": "true_false", "judgment": "true_false", "判断": "true_false", "判断题": "true_false",
+        "fill_blank": "fill_blank", "blank": "fill_blank", "填空": "fill_blank", "填空题": "fill_blank",
         "programming": "programming", "code": "programming", "编程": "programming", "编程题": "programming",
     }
     return aliases.get(text, "single_choice")
@@ -127,7 +128,7 @@ def _extract_pages(path: Path, settings: Settings) -> tuple[Any, list[dict[str, 
         raise ValueError(f"PDF 超过 {settings.import_max_pages} 页限制")
     pages: list[dict[str, Any]] = []
     for index, page in enumerate(document):
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         pages.append({
             "number": index + 1,
             "text": page.get_text("text")[:30000],
@@ -149,10 +150,13 @@ async def _request_batch(
         '"page_inventory":[{"source_page":1,"questions":[{"candidate_id":"p1-q1",'
         '"number":"1","section":"一、选择题","type":"single_choice"}]}],"questions":[{'
         '"candidate_id":"p1-q1","number":"1","section":"一、选择题",'
-        '"type":"single_choice|multiple_choice|true_false|programming",'
+        '"type":"single_choice|multiple_choice|true_false|fill_blank|programming",'
         '"stem_markdown":"题面","explanation_markdown":"解析","points":2,"correct_bool":null,'
         '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0,0,1,1],'
+        '"crop_regions":[{"source_page":1,"bbox":[0,0,1,1]}],'
+        '"confidence":{"stem":0.95,"answer":0.95,"crop":0.95},'
         '"options":[{"label":"A","content_markdown":"选项","correct":true}],'
+        '"blanks":[{"position":1,"accepted_answers":["答案","等价答案"]}],'
         '"programming":{"input_markdown":"","output_markdown":"","constraints_markdown":"",'
         '"starter_code":"","reference_solution":"","time_limit_ms":1000,"memory_limit_mb":128,'
         '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":""}]}}]}。'
@@ -161,6 +165,8 @@ async def _request_batch(
         "一道编程题的题面、小问、代码、样例和续页必须合并为同一题，除非试卷明确印有新题号和独立分值。"
         "题目被截断或续页不足时 complete=false，source_end_page 是实际覆盖的最后页。"
         "bbox 使用起始页的相对坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块和原始缩进。"
+        "填空题将每个印刷空格在题面中写成连续的 {{1}}、{{2}}，blanks 与占位符一一对应。"
+        "crop_regions 必须覆盖完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
@@ -301,13 +307,111 @@ def _question_key(raw: dict[str, Any]) -> tuple[str, str, int]:
 def _candidate_score(raw: dict[str, Any]) -> int:
     program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
     options = raw.get("options") if isinstance(raw.get("options"), list) else []
+    blanks = raw.get("blanks") if isinstance(raw.get("blanks"), list) else []
     return (
         (100000 if raw.get("complete", True) else 0)
         + len(str(raw.get("stem_markdown") or ""))
         + len(str(raw.get("explanation_markdown") or ""))
         + len(json.dumps(program, ensure_ascii=False))
         + len(options) * 100
+        + len(blanks) * 100
     )
+
+
+def _confidence_value(raw: dict[str, Any]) -> float | None:
+    value = raw.get("confidence")
+    if isinstance(value, dict):
+        values = []
+        for item in value.values():
+            try:
+                values.append(float(item))
+            except (TypeError, ValueError):
+                pass
+        return min(values) if values else None
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _crop_is_suspicious(raw: dict[str, Any]) -> bool:
+    regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox")}]
+    if not isinstance(regions, list) or not regions:
+        return True
+    for region in regions:
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return True
+        try:
+            x0, y0, x1, y1 = [float(item) for item in bbox]
+        except (TypeError, ValueError):
+            return True
+        if x0 < 0 or y0 < 0 or x1 > 1 or y1 > 1 or x1 <= x0 or y1 <= y0 or (x1 - x0) * (y1 - y0) < .005:
+            return True
+    return False
+
+
+def _needs_focused_review(raw: dict[str, Any]) -> bool:
+    kind = _question_type(raw.get("type"))
+    confidence = _confidence_value(raw)
+    stem = str(raw.get("stem_markdown") or "")
+    return bool(
+        kind in {"fill_blank", "programming"}
+        or raw.get("has_visual")
+        or not raw.get("complete", True)
+        or _positive_int(raw.get("source_end_page"), 1) > _positive_int(raw.get("source_page"), 1)
+        or confidence is not None and confidence < .9
+        or _crop_is_suspicious(raw)
+        or "```" in stem or "$" in stem
+    )
+
+
+async def _request_focused_review(settings: Settings, document: Any, raw: dict[str, Any]) -> dict[str, Any]:
+    start = _positive_int(raw.get("source_page"), 1)
+    end = min(document.page_count, max(start, _positive_int(raw.get("source_end_page"), start)))
+    content: list[dict[str, Any]] = [{
+        "type": "text",
+        "text": (
+            "请对照高清原页复核这一道题。纠正题面、选项、答案、填空占位符、代码缩进和跨页范围，"
+            "并重新给出覆盖完整题目的逐页 crop_regions。不得新增题目。只返回与原结构相同、questions 仅含一道题的严格 JSON。\n"
+            + json.dumps({"questions": [raw]}, ensure_ascii=False, default=str)
+        ),
+    }]
+    import pymupdf as fitz
+    for page_number in range(start, end + 1):
+        page = document[page_number - 1]
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+        content.append({"type": "text", "text": f"第 {page_number} 页高清原图"})
+        content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(pixmap.tobytes("png")).decode("ascii")}})
+    endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
+    body = _model_request_body(settings, [
+        {"role": "system", "content": "你是严谨的试卷逐题校对员，只输出一个严格 JSON 对象。"},
+        {"role": "user", "content": content},
+    ])
+    async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
+        response = await client.post(endpoint, headers=headers, json=body)
+        response.raise_for_status()
+    payload = _json_content(str(response.json()["choices"][0]["message"].get("content") or ""))
+    questions = payload.get("questions") or []
+    if len(questions) != 1 or not isinstance(questions[0], dict):
+        raise ValueError("单题高清复核未返回唯一题目")
+    reviewed = questions[0]
+    if _question_type(reviewed.get("type")) != _question_type(raw.get("type")):
+        raise ValueError("单题高清复核改变了题型")
+    if not str(reviewed.get("stem_markdown") or "").strip() or _crop_is_suspicious(reviewed):
+        raise ValueError("单题高清复核返回的题面或裁剪区域无效")
+    kind = _question_type(reviewed.get("type"))
+    if kind in {"single_choice", "multiple_choice"} and len(reviewed.get("options") or []) < 2:
+        raise ValueError("单题高清复核缺少选择题选项")
+    if kind == "fill_blank":
+        markers = re.findall(r"\{\{\d+\}\}", str(reviewed.get("stem_markdown") or ""))
+        if not markers or len(markers) != len(reviewed.get("blanks") or []):
+            raise ValueError("单题高清复核的填空占位符与答案不一致")
+    if kind == "programming" and not isinstance(reviewed.get("programming"), dict):
+        raise ValueError("单题高清复核缺少编程题规格")
+    reviewed["_candidate_id"] = raw.get("_candidate_id")
+    return reviewed
 
 
 def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -320,6 +424,12 @@ def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     if _question_type(result.get("type")) in {"single_choice", "multiple_choice"}:
         result["options"] = max(
             (item.get("options") for item in group if isinstance(item.get("options"), list)),
+            key=len,
+            default=[],
+        )
+    if _question_type(result.get("type")) == "fill_blank":
+        result["blanks"] = max(
+            (item.get("blanks") for item in group if isinstance(item.get("blanks"), list)),
             key=len,
             default=[],
         )
@@ -555,6 +665,23 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append("题目元数据自动校对失败，已使用本地规则合并，请重点检查跨页题")
         merged, merge_warnings, merged_count = _merge_candidates(candidates, reconciliation)
         warnings.extend(merge_warnings)
+        focused_count = 0
+        for index, raw in enumerate(list(merged)):
+            raw.setdefault("_recognition_warnings", [])
+            if not _needs_focused_review(raw):
+                continue
+            try:
+                reviewed = await _request_focused_review(settings, document, raw)
+                reviewed.setdefault("source_page", raw.get("source_page"))
+                reviewed.setdefault("source_end_page", raw.get("source_end_page"))
+                reviewed["_recognition_warnings"] = list(raw.get("_recognition_warnings") or [])
+                merged[index] = reviewed
+                focused_count += 1
+            except Exception as exc:
+                detail = f"第 {raw.get('source_page')} 页题目 {raw.get('number') or index + 1} 高清复核失败，请人工核对"
+                raw["_recognition_warnings"].append(detail)
+                warnings.append(detail)
+                logger.warning("Focused question review failed: %s", _import_error_detail(exc))
         for page_number, expected in expected_by_page.items():
             actual = sum(int(item.get("source_page") or 0) == page_number for item in merged)
             if actual != expected:
@@ -564,7 +691,7 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append(f"第 {item.get('source_page')} 页的题目 {item.get('number') or ''} 可能不完整")
         # Preserve order while removing repeated diagnostics.
         warnings = list(dict.fromkeys(item for item in warnings if item.strip()))[:100]
-        counts = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "programming")}
+        counts = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "fill_blank", "programming")}
         for raw in merged:
             kind = _question_type(raw.get("type"))
             counts[kind] = counts.get(kind, 0) + 1
@@ -576,6 +703,7 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
             "inventory_count": sum(expected_by_page.values()),
             "candidate_count": len(candidates),
             "merged_count": merged_count,
+            "focused_review_count": focused_count,
         }
         if not combined["questions"]:
             raise ValueError("没有识别到题目")
@@ -586,17 +714,36 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
 
 
 def _save_crop(db: Session, settings: Settings, question_set_id: int, document: Any, raw: dict[str, Any], index: int) -> int | None:
-    if not raw.get("has_visual") and not raw.get("bbox"):
+    if not raw.get("has_visual") and not raw.get("bbox") and not raw.get("crop_regions"):
         return None
     try:
         import pymupdf as fitz
-        page_number = max(1, int(raw.get("source_page") or 1))
-        page = document[page_number - 1]
-        bbox = raw.get("bbox") or [0, 0, 1, 1]
-        x0, y0, x1, y1 = [float(value) for value in bbox]
-        rect = fitz.Rect(x0 * page.rect.width, y0 * page.rect.height, x1 * page.rect.width, y1 * page.rect.height)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.75, 1.75), clip=rect, alpha=False)
-        data = pixmap.tobytes("png")
+        regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox") or [0, 0, 1, 1]}]
+        crops: list[bytes] = []
+        sizes: list[tuple[int, int]] = []
+        for region in regions:
+            page_number = max(1, int(region.get("source_page") or raw.get("source_page") or 1))
+            page = document[page_number - 1]
+            x0, y0, x1, y1 = [float(value) for value in (region.get("bbox") or [0, 0, 1, 1])]
+            x0, y0 = max(0, x0 - .02), max(0, y0 - .02)
+            x1, y1 = min(1, x1 + .02), min(1, y1 + .02)
+            if x1 <= x0 or y1 <= y0:
+                raise ValueError("无效裁剪区域")
+            rect = fitz.Rect(x0 * page.rect.width, y0 * page.rect.height, x1 * page.rect.width, y1 * page.rect.height)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+            crops.append(pixmap.tobytes("png"))
+            sizes.append((pixmap.width, pixmap.height))
+        if len(crops) == 1:
+            data = crops[0]
+        else:
+            canvas = fitz.open()
+            target = canvas.new_page(width=max(width for width, _ in sizes), height=sum(height for _, height in sizes))
+            top = 0
+            for crop, (width, height) in zip(crops, sizes):
+                target.insert_image(fitz.Rect(0, top, width, top + height), stream=crop)
+                top += height
+            data = target.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False).tobytes("png")
+            canvas.close()
         key = f"question-{question_set_id}-{index}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.png"
         root = Path(settings.question_asset_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -635,6 +782,9 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
             reviewed=False,
             correct_bool=raw.get("correct_bool") if kind == "true_false" else None,
             source_page=_positive_int(raw.get("source_page"), 1),
+            source_end_page=_positive_int(raw.get("source_end_page"), _positive_int(raw.get("source_page"), 1)),
+            recognition_confidence=_confidence_value(raw),
+            recognition_warnings_json=json.dumps(raw.get("_recognition_warnings") or [], ensure_ascii=False),
             show_source_crop=bool(raw.get("has_visual")),
         )
         db.add(question)
@@ -647,6 +797,15 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
                     content_markdown=_safe_markdown(option.get("content_markdown"), 10000) or "（待补充）",
                     correct=bool(option.get("correct")),
                     sort_order=option_index,
+                ))
+        elif kind == "fill_blank":
+            for blank_index, blank in enumerate(raw.get("blanks") or [], start=1):
+                if not isinstance(blank, dict):
+                    continue
+                answers = [str(value).strip() for value in blank.get("accepted_answers") or [] if str(value).strip()]
+                question.blanks.append(QuestionBlank(
+                    position=_positive_int(blank.get("position"), blank_index),
+                    accepted_answers_json=json.dumps(list(dict.fromkeys(answers)), ensure_ascii=False),
                 ))
         elif kind == "programming":
             program = raw.get("programming") or {}

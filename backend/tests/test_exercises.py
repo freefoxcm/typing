@@ -1,4 +1,5 @@
 import json
+import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -74,6 +75,89 @@ def create_objective_set(client: TestClient) -> tuple[int, int, int]:
     published = client.post(f"/api/admin/question-sets/{question_set['id']}/publish")
     assert published.status_code == 200
     return question_set["id"], single.json()["id"], judgment.json()["id"]
+
+
+def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        create_child(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "填空练习", "description": ""}).json()
+        payload = {
+            "type": "fill_blank", "stem_markdown": "{{1}} 使用 {{2}} 输出内容。", "explanation_markdown": "Python 使用 print。",
+            "points": 4, "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": True,
+            "options": [], "blanks": [
+                {"position": 1, "accepted_answers": ["Python", "python"]},
+                {"position": 2, "accepted_answers": ["print"]},
+            ], "programming": None,
+        }
+        created = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=payload)
+        assert created.status_code == 201, created.text
+        question_id = created.json()["id"]
+
+        updated = client.put(f"/api/admin/questions/{question_id}", json={**payload, "reviewed": True, "explanation_markdown": "已修改"})
+        assert updated.status_code == 200 and updated.json()["reviewed"] is False
+        reviewed = client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True})
+        assert reviewed.status_code == 200 and reviewed.json()["reviewed"] is True
+
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        image = client.put(f"/api/admin/questions/{question_id}/source-image", files={"file": ("replacement.png", png, "image/png")})
+        assert image.status_code == 200, image.text
+        assert image.json()["source_asset_id"] and image.json()["reviewed"] is False
+        assert client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True}).status_code == 200
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
+
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [question_set["id"]], "counts": {}}).json()
+        item = session["items"][0]
+        assert "accepted_answers" not in item["question"]["blanks"][0]
+        saved = client.post(f"/api/exercises/sessions/{session['id']}/answers/{item['id']}", json={
+            "selected_option_ids": [], "bool_answer": None, "blank_answers": [" Python ", "print"], "code": "",
+        })
+        assert saved.status_code == 200
+        assert client.post(f"/api/exercises/sessions/{session['id']}/submit").json()["status"] == "completed"
+        result = client.get(f"/api/exercises/sessions/{session['id']}/result").json()
+        assert result["score"] == 4
+        assert result["items"][0]["answer"]["details"]["blank_correct"] == [True, True]
+        assert result["items"][0]["question"]["blanks"][0]["accepted_answers"] == ["Python", "python"]
+
+
+def test_reference_output_requires_stable_preview_and_explicit_apply(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "输出预览", "description": ""}).json()
+        question = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "输出两倍。", "explanation_markdown": "", "points": 10,
+            "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [], "blanks": [],
+            "programming": {
+                "input_markdown": "整数", "output_markdown": "两倍", "constraints_markdown": "", "starter_code": "",
+                "reference_solution": "print(int(input()) * 2)", "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [{"input_data": "3\n", "expected_output": "old\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""}],
+            },
+        }).json()
+        queued = client.post(f"/api/admin/questions/{question['id']}/reference-output").json()
+        incoming = tmp_path / "judge" / "incoming" / f"{queued['job_id']}.json"
+        job = json.loads(incoming.read_text(encoding="utf-8"))
+        case_id = job["cases"][0]["id"]
+        outgoing = tmp_path / "judge" / "outgoing"
+        outgoing.mkdir(parents=True, exist_ok=True)
+        (outgoing / f"{queued['job_id']}.json").write_text(json.dumps({
+            "job_id": queued["job_id"], "kind": "reference", "status": "complete", "question_id": question["id"],
+            "fingerprint": job["fingerprint"], "cases": [{"id": case_id, "status": "AC", "stable": True, "stdout": "6\n", "stderr": "", "runs": []}],
+        }), encoding="utf-8")
+
+        preview = client.get(f"/api/admin/reference-output/{queued['job_id']}").json()
+        assert preview["stale"] is False
+        assert preview["cases"][0]["current_output"] == "old\n"
+        assert preview["cases"][0]["candidate_output"] == "6\n"
+        unchanged = client.get(f"/api/admin/question-sets/{question_set['id']}").json()
+        assert unchanged["questions"][0]["programming"]["cases"][0]["expected_output"] == "old\n"
+
+        applied = client.post(f"/api/admin/reference-output/{queued['job_id']}/apply", json={"case_ids": [case_id]})
+        assert applied.status_code == 200, applied.text
+        saved = applied.json()["question"]
+        assert saved["programming"]["cases"][0]["expected_output"] == "6\n"
+        assert saved["programming"]["cases"][0]["confirmed"] is False
+        assert saved["reviewed"] is False
 
 
 def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):

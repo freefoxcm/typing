@@ -104,11 +104,25 @@ def execute(job: dict) -> dict:
     time_ms = max(100, min(MAX_TIME_MS, int(job.get("time_limit_ms") or 1000)))
     memory_mb = max(32, min(MAX_MEMORY_MB, int(job.get("memory_limit_mb") or 128)))
     output_limit = max(1024, min(1024 * 1024, int(job.get("output_limit_bytes") or 65536)))
-    cases = [run_case(str(job.get("code", "")), case, str(job.get("kind", "submission")), time_ms, memory_mb, output_limit) for case in job.get("cases", [])]
+    kind = str(job.get("kind", "submission"))
+    if kind == "reference":
+        repeat_count = max(2, min(5, int(job.get("repeat_count") or 2)))
+        cases = []
+        for case in job.get("cases", []):
+            runs = [run_case(str(job.get("code", "")), case, kind, time_ms, memory_mb, output_limit) for _ in range(repeat_count)]
+            successful = all(run.get("status") == "AC" for run in runs)
+            stable = successful and len({normalize_output(str(run.get("stdout", ""))) for run in runs}) == 1
+            first = dict(runs[0])
+            first["status"] = "AC" if stable else next((str(run.get("status")) for run in runs if run.get("status") != "AC"), "Unstable")
+            first["stable"] = stable
+            first["runs"] = [{key: run.get(key) for key in ("status", "duration_ms", "stdout", "stderr")} for run in runs]
+            cases.append(first)
+    else:
+        cases = [run_case(str(job.get("code", "")), case, kind, time_ms, memory_mb, output_limit) for case in job.get("cases", [])]
     return {
         "job_id": job.get("job_id"), "kind": job.get("kind"), "status": "complete",
         "session_id": job.get("session_id"), "session_item_id": job.get("session_item_id"),
-        "question_id": job.get("question_id"), "cases": cases,
+        "question_id": job.get("question_id"), "fingerprint": job.get("fingerprint"), "cases": cases,
     }
 
 
