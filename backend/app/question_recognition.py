@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import ValidationError
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
@@ -17,12 +18,16 @@ from .exercise_schemas import QuestionWrite
 from .models import Question, QuestionAsset, QuestionRecognitionJob, QuestionSet
 from .question_imports import (
     _confidence_value,
+    _boolean_value,
+    _bounded_int,
     _crop_is_suspicious,
     _import_error_detail,
+    _mapping_items,
     _question_type,
     _request_focused_review,
     _safe_markdown,
     _save_crop,
+    candidate_validation_errors,
     parse_pdf,
     repair_crop_regions,
 )
@@ -104,19 +109,20 @@ def _raw_from_question(question: Question) -> dict[str, Any]:
     return raw
 
 
-def _candidate_dict(raw: dict[str, Any], sort_order: int, asset_id: int | None) -> dict[str, Any]:
+def _candidate_preview(raw: dict[str, Any], sort_order: int, asset_id: int | None) -> dict[str, Any]:
     kind = _question_type(raw.get("type"))
     program = raw.get("programming") if isinstance(raw.get("programming"), dict) else None
+    source_page = _bounded_int(raw.get("source_page"), 1, 1, 10000)
     result: dict[str, Any] = {
         "type": kind,
         "stem_markdown": _safe_markdown(raw.get("stem_markdown")) or "（待补充题面）",
         "explanation_markdown": _safe_markdown(raw.get("explanation_markdown")),
-        "points": max(1, min(10000, int(raw.get("points") or (25 if kind == "programming" else 2)))),
+        "points": _bounded_int(raw.get("points"), 25 if kind == "programming" else 2, 1, 10000),
         "sort_order": sort_order,
         "reviewed": False,
-        "correct_bool": raw.get("correct_bool") if kind == "true_false" else None,
-        "source_page": int(raw.get("source_page") or 1),
-        "source_end_page": int(raw.get("source_end_page") or raw.get("source_page") or 1),
+        "correct_bool": _boolean_value(raw.get("correct_bool")) if kind == "true_false" else None,
+        "source_page": source_page,
+        "source_end_page": max(source_page, _bounded_int(raw.get("source_end_page"), source_page, 1, 10000)),
         "source_section": str(raw.get("section") or "")[:180],
         "source_number": str(raw.get("number") or "")[:80],
         "recognition_confidence": _confidence_value(raw),
@@ -132,18 +138,18 @@ def _candidate_dict(raw: dict[str, Any], sort_order: int, asset_id: int | None) 
             {
                 "label": str(item.get("label") or chr(65 + index))[:16],
                 "content_markdown": _safe_markdown(item.get("content_markdown"), 10000) or "（待补充）",
-                "correct": bool(item.get("correct")),
+                "correct": _boolean_value(item.get("correct")) is True,
                 "sort_order": index,
             }
-            for index, item in enumerate(raw.get("options") or []) if isinstance(item, dict)
+            for index, item in enumerate(_mapping_items(raw.get("options")))
         ]
     elif kind == "fill_blank":
         result["blanks"] = [
             {
                 "position": index,
-                "accepted_answers": list(dict.fromkeys(str(value).strip() for value in item.get("accepted_answers") or [] if str(value).strip())),
+                "accepted_answers": list(dict.fromkeys(str(value).strip() for value in (item.get("accepted_answers") if isinstance(item.get("accepted_answers"), list) else []) if str(value).strip())),
             }
-            for index, item in enumerate((item for item in raw.get("blanks") or [] if isinstance(item, dict)), start=1)
+            for index, item in enumerate(_mapping_items(raw.get("blanks")), start=1)
         ]
     elif kind == "programming" and program is not None:
         result["programming"] = {
@@ -152,26 +158,38 @@ def _candidate_dict(raw: dict[str, Any], sort_order: int, asset_id: int | None) 
             "constraints_markdown": _safe_markdown(program.get("constraints_markdown"), 20000),
             "starter_code": str(program.get("starter_code") or "")[:100000],
             "reference_solution": str(program.get("reference_solution") or "")[:100000],
-            "time_limit_ms": max(100, min(5000, int(program.get("time_limit_ms") or 1000))),
-            "memory_limit_mb": max(32, min(512, int(program.get("memory_limit_mb") or 128))),
+            "time_limit_ms": _bounded_int(program.get("time_limit_ms"), 1000, 100, 5000),
+            "memory_limit_mb": _bounded_int(program.get("memory_limit_mb"), 128, 32, 512),
             "cases": [
                 {
                     "input_data": str(item.get("input_data") or "")[:100000],
                     "expected_output": str(item.get("expected_output") or "")[:100000],
                     "is_sample": bool(item.get("is_sample")),
-                    "weight": max(0, int(item.get("weight") or 0)),
+                    "weight": _bounded_int(item.get("weight"), 0, 0, 10000),
                     "confirmed": False,
                     "note": _safe_markdown(item.get("note"), 10000),
                 }
-                for item in program.get("cases") or [] if isinstance(item, dict)
+                for item in _mapping_items(program.get("cases"))
             ],
         }
+    return result
+
+
+def _candidate_dict(raw: dict[str, Any], sort_order: int, asset_id: int | None) -> dict[str, Any]:
+    result = _candidate_preview(raw, sort_order, asset_id)
     QuestionWrite.model_validate(result)
     return result
 
 
+def _validation_messages(raw: dict[str, Any], exc: ValidationError | None = None) -> list[str]:
+    errors = list(raw.get("_validation_errors") or candidate_validation_errors(raw))
+    if exc and not errors:
+        errors.extend(str(item.get("msg") or "候选题目结构无效").removeprefix("Value error, ") for item in exc.errors())
+    return list(dict.fromkeys(item for item in errors if item))
+
+
 def _match_score(question: Question, raw: dict[str, Any]) -> float:
-    if question.source_page != int(raw.get("source_page") or 1):
+    if question.source_page != _bounded_int(raw.get("source_page"), 1, 1, 10000):
         return -1
     number = str(raw.get("number") or "").strip()
     section = str(raw.get("section") or "").strip()
@@ -226,24 +244,35 @@ async def _process_set_job(db: Session, settings: Settings, job: QuestionRecogni
             if matched:
                 available.remove(matched)
             asset_id = _save_crop(db, settings, question_set.id, document, raw, index + 1, kind="question_preview")
-            candidate = _candidate_dict(raw, index, asset_id)
             current = question_dict(matched) if matched else None
+            validation_errors: list[str] = []
+            try:
+                candidate = _candidate_dict(raw, index, asset_id)
+                status = "matched" if matched else "added"
+            except ValidationError as exc:
+                candidate = _candidate_preview(raw, index, asset_id)
+                validation_errors = _validation_messages(raw, exc)
+                status = "invalid"
             changes.append({
-                "status": "matched" if matched else "added",
+                "status": status,
                 "question_id": matched.id if matched else None,
                 "current": current,
                 "candidate": candidate,
                 "changed_fields": _field_changes(current, candidate),
+                "validation_errors": validation_errors,
+                "repair_attempted": bool(raw.get("_repair_attempted")),
             })
         unmatched = [
             {"status": "unmatched", "question_id": item.id, "current": question_dict(item), "candidate": None, "changed_fields": []}
             for item in sorted(available, key=lambda value: (value.sort_order, value.id))
         ]
+        diagnostics = deepcopy(payload.get("diagnostics") or {})
+        diagnostics["invalid_count"] = sum(item["status"] == "invalid" for item in changes)
         return {
             "title": str(payload.get("title") or question_set.title)[:180],
             "description": _safe_markdown(payload.get("description"), 5000),
             "changes": changes + unmatched,
-            "diagnostics": payload.get("diagnostics") or {},
+            "diagnostics": diagnostics,
         }
     finally:
         document.close()
@@ -284,18 +313,30 @@ async def _process_question_job(db: Session, settings: Settings, job: QuestionRe
                 reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
                 repair_crop_regions(document, [reviewed])
                 asset_id = _save_crop(db, settings, question_set.id, document, reviewed, question.id, kind="question_preview")
-        candidate = _candidate_dict(reviewed, question.sort_order, asset_id)
+        try:
+            candidate = _candidate_dict(reviewed, question.sort_order, asset_id)
+            status = "matched"
+            validation_errors: list[str] = []
+        except ValidationError as exc:
+            candidate = _candidate_preview(reviewed, question.sort_order, asset_id)
+            status = "invalid"
+            validation_errors = _validation_messages(reviewed, exc)
         return {
             "title": question_set.title,
             "description": question_set.description,
             "changes": [{
-                "status": "matched",
+                "status": status,
                 "question_id": question.id,
                 "current": current,
                 "candidate": candidate,
                 "changed_fields": _field_changes(current, candidate),
+                "validation_errors": validation_errors,
+                "repair_attempted": True,
             }],
-            "diagnostics": {"warnings": candidate["recognition_warnings"]},
+            "diagnostics": {
+                "warnings": list(dict.fromkeys(candidate["recognition_warnings"] + validation_errors)),
+                "invalid_count": 1 if status == "invalid" else 0,
+            },
         }
     finally:
         document.close()
@@ -371,11 +412,26 @@ def apply_job(db: Session, job: QuestionRecognitionJob) -> QuestionSet:
     if target_fingerprint(question_set, question if job.scope == "question" else None) != job.target_fingerprint:
         raise RuntimeError("题目内容已变化，重新识别结果已过期")
     result = _loads(job.result_json, {})
+    if job.scope == "question" and any(item.get("status") == "invalid" for item in result.get("changes") or [] if isinstance(item, dict)):
+        raise ValueError("单题重新识别结果无效，不能应用，请重试或人工编辑")
     next_order = 0
     unmatched_items: list[Question] = []
     for change in result.get("changes") or []:
         status = change.get("status")
         candidate = change.get("candidate")
+        if status == "invalid":
+            old = db.get(Question, int(change.get("question_id") or 0))
+            if old:
+                warnings = _loads(old.recognition_warnings_json, [])
+                errors = [str(item) for item in change.get("validation_errors") or [] if str(item).strip()]
+                warning = "重新识别结果无效，请人工核对" + ("：" + "；".join(errors) if errors else "")
+                warnings.append(warning)
+                old.recognition_warnings_json = json.dumps(list(dict.fromkeys(warnings))[:100], ensure_ascii=False)
+                old.reviewed = False
+                if job.scope == "set":
+                    old.sort_order = next_order
+                    next_order += 1
+            continue
         if status == "unmatched":
             old = db.get(Question, int(change.get("question_id") or 0))
             if old:
@@ -414,3 +470,4 @@ def apply_job(db: Session, job: QuestionRecognitionJob) -> QuestionSet:
     job.applied_at = datetime.utcnow()
     db.commit()
     return question_set
+    _mapping_items,

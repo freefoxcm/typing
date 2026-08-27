@@ -68,7 +68,7 @@ describe('QuestionLibraryPanel', () => {
   it('shows recognition counts, focused retries, and warnings', async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/question-sets') return []
-      if (path === '/api/admin/question-imports') return [{ id: 2, status: 'ready', attempts: 1, created_at: '2026-07-21', page_count: 5, counts: { single_choice: 15, multiple_choice: 0, true_false: 10, programming: 2 }, retried_pages: [4], warnings: ['第 4 页需要人工核对'] }]
+      if (path === '/api/admin/question-imports') return [{ id: 2, status: 'ready', attempts: 1, created_at: '2026-07-21', page_count: 5, counts: { single_choice: 15, multiple_choice: 0, true_false: 10, programming: 2 }, retried_pages: [4], warnings: ['第 4 页需要人工核对'], invalid_count: 1, invalid_questions: [{ index: 8, source_page: 3, number: '8', errors: ['判断题缺少明确的正确答案'], repair_attempted: true }] }]
       if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
       if (path === '/api/admin/exercise-reports/summary') return { session_count: 0, average_percent: 0, unresolved_wrong_count: 0 }
       return { id: 1 }
@@ -79,6 +79,35 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText('定向重试页：4')).toBeInTheDocument()
     expect(screen.getByText('15').parentElement).toHaveTextContent('单选题')
     expect(screen.getByText('第 4 页需要人工核对')).toBeInTheDocument()
+    expect(screen.getByText('已导入但需人工补全（1）')).toBeInTheDocument()
+    expect(screen.getByText(/判断题缺少明确的正确答案/)).toBeInTheDocument()
+  })
+
+  it('shows single-question recognition in the row and keeps invalid single results unapplied', async () => {
+    const question = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    const noSourceQuestion = { ...question, id: 52, stem_markdown: '没有来源的题目', sort_order: 1, source_asset_id: null }
+    const invalidJob = { id: 12, scope: 'question', status: 'ready', target_set_id: 5, target_question_id: 51, model: 'vision', attempts: 1, stale: false, created_at: '2026-08-27', result: { changes: [{ status: 'invalid', question_id: 51, current: question, candidate: { ...question, id: undefined, question_set_id: undefined, correct_bool: null }, changed_fields: ['correct_bool'], validation_errors: ['判断题缺少明确的正确答案'], repair_attempted: true }], diagnostics: { warnings: ['判断题缺少明确的正确答案'], invalid_count: 1 } } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 5, title: '单题入口', description: '', status: 'draft', source_pdf_asset_id: null, question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: [question, noSourceQuestion] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/questions/51/re-recognition' && options?.method === 'POST') return invalidJob
+      if (path === '/api/admin/question-recognition-jobs/12/retry' && options?.method === 'POST') return { ...invalidJob, status: 'pending' }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 单题入口' }))
+    const triggers = screen.getAllByRole('button', { name: '重新识别' })
+    expect(triggers[0]).toBeEnabled()
+    expect(triggers[1]).toBeDisabled()
+    fireEvent.click(triggers[0])
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText('高清修复后仍未通过校验')).toBeInTheDocument()
+    expect(within(dialog).getAllByText('判断题缺少明确的正确答案')).toHaveLength(2)
+    expect(within(dialog).queryByRole('button', { name: /确认应用/ })).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '重新识别' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/12/retry', expect.objectContaining({ method: 'POST' })))
   })
 
   it('starts set re-recognition and previews image and field differences before applying', async () => {

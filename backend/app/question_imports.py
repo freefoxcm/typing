@@ -167,6 +167,7 @@ async def _request_batch(
         "题目被截断或续页不足时 complete=false，source_end_page 是实际覆盖的最后页。"
         "bbox 使用起始页的相对坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块和原始缩进。"
         "填空题将每个印刷空格在题面中写成连续的 {{1}}、{{2}}，blanks 与占位符一一对应。"
+        "判断题的 correct_bool 必须根据答案明确返回 true 或 false，不得返回 null；单选题必须且只能标记一个正确选项，多选题至少标记一个正确选项。"
         "每一道题无论 has_visual 是否为 true，都必须返回 crop_regions，且只覆盖该题的完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
@@ -282,6 +283,79 @@ def _positive_int(value: Any, default: int = 1) -> int:
     return max(1, _integer(value, default))
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, _integer(value, default)))
+
+
+def _boolean_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "正确", "对", "是"}:
+        return True
+    if text in {"false", "0", "no", "错误", "错", "否"}:
+        return False
+    return None
+
+
+def _mapping_items(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def candidate_validation_errors(raw: dict[str, Any]) -> list[str]:
+    """Return actionable semantic errors without trusting the model's shapes."""
+    errors: list[str] = []
+    kind = _question_type(raw.get("type"))
+    if not _safe_markdown(raw.get("stem_markdown")):
+        errors.append("缺少题面")
+    if _integer(raw.get("source_page"), 0) < 1:
+        errors.append("来源页无效")
+    if raw.get("points") is not None and raw.get("points") != "":
+        try:
+            if int(raw.get("points")) < 1:
+                errors.append("分值必须大于 0")
+        except (TypeError, ValueError):
+            errors.append("分值不是有效整数")
+
+    if kind in {"single_choice", "multiple_choice"}:
+        raw_options = raw.get("options")
+        options = _mapping_items(raw_options)
+        if not isinstance(raw_options, list) or len(options) != len(raw_options):
+            errors.append("选项结构无效")
+        if len(options) < 2:
+            errors.append("选择题至少需要两个选项")
+        correct_count = sum(_boolean_value(item.get("correct")) is True for item in options)
+        if kind == "single_choice" and correct_count != 1:
+            errors.append("单选题必须且只能有一个正确选项")
+        if kind == "multiple_choice" and correct_count < 1:
+            errors.append("多选题至少需要一个正确选项")
+    elif kind == "true_false":
+        if _boolean_value(raw.get("correct_bool")) is None:
+            errors.append("判断题缺少明确的正确答案")
+    elif kind == "fill_blank":
+        raw_blanks = raw.get("blanks")
+        blanks = _mapping_items(raw_blanks)
+        if not isinstance(raw_blanks, list) or len(blanks) != len(raw_blanks):
+            errors.append("填空答案结构无效")
+        markers = [int(item) for item in re.findall(r"\{\{(\d+)\}\}", str(raw.get("stem_markdown") or ""))]
+        positions = [_positive_int(item.get("position"), index) for index, item in enumerate(blanks, start=1)]
+        if not blanks or markers != list(range(1, len(blanks) + 1)) or positions != list(range(1, len(blanks) + 1)):
+            errors.append("填空占位符与答案不一致")
+        if any(not isinstance(item.get("accepted_answers"), list) or not any(str(value).strip() for value in item.get("accepted_answers")) for item in blanks):
+            errors.append("填空题存在空的可接受答案")
+    elif kind == "programming":
+        program = raw.get("programming")
+        if not isinstance(program, dict):
+            errors.append("编程题缺少有效的编程规格")
+        else:
+            cases = program.get("cases", [])
+            if not isinstance(cases, list) or len(_mapping_items(cases)) != len(cases):
+                errors.append("编程测试点结构无效")
+    return list(dict.fromkeys(errors))
+
+
 def _question_key(raw: dict[str, Any]) -> tuple[str, str, int]:
     page = _positive_int(raw.get("source_page"), 1)
     section = _normalize_key_part(raw.get("section"))
@@ -319,9 +393,9 @@ def _confidence_value(raw: dict[str, Any]) -> float | None:
                 values.append(float(item))
             except (TypeError, ValueError):
                 pass
-        return min(values) if values else None
+        return max(0.0, min(1.0, min(values))) if values else None
     try:
-        return float(value) if value is not None else None
+        return max(0.0, min(1.0, float(value))) if value is not None else None
     except (TypeError, ValueError):
         return None
 
@@ -439,6 +513,7 @@ def _needs_focused_review(raw: dict[str, Any]) -> bool:
         or _positive_int(raw.get("source_end_page"), 1) > _positive_int(raw.get("source_page"), 1)
         or confidence is not None and confidence < .9
         or _crop_is_suspicious(raw)
+        or candidate_validation_errors(raw)
         or "```" in stem or "$" in stem
     )
 
@@ -746,12 +821,16 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
         for index, raw in enumerate(list(merged)):
             raw.setdefault("_recognition_warnings", [])
             if not _needs_focused_review(raw):
+                raw["_validation_errors"] = []
+                raw["_repair_attempted"] = False
                 continue
+            raw["_repair_attempted"] = True
             try:
-                reviewed = await _request_focused_review(settings, document, raw)
+                reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
                 reviewed.setdefault("source_page", raw.get("source_page"))
                 reviewed.setdefault("source_end_page", raw.get("source_end_page"))
                 reviewed["_recognition_warnings"] = list(raw.get("_recognition_warnings") or [])
+                reviewed["_repair_attempted"] = True
                 merged[index] = reviewed
                 focused_count += 1
             except Exception as exc:
@@ -760,7 +839,22 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append(detail)
                 logger.warning("Focused question review failed: %s", _import_error_detail(exc))
         repair_crop_regions(document, merged)
-        for raw in merged:
+        invalid_questions: list[dict[str, Any]] = []
+        for index, raw in enumerate(merged, start=1):
+            validation_errors = candidate_validation_errors(raw)
+            raw["_validation_errors"] = validation_errors
+            if validation_errors:
+                label = raw.get("number") or index
+                detail = f"第 {raw.get('source_page')} 页题目 {label} 识别结果不完整：{'；'.join(validation_errors)}"
+                raw.setdefault("_recognition_warnings", []).append(detail)
+                warnings.append(detail)
+                invalid_questions.append({
+                    "index": index,
+                    "source_page": _positive_int(raw.get("source_page"), 1),
+                    "number": str(raw.get("number") or ""),
+                    "errors": validation_errors,
+                    "repair_attempted": bool(raw.get("_repair_attempted")),
+                })
             if _crop_is_suspicious(raw):
                 detail = f"第 {raw.get('source_page')} 页题目 {raw.get('number') or ''} 的裁剪区域仍异常，请人工替换图片"
                 raw.setdefault("_recognition_warnings", []).append(detail)
@@ -787,6 +881,8 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
             "candidate_count": len(candidates),
             "merged_count": merged_count,
             "focused_review_count": focused_count,
+            "invalid_count": len(invalid_questions),
+            "invalid_questions": invalid_questions,
         }
         if not combined["questions"]:
             raise ValueError("没有识别到题目")
@@ -870,8 +966,15 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
     db.flush()
     source_asset.question_set_id = question_set.id
     for index, raw in enumerate(payload.get("questions", []), start=1):
+        if not isinstance(raw, dict):
+            continue
         kind = _question_type(raw.get("type"))
-        points = max(1, min(10000, int(raw.get("points") or (25 if kind == "programming" else 2))))
+        points = _bounded_int(raw.get("points"), 25 if kind == "programming" else 2, 1, 10000)
+        source_page = _positive_int(raw.get("source_page"), 1)
+        validation_errors = list(raw.get("_validation_errors") or candidate_validation_errors(raw))
+        recognition_warnings = [str(item) for item in raw.get("_recognition_warnings") or [] if str(item).strip()]
+        if validation_errors:
+            recognition_warnings.append("识别结果不完整，请人工补全：" + "；".join(validation_errors))
         question = Question(
             question_set_id=question_set.id,
             type=kind,
@@ -880,11 +983,11 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
             points=points,
             sort_order=index - 1,
             reviewed=False,
-            correct_bool=raw.get("correct_bool") if kind == "true_false" else None,
-            source_page=_positive_int(raw.get("source_page"), 1),
-            source_end_page=_positive_int(raw.get("source_end_page"), _positive_int(raw.get("source_page"), 1)),
+            correct_bool=_boolean_value(raw.get("correct_bool")) if kind == "true_false" else None,
+            source_page=source_page,
+            source_end_page=max(source_page, _positive_int(raw.get("source_end_page"), source_page)),
             recognition_confidence=_confidence_value(raw),
-            recognition_warnings_json=json.dumps(raw.get("_recognition_warnings") or [], ensure_ascii=False),
+            recognition_warnings_json=json.dumps(list(dict.fromkeys(recognition_warnings))[:100], ensure_ascii=False),
             show_source_crop=bool(raw.get("has_visual")),
             source_section=str(raw.get("section") or "")[:180],
             source_number=str(raw.get("number") or "")[:80],
@@ -893,34 +996,33 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
         db.flush()
         question.source_asset_id = _save_crop(db, settings, question_set.id, document, raw, index, allow_page_fallback=True)
         if kind in {"single_choice", "multiple_choice"}:
-            for option_index, option in enumerate(raw.get("options") or []):
+            for option_index, option in enumerate(_mapping_items(raw.get("options"))):
                 question.options.append(QuestionOption(
                     label=str(option.get("label") or chr(65 + option_index))[:16],
                     content_markdown=_safe_markdown(option.get("content_markdown"), 10000) or "（待补充）",
-                    correct=bool(option.get("correct")),
+                    correct=_boolean_value(option.get("correct")) is True,
                     sort_order=option_index,
                 ))
         elif kind == "fill_blank":
-            for blank_index, blank in enumerate(raw.get("blanks") or [], start=1):
-                if not isinstance(blank, dict):
-                    continue
-                answers = [str(value).strip() for value in blank.get("accepted_answers") or [] if str(value).strip()]
+            for blank_index, blank in enumerate(_mapping_items(raw.get("blanks")), start=1):
+                accepted = blank.get("accepted_answers") if isinstance(blank.get("accepted_answers"), list) else []
+                answers = [str(value).strip() for value in accepted if str(value).strip()]
                 question.blanks.append(QuestionBlank(
                     position=_positive_int(blank.get("position"), blank_index),
                     accepted_answers_json=json.dumps(list(dict.fromkeys(answers)), ensure_ascii=False),
                 ))
         elif kind == "programming":
-            program = raw.get("programming") or {}
+            program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
             spec = ProgrammingSpec(
                 input_markdown=_safe_markdown(program.get("input_markdown"), 20000),
                 output_markdown=_safe_markdown(program.get("output_markdown"), 20000),
                 constraints_markdown=_safe_markdown(program.get("constraints_markdown"), 20000),
                 starter_code=str(program.get("starter_code") or "")[:100000],
                 reference_solution=str(program.get("reference_solution") or "")[:100000],
-                time_limit_ms=max(100, min(settings.judge_max_time_ms, int(program.get("time_limit_ms") or settings.judge_default_time_ms))),
-                memory_limit_mb=max(32, min(settings.judge_max_memory_mb, int(program.get("memory_limit_mb") or settings.judge_default_memory_mb))),
+                time_limit_ms=_bounded_int(program.get("time_limit_ms"), settings.judge_default_time_ms, 100, settings.judge_max_time_ms),
+                memory_limit_mb=_bounded_int(program.get("memory_limit_mb"), settings.judge_default_memory_mb, 32, settings.judge_max_memory_mb),
             )
-            for case in program.get("cases") or []:
+            for case in _mapping_items(program.get("cases")):
                 input_data = str(case.get("input_data") or "")[:100000]
                 expected_output = str(case.get("expected_output") or "")[:100000]
                 # The JSON schema contains an empty case to describe its shape.
@@ -933,7 +1035,7 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
                     input_data=input_data,
                     expected_output=expected_output if is_sample else "",
                     is_sample=is_sample,
-                    weight=0 if is_sample else max(0, int(case.get("weight") or 0)),
+                    weight=0 if is_sample else _bounded_int(case.get("weight"), 0, 0, 10000),
                     confirmed=False,
                     note=_safe_markdown(case.get("note"), 1000),
                 ))

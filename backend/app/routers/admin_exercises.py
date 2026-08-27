@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings, get_settings
@@ -63,6 +63,8 @@ def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
         "counts": counts,
         "question_count": sum(value for value in counts.values() if isinstance(value, int)),
         "retried_pages": diagnostics.get("retried_pages", []),
+        "invalid_count": diagnostics.get("invalid_count", 0),
+        "invalid_questions": diagnostics.get("invalid_questions", []),
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -259,11 +261,16 @@ def _enqueue_recognition(db: Session, settings: Settings, question_set: Question
     if not import_llm_configured(settings):
         raise HTTPException(status_code=409, detail="请先配置独立的 PDF 识别模型")
     _editable(question_set)
-    active = db.scalar(select(QuestionRecognitionJob.id).where(
+    active_query = select(QuestionRecognitionJob.id).where(
         QuestionRecognitionJob.target_set_id == question_set.id,
-        QuestionRecognitionJob.target_question_id == (question.id if question else None),
         QuestionRecognitionJob.status.in_(["pending", "processing"]),
-    ).limit(1))
+    )
+    if question:
+        active_query = active_query.where(or_(
+            QuestionRecognitionJob.target_question_id.is_(None),
+            QuestionRecognitionJob.target_question_id == question.id,
+        ))
+    active = db.scalar(active_query.limit(1))
     if active:
         raise HTTPException(status_code=409, detail="当前目标已有重新识别任务正在处理")
     source_asset_id = question.source_asset_id if question and question.source_asset_id else question_set.source_pdf_asset_id
@@ -323,8 +330,13 @@ def retry_recognition_job(job_id: int, _principal: Principal = Depends(require_a
     job = db.get(QuestionRecognitionJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="重新识别任务不存在")
-    if job.status != "failed":
-        raise HTTPException(status_code=409, detail="只有失败任务可以重试")
+    result = json.loads(job.result_json or "{}") if job.result_json else {}
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    ready_invalid = job.status == "ready" and bool(changes) and all(
+        isinstance(item, dict) and item.get("status") == "invalid" for item in changes
+    )
+    if job.status != "failed" and not ready_invalid:
+        raise HTTPException(status_code=409, detail="只有失败任务或无效的单题结果可以重试")
     question_set = _get_set(db, job.target_set_id)
     _editable(question_set)
     question = db.get(Question, job.target_question_id) if job.target_question_id else None

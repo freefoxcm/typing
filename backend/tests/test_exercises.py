@@ -1,3 +1,4 @@
+import asyncio
 import json
 import base64
 import threading
@@ -9,6 +10,7 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
+import app.question_recognition as question_recognition
 from app.routers import exercises as exercises_router
 from app.models import (
     AttemptError,
@@ -17,6 +19,7 @@ from app.models import (
     ExerciseSession,
     ExerciseSessionItem,
     PracticeAttempt,
+    Question,
     QuestionAsset,
     QuestionImportJob,
     QuestionRecognitionJob,
@@ -25,7 +28,7 @@ from app.models import (
     WordSet,
     WrongQuestion,
 )
-from app.question_recognition import set_fingerprint
+from app.question_recognition import question_fingerprint, set_fingerprint
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -127,6 +130,99 @@ def test_recognition_preview_apply_preserves_question_id_and_rejects_stale_resul
         changed = client.put(f"/api/admin/questions/{current['id']}", json={**candidate, "stem_markdown": "人工又修改了"})
         assert changed.status_code == 200
         assert client.post(f"/api/admin/question-recognition-jobs/{stale_id}/apply").status_code == 409
+
+
+def test_recognition_apply_keeps_invalid_match_in_order_and_skips_invalid_new_question(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "局部容错", "description": ""}).json()
+        first_payload = {
+            "type": "true_false", "stem_markdown": "原判断题", "explanation_markdown": "", "points": 2,
+            "sort_order": 0, "reviewed": True, "correct_bool": True, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }
+        second_payload = {
+            "type": "true_false", "stem_markdown": "原第二题", "explanation_markdown": "", "points": 2,
+            "sort_order": 1, "reviewed": True, "correct_bool": False, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }
+        first = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=first_payload).json()
+        second = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=second_payload).json()
+        valid_candidate = {key: value for key, value in second.items() if key not in {"id", "question_set_id"}}
+        valid_candidate.update({"stem_markdown": "更新后的第二题", "reviewed": False})
+        invalid_candidate = {key: value for key, value in first.items() if key not in {"id", "question_set_id"}}
+        invalid_candidate.update({"correct_bool": None, "reviewed": False})
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="tolerant.pdf", original_name="tolerant.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set), result_json=json.dumps({"title": stored_set.title, "description": "", "changes": [
+                    {"status": "invalid", "question_id": first["id"], "current": first, "candidate": invalid_candidate, "changed_fields": ["correct_bool"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True},
+                    {"status": "matched", "question_id": second["id"], "current": second, "candidate": valid_candidate, "changed_fields": ["stem_markdown"]},
+                    {"status": "invalid", "question_id": None, "current": None, "candidate": invalid_candidate, "changed_fields": ["新增题目"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True},
+                ], "diagnostics": {"invalid_count": 2}}, ensure_ascii=False),
+            )
+            db.add(job); db.commit(); job_id = job.id
+
+        applied = client.post(f"/api/admin/question-recognition-jobs/{job_id}/apply")
+        assert applied.status_code == 200, applied.text
+        questions = applied.json()["question_set"]["questions"]
+        assert [item["id"] for item in questions] == [first["id"], second["id"]]
+        assert questions[0]["stem_markdown"] == "原判断题" and questions[0]["reviewed"] is False
+        assert "判断题缺少明确的正确答案" in " ".join(questions[0]["recognition_warnings"])
+        assert questions[1]["stem_markdown"] == "更新后的第二题"
+
+        with client.app.state.session_factory() as db:
+            stored_first = db.get(Question, first["id"])
+            single_job = QuestionRecognitionJob(
+                scope="question", status="ready", target_set_id=question_set["id"], target_question_id=stored_first.id,
+                source_asset_id=db.get(QuestionSet, question_set["id"]).source_pdf_asset_id,
+                target_fingerprint=question_fingerprint(stored_first), result_json=json.dumps({"changes": [{
+                    "status": "invalid", "question_id": stored_first.id, "current": first, "candidate": invalid_candidate,
+                    "changed_fields": ["correct_bool"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True,
+                }]}, ensure_ascii=False),
+            )
+            db.add(single_job); db.commit(); single_job_id = single_job.id
+        rejected = client.post(f"/api/admin/question-recognition-jobs/{single_job_id}/apply")
+        assert rejected.status_code == 422
+        assert "单题重新识别结果无效" in rejected.json()["detail"]
+
+
+def test_set_recognition_builds_partial_preview_when_one_candidate_is_invalid(monkeypatch, tmp_path):
+    class FakeDocument:
+        def close(self):
+            pass
+
+    async def fake_parse_pdf(_settings, _path):
+        return FakeDocument(), [], {"title": "局部预览", "description": "", "questions": [
+            {"type": "true_false", "stem_markdown": "旧判断题", "source_page": 1, "correct_bool": None, "_repair_attempted": True, "_validation_errors": ["判断题缺少明确的正确答案"]},
+            {"type": "true_false", "stem_markdown": "新增有效题", "source_page": 1, "correct_bool": True, "_repair_attempted": False, "_validation_errors": []},
+        ], "diagnostics": {"warnings": [], "invalid_count": 1}}
+
+    monkeypatch.setattr(question_recognition, "parse_pdf", fake_parse_pdf)
+    monkeypatch.setattr(question_recognition, "_save_crop", lambda *_args, **_kwargs: None)
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "局部预览", "description": ""}).json()
+        current = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "true_false", "stem_markdown": "旧判断题", "explanation_markdown": "", "points": 2,
+            "sort_order": 0, "reviewed": False, "correct_bool": True, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }).json()
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="partial.pdf", original_name="partial.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(scope="set", status="processing", target_set_id=stored_set.id, source_asset_id=asset.id, target_fingerprint=set_fingerprint(stored_set))
+            db.add(job); db.flush()
+            result = asyncio.run(question_recognition._process_set_job(db, Settings(question_asset_dir=str(tmp_path / "assets")), job, asset))
+        assert [item["status"] for item in result["changes"]] == ["invalid", "added"]
+        assert result["changes"][0]["question_id"] == current["id"]
+        assert result["changes"][0]["validation_errors"] == ["判断题缺少明确的正确答案"]
+        assert result["diagnostics"]["invalid_count"] == 1
 
 
 def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):

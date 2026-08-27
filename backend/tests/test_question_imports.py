@@ -10,9 +10,9 @@ from app.config import Settings
 from app.database import Base, create_db
 from app.models import QuestionAsset
 import app.question_imports as question_imports
-from app.exercise_library import question_dict
+from app.exercise_library import question_dict, question_errors
 from app.models import Question
-from app.question_imports import _crop_is_suspicious, _extract_pages, _import_error_detail, _json_content, _merge_candidates, _model_request_body, _needs_focused_review, _page_batches, _safe_markdown, materialize_draft, parse_pdf, repair_crop_regions
+from app.question_imports import _crop_is_suspicious, _extract_pages, _import_error_detail, _json_content, _merge_candidates, _model_request_body, _needs_focused_review, _page_batches, _safe_markdown, candidate_validation_errors, materialize_draft, parse_pdf, repair_crop_regions
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -52,13 +52,25 @@ def test_page_batches_limit_request_size_and_overlap_boundaries():
 
 
 def test_focused_review_targets_complex_low_confidence_and_bad_crops():
-    ordinary = {"type": "single_choice", "source_page": 1, "source_end_page": 1, "complete": True, "stem_markdown": "1+1", "confidence": {"stem": .98, "answer": .97, "crop": .96}, "crop_regions": [{"source_page": 1, "bbox": [.1, .1, .9, .4]}]}
+    ordinary = {"type": "single_choice", "source_page": 1, "source_end_page": 1, "complete": True, "stem_markdown": "1+1", "options": [{"label": "A", "content_markdown": "1", "correct": False}, {"label": "B", "content_markdown": "2", "correct": True}], "confidence": {"stem": .98, "answer": .97, "crop": .96}, "crop_regions": [{"source_page": 1, "bbox": [.1, .1, .9, .4]}]}
     assert _needs_focused_review(ordinary) is False
     assert _needs_focused_review({**ordinary, "confidence": {"stem": .7}}) is True
     assert _needs_focused_review({**ordinary, "type": "programming"}) is True
     assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [-.1, .1, .9, .4]}]}) is True
     assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [0, 0, 1, 1]}]}) is True
     assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [0, .2, 1, .201]}]}) is True
+
+
+def test_candidate_validation_reports_semantic_and_nested_shape_errors():
+    judgment = {"type": "true_false", "stem_markdown": "Python 区分大小写", "source_page": 1, "correct_bool": None}
+    assert candidate_validation_errors(judgment) == ["判断题缺少明确的正确答案"]
+    choice = {"type": "single_choice", "stem_markdown": "选择", "source_page": 1, "points": "两分", "options": ["A", {"label": "B", "correct": False}]}
+    errors = candidate_validation_errors(choice)
+    assert "分值不是有效整数" in errors
+    assert "选项结构无效" in errors
+    assert "单选题必须且只能有一个正确选项" in errors
+    programming = {"type": "programming", "stem_markdown": "编程", "source_page": 1, "programming": "not-an-object"}
+    assert "编程题缺少有效的编程规格" in candidate_validation_errors(programming)
 
 
 def test_reasoning_effort_is_optional_and_overrides_minimax_thinking():
@@ -106,6 +118,36 @@ def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
         assert question_set.questions[0].reviewed is False
         assert question_set.questions[0].source_asset_id is not None
         assert list((tmp_path / "assets").glob("question-*.png"))
+    document.close()
+    engine.dispose()
+
+
+def test_materialize_draft_keeps_invalid_candidates_for_manual_completion(tmp_path):
+    path = tmp_path / "invalid.pdf"
+    make_pdf(path)
+    document, _ = _extract_pages(path, Settings(import_max_pages=2))
+    engine, session_factory = create_db(f"sqlite:///{tmp_path / 'invalid.db'}")
+    Base.metadata.create_all(engine)
+    payload = {"title": "待补试卷", "questions": [
+        {"type": "true_false", "stem_markdown": "Python 区分大小写", "points": "两分", "source_page": 1, "correct_bool": None},
+        {"type": "single_choice", "stem_markdown": "选择正确项", "source_page": 1, "options": ["坏选项", {"label": "B", "content_markdown": "候选", "correct": False}]},
+        {"type": "programming", "stem_markdown": "输出答案", "source_page": 1, "programming": "invalid"},
+    ]}
+    with session_factory() as db:
+        source = QuestionAsset(storage_key="invalid.pdf", original_name="invalid.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+        db.add(source); db.flush()
+        question_set = materialize_draft(db, Settings(question_asset_dir=str(tmp_path / "assets")), source, document, payload)
+        db.commit()
+        assert len(question_set.questions) == 3
+        assert question_set.questions[0].correct_bool is None
+        assert "判断题缺少明确的正确答案" in question_set.questions[0].recognition_warnings_json
+        assert len(question_set.questions[1].options) == 1
+        assert "选项结构无效" in question_set.questions[1].recognition_warnings_json
+        assert question_set.questions[2].programming is not None
+        assert "编程题缺少有效的编程规格" in question_set.questions[2].recognition_warnings_json
+        assert all(not item.reviewed for item in question_set.questions)
+        assert "题目缺少判断答案" in question_errors(question_set.questions[0])
+        assert "题目至少需要两个选项" in question_errors(question_set.questions[1])
     document.close()
     engine.dispose()
 
@@ -254,6 +296,36 @@ def test_parse_pdf_retries_incomplete_primary_page_and_reconciles(monkeypatch, t
         assert payload["questions"][0]["stem_markdown"] == "完整跨页编程题"
         assert payload["diagnostics"]["retried_pages"] == [1]
         assert payload["diagnostics"]["counts"]["programming"] == 1
+    finally:
+        document.close()
+
+
+def test_parse_pdf_repairs_semantically_invalid_question_without_failing_set(monkeypatch, tmp_path):
+    path = tmp_path / "judgment.pdf"
+    make_pdf(path)
+    focused_calls = 0
+
+    async def fake_batch(_settings, _pages, primary_pages=None):
+        return {
+            "title": "判断卷",
+            "page_inventory": [{"source_page": 1, "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "判断题", "type": "true_false"}]}],
+            "questions": [{"candidate_id": "p1-q1", "number": "1", "section": "判断题", "type": "true_false", "source_page": 1, "source_end_page": 1, "complete": True, "stem_markdown": "Python 区分大小写", "correct_bool": None, "crop_regions": [{"source_page": 1, "bbox": [.1, .1, .9, .4]}]}],
+        }
+
+    async def fake_focused(_settings, _document, raw, allow_type_change=False):
+        nonlocal focused_calls
+        focused_calls += 1
+        assert allow_type_change is True
+        return {**raw, "correct_bool": True}
+
+    monkeypatch.setattr(question_imports, "_request_batch", fake_batch)
+    monkeypatch.setattr(question_imports, "_request_focused_review", fake_focused)
+    document, _, payload = asyncio.run(parse_pdf(Settings(import_llm_batch_pages=3), path))
+    try:
+        assert focused_calls == 1
+        assert payload["questions"][0]["correct_bool"] is True
+        assert payload["questions"][0]["_repair_attempted"] is True
+        assert payload["diagnostics"]["invalid_count"] == 0
     finally:
         document.close()
 
