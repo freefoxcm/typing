@@ -109,6 +109,8 @@ class QuestionWrite(BaseModel):
     correct_bool: bool | None = None
     source_page: int | None = Field(default=None, ge=1, le=10000)
     source_end_page: int | None = Field(default=None, ge=1, le=10000)
+    source_section: str = Field(default="", max_length=180)
+    source_number: str = Field(default="", max_length=80)
     recognition_confidence: float | None = Field(default=None, ge=0, le=1)
     recognition_warnings: list[str] = Field(default_factory=list, max_length=100)
     source_asset_id: int | None = Field(default=None, gt=0)

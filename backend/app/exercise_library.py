@@ -60,6 +60,8 @@ def question_dict(question: Question, include_answers: bool = True) -> dict[str,
         "sort_order": question.sort_order,
         "source_page": question.source_page,
         "source_end_page": question.source_end_page,
+        "source_section": question.source_section,
+        "source_number": question.source_number,
         "recognition_confidence": question.recognition_confidence,
         "recognition_warnings": loads_json(question.recognition_warnings_json, []),
         "source_asset_id": question.source_asset_id,
@@ -119,6 +121,8 @@ def replace_question(question: Question, payload: QuestionWrite) -> None:
     question.correct_bool = payload.correct_bool if payload.type == "true_false" else None
     question.source_page = payload.source_page
     question.source_end_page = payload.source_end_page
+    question.source_section = payload.source_section
+    question.source_number = payload.source_number
     question.recognition_confidence = payload.recognition_confidence
     question.recognition_warnings_json = json.dumps(payload.recognition_warnings, ensure_ascii=False)
     question.source_asset_id = payload.source_asset_id

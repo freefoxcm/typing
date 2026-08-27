@@ -15,6 +15,14 @@ def llm_configured(settings: Settings) -> bool:
     return bool(settings.llm_api_key.strip() and settings.llm_model.strip() and settings.llm_base_url.strip())
 
 
+def _request_body(settings: Settings, messages: list[dict]) -> dict:
+    body = {"model": settings.llm_model, "temperature": 0.1, "messages": messages}
+    effort = settings.llm_reasoning_effort.strip()
+    if effort:
+        body["reasoning_effort"] = effort
+    return body
+
+
 def mark_word_readiness(word: Word, reset_attempts: bool = True) -> None:
     # SQLAlchemy column defaults are applied when an object is flushed. A newly
     # constructed Word can therefore still contain None while bulk import is
@@ -63,14 +71,10 @@ async def request_enrichment(settings: Settings, spelling: str) -> dict[str, str
         response = await client.post(
             f"{settings.llm_base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"},
-            json={
-                "model": settings.llm_model,
-                "temperature": 0.1,
-                "messages": [
+            json=_request_body(settings, [
                     {"role": "system", "content": "你是严谨的英汉词典编辑，必须输出合法 JSON。"},
                     {"role": "user", "content": prompt},
-                ],
-            },
+                ]),
         )
         response.raise_for_status()
         body = response.json()

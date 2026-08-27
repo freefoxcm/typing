@@ -57,7 +57,7 @@ export type WordSetSummary = {
   words?: WordEntry[]
 }
 export type WordSetDetail = { id: number; title: string; description: string; words: WordEntry[] }
-export type LlmStatus = { configured: boolean; base_url: string; model: string }
+export type LlmStatus = { configured: boolean; base_url: string; model: string; reasoning_effort?: string | null }
 export type Report = {
   attempt_count: number
   practice_minutes: number
@@ -120,6 +120,8 @@ export type ExerciseQuestion = {
   correct_bool?: boolean | null
   source_page?: number | null
   source_end_page?: number | null
+  source_section?: string
+  source_number?: string
   recognition_confidence?: number | null
   recognition_warnings?: string[]
   source_asset_id?: number | null

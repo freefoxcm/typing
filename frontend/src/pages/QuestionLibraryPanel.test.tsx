@@ -81,6 +81,31 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText('第 4 页需要人工核对')).toBeInTheDocument()
   })
 
+  it('starts set re-recognition and previews image and field differences before applying', async () => {
+    const current = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '旧题面', explanation_markdown: '', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    const candidate = { ...current, id: undefined, question_set_id: undefined, stem_markdown: '新题面', reviewed: false, source_asset_id: 11 }
+    const readyJob = { id: 9, scope: 'set', status: 'ready', target_set_id: 5, target_question_id: null, model: 'vision', reasoning_effort: 'high', attempts: 1, stale: false, created_at: '2026-08-27', result: { title: '重识别题套', changes: [{ status: 'matched', question_id: 51, current, candidate, changed_fields: ['stem_markdown', 'source_asset_id'] }], diagnostics: { warnings: [] } } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 5, title: '重识别题套', description: '', status: 'draft', source_pdf_asset_id: 7, question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [current] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return [readyJob]
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', reasoning_effort: 'high', batch_pages: 3 }
+      if (path === '/api/admin/question-sets/5/re-recognition' && options?.method === 'POST') return readyJob
+      if (path === '/api/admin/question-recognition-jobs/9/apply' && options?.method === 'POST') return { ok: true }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /整套重识别/ }))
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText(/思考级别：high/)).toBeInTheDocument()
+    expect(within(dialog).getByAltText('当前原题截图')).toHaveAttribute('src', '/api/question-assets/10')
+    expect(within(dialog).getByAltText('重新识别截图')).toHaveAttribute('src', '/api/question-assets/11')
+    expect(within(dialog).getByText('旧题面')).toBeInTheDocument()
+    expect(within(dialog).getByText('新题面')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: /确认应用识别结果/ }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/9/apply', expect.objectContaining({ method: 'POST' })))
+  })
+
   it('filters the review queue by pending and reviewed state', async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/question-sets') return [{
@@ -91,6 +116,7 @@ describe('QuestionLibraryPanel', () => {
         ],
       }]
       if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return []
       if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
       return { id: 1 }
     })

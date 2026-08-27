@@ -12,7 +12,7 @@ from app.models import QuestionAsset
 import app.question_imports as question_imports
 from app.exercise_library import question_dict
 from app.models import Question
-from app.question_imports import _crop_is_suspicious, _extract_pages, _import_error_detail, _json_content, _merge_candidates, _needs_focused_review, _page_batches, _safe_markdown, materialize_draft, parse_pdf
+from app.question_imports import _crop_is_suspicious, _extract_pages, _import_error_detail, _json_content, _merge_candidates, _model_request_body, _needs_focused_review, _page_batches, _safe_markdown, materialize_draft, parse_pdf, repair_crop_regions
 
 
 def make_pdf(path: Path, pages: int = 1) -> None:
@@ -57,6 +57,35 @@ def test_focused_review_targets_complex_low_confidence_and_bad_crops():
     assert _needs_focused_review({**ordinary, "confidence": {"stem": .7}}) is True
     assert _needs_focused_review({**ordinary, "type": "programming"}) is True
     assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [-.1, .1, .9, .4]}]}) is True
+    assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [0, 0, 1, 1]}]}) is True
+    assert _crop_is_suspicious({**ordinary, "crop_regions": [{"source_page": 1, "bbox": [0, .2, 1, .201]}]}) is True
+
+
+def test_reasoning_effort_is_optional_and_overrides_minimax_thinking():
+    messages = [{"role": "user", "content": "test"}]
+    default = _model_request_body(Settings(import_llm_model="vision"), messages)
+    assert "reasoning_effort" not in default and "thinking" not in default
+    minimax = _model_request_body(Settings(import_llm_model="minimax-m3"), messages)
+    assert minimax["thinking"] == {"type": "disabled"}
+    configured = _model_request_body(Settings(import_llm_model="minimax-m3", import_llm_reasoning_effort=" high "), messages)
+    assert configured["reasoning_effort"] == "high" and "thinking" not in configured
+
+
+def test_suspicious_full_page_crop_uses_pdf_text_boundaries():
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 100), "1 First question alpha")
+    page.insert_text((72, 300), "2 Second question beta")
+    questions = [
+        {"number": "1", "stem_markdown": "First question alpha", "source_page": 1, "crop_regions": [{"source_page": 1, "bbox": [0, 0, 1, 1]}]},
+        {"number": "2", "stem_markdown": "Second question beta", "source_page": 1, "crop_regions": [{"source_page": 1, "bbox": [.1, .35, .8, .5]}]},
+    ]
+    repair_crop_regions(document, questions)
+    bbox = questions[0]["crop_regions"][0]["bbox"]
+    assert bbox[1] > 0 and bbox[3] < .5
+    assert not _crop_is_suspicious(questions[0])
+    assert "PDF 文本层" in questions[0]["_recognition_warnings"][0]
+    document.close()
 
 
 def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
@@ -66,7 +95,7 @@ def test_llm_json_and_draft_materialization_keep_visuals_unreviewed(tmp_path):
     engine, session_factory = create_db(f"sqlite:///{tmp_path / 'db.sqlite'}")
     Base.metadata.create_all(engine)
     settings = Settings(question_asset_dir=str(tmp_path / "assets"))
-    payload = _json_content('```json\n{"title":"样卷","questions":[{"number":"1","type":"single_choice","stem_markdown":"1+1=?","points":2,"source_page":1,"has_visual":true,"bbox":[0,0,1,0.3],"options":[{"label":"A","content_markdown":"1","correct":false},{"label":"B","content_markdown":"2","correct":true}]}]}\n```')
+    payload = _json_content('```json\n{"title":"样卷","questions":[{"number":"1","type":"single_choice","stem_markdown":"1+1=?","points":2,"source_page":1,"has_visual":true,"bbox":[0,0,1,1],"options":[{"label":"A","content_markdown":"1","correct":false},{"label":"B","content_markdown":"2","correct":true}]}]}\n```')
     with session_factory() as db:
         source = QuestionAsset(storage_key="source.pdf", original_name="paper.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
         db.add(source); db.flush()

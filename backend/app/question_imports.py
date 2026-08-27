@@ -6,6 +6,7 @@ import logging
 import re
 from copy import deepcopy
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
@@ -152,8 +153,8 @@ async def _request_batch(
         '"candidate_id":"p1-q1","number":"1","section":"一、选择题",'
         '"type":"single_choice|multiple_choice|true_false|fill_blank|programming",'
         '"stem_markdown":"题面","explanation_markdown":"解析","points":2,"correct_bool":null,'
-        '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0,0,1,1],'
-        '"crop_regions":[{"source_page":1,"bbox":[0,0,1,1]}],'
+        '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0.08,0.12,0.92,0.36],'
+        '"crop_regions":[{"source_page":1,"bbox":[0.08,0.12,0.92,0.36]}],'
         '"confidence":{"stem":0.95,"answer":0.95,"crop":0.95},'
         '"options":[{"label":"A","content_markdown":"选项","correct":true}],'
         '"blanks":[{"position":1,"accepted_answers":["答案","等价答案"]}],'
@@ -166,7 +167,7 @@ async def _request_batch(
         "题目被截断或续页不足时 complete=false，source_end_page 是实际覆盖的最后页。"
         "bbox 使用起始页的相对坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块和原始缩进。"
         "填空题将每个印刷空格在题面中写成连续的 {{1}}、{{2}}，blanks 与占位符一一对应。"
-        "crop_regions 必须覆盖完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
+        "每一道题无论 has_visual 是否为 true，都必须返回 crop_regions，且只覆盖该题的完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
@@ -176,16 +177,10 @@ async def _request_batch(
         content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(page["png"]).decode("ascii")}})
     endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
-    request_body: dict[str, Any] = {
-        "model": settings.import_llm_model,
-        "temperature": 0,
-        "messages": [
+    request_body = _model_request_body(settings, [
             {"role": "system", "content": "你是严谨的中文试卷数字化编辑。只能输出一个语法严格合法的 JSON 对象，不要解释，不要使用 Markdown 代码围栏。"},
             {"role": "user", "content": content},
-        ],
-    }
-    if settings.import_llm_model.strip().lower() == "minimax-m3":
-        request_body["thinking"] = {"type": "disabled"}
+        ])
     async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
         response = await client.post(endpoint, headers=headers, json=request_body)
         response.raise_for_status()
@@ -200,10 +195,7 @@ async def _request_batch(
                 "PDF import model returned invalid JSON; attempting one repair request: %s",
                 original_error,
             )
-            repair_body: dict[str, Any] = {
-                "model": settings.import_llm_model,
-                "temperature": 0,
-                "messages": [
+            repair_body = _model_request_body(settings, [
                     {
                         "role": "system",
                         "content": (
@@ -213,10 +205,7 @@ async def _request_batch(
                         ),
                     },
                     {"role": "user", "content": raw_content},
-                ],
-            }
-            if settings.import_llm_model.strip().lower() == "minimax-m3":
-                repair_body["thinking"] = {"type": "disabled"}
+                ])
             repair_response = await client.post(endpoint, headers=headers, json=repair_body)
             repair_response.raise_for_status()
             repair_choice = repair_response.json()["choices"][0]
@@ -237,7 +226,10 @@ def _model_request_body(settings: Settings, messages: list[dict[str, Any]]) -> d
         "temperature": 0,
         "messages": messages,
     }
-    if settings.import_llm_model.strip().lower() == "minimax-m3":
+    effort = settings.import_llm_reasoning_effort.strip()
+    if effort:
+        body["reasoning_effort"] = effort
+    elif settings.import_llm_model.strip().lower() == "minimax-m3":
         body["thinking"] = {"type": "disabled"}
     return body
 
@@ -346,9 +338,94 @@ def _crop_is_suspicious(raw: dict[str, Any]) -> bool:
             x0, y0, x1, y1 = [float(item) for item in bbox]
         except (TypeError, ValueError):
             return True
-        if x0 < 0 or y0 < 0 or x1 > 1 or y1 > 1 or x1 <= x0 or y1 <= y0 or (x1 - x0) * (y1 - y0) < .005:
+        width, height = x1 - x0, y1 - y0
+        if (
+            x0 < 0 or y0 < 0 or x1 > 1 or y1 > 1 or x1 <= x0 or y1 <= y0
+            or width * height < .005 or width < .02 or height < .02
+            or width * height >= .85
+            or x0 <= .01 and y0 <= .01 and x1 >= .99 and y1 >= .99
+        ):
             return True
     return False
+
+
+def _recognition_text(raw: dict[str, Any]) -> str:
+    values = [str(raw.get("number") or ""), str(raw.get("stem_markdown") or "")]
+    values.extend(str(item.get("content_markdown") or "") for item in raw.get("options") or [] if isinstance(item, dict))
+    program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
+    values.extend(str(program.get(key) or "") for key in ("input_markdown", "output_markdown", "constraints_markdown"))
+    return _normalize_key_part(" ".join(values))
+
+
+def _page_blocks(page: Any) -> list[tuple[float, float, float, float, str]]:
+    return [
+        (float(x0), float(y0), float(x1), float(y1), _normalize_key_part(text))
+        for x0, y0, x1, y1, text, *_ in page.get_text("blocks")
+        if _normalize_key_part(text)
+    ]
+
+
+def _locate_question_top(page: Any, raw: dict[str, Any]) -> tuple[float, float] | None:
+    needle = _recognition_text(raw)
+    if not needle:
+        return None
+    best: tuple[float, tuple[float, float]] | None = None
+    for x0, y0, x1, y1, text in _page_blocks(page):
+        exact = next((size for size in range(min(32, len(needle), len(text)), 7, -1) if needle[:size] in text or text[:size] in needle), 0)
+        score = 1.0 if exact >= 12 else SequenceMatcher(None, needle[:120], text[:240]).ratio()
+        if best is None or score > best[0]:
+            best = (score, (y0, y1))
+    return best[1] if best and best[0] >= .28 else None
+
+
+def repair_crop_regions(document: Any, questions: list[dict[str, Any]]) -> None:
+    """Replace suspicious model crops with deterministic PDF text-layer bounds."""
+    starts: dict[int, list[tuple[float, dict[str, Any]]]] = {}
+    for raw in questions:
+        page_number = _positive_int(raw.get("source_page"), 1)
+        if page_number > document.page_count:
+            continue
+        located = _locate_question_top(document[page_number - 1], raw)
+        if located:
+            starts.setdefault(page_number, []).append((located[0], raw))
+    for values in starts.values():
+        values.sort(key=lambda item: item[0])
+
+    for raw in questions:
+        if not _crop_is_suspicious(raw):
+            continue
+        start = _positive_int(raw.get("source_page"), 1)
+        end = min(document.page_count, max(start, _positive_int(raw.get("source_end_page"), start)))
+        if start > document.page_count:
+            continue
+        located = _locate_question_top(document[start - 1], raw)
+        if not located:
+            raw.setdefault("_recognition_warnings", []).append("模型裁剪区域异常，且无法通过 PDF 文本层可靠定位")
+            continue
+        regions: list[dict[str, Any]] = []
+        for page_number in range(start, end + 1):
+            page = document[page_number - 1]
+            blocks = _page_blocks(page)
+            if not blocks:
+                continue
+            content_top = min(item[1] for item in blocks)
+            content_bottom = max(item[3] for item in blocks)
+            top = located[0] if page_number == start else content_top
+            bottom = content_bottom
+            if page_number == start:
+                later = [value for value, item in starts.get(page_number, []) if value > top + 1 and item is not raw]
+                if later:
+                    bottom = min(later)
+            overlapping = [item for item in blocks if item[3] >= top and item[1] <= bottom]
+            if not overlapping or bottom <= top:
+                continue
+            x0 = min(item[0] for item in overlapping) / page.rect.width
+            x1 = max(item[2] for item in overlapping) / page.rect.width
+            regions.append({"source_page": page_number, "bbox": [x0, top / page.rect.height, x1, bottom / page.rect.height]})
+        if regions:
+            raw["crop_regions"] = regions
+            raw["bbox"] = regions[0]["bbox"]
+            raw.setdefault("_recognition_warnings", []).append("模型裁剪区域异常，已使用 PDF 文本层重新定位")
 
 
 def _needs_focused_review(raw: dict[str, Any]) -> bool:
@@ -366,7 +443,7 @@ def _needs_focused_review(raw: dict[str, Any]) -> bool:
     )
 
 
-async def _request_focused_review(settings: Settings, document: Any, raw: dict[str, Any]) -> dict[str, Any]:
+async def _request_focused_review(settings: Settings, document: Any, raw: dict[str, Any], allow_type_change: bool = False) -> dict[str, Any]:
     start = _positive_int(raw.get("source_page"), 1)
     end = min(document.page_count, max(start, _positive_int(raw.get("source_end_page"), start)))
     content: list[dict[str, Any]] = [{
@@ -397,10 +474,10 @@ async def _request_focused_review(settings: Settings, document: Any, raw: dict[s
     if len(questions) != 1 or not isinstance(questions[0], dict):
         raise ValueError("单题高清复核未返回唯一题目")
     reviewed = questions[0]
-    if _question_type(reviewed.get("type")) != _question_type(raw.get("type")):
+    if not allow_type_change and _question_type(reviewed.get("type")) != _question_type(raw.get("type")):
         raise ValueError("单题高清复核改变了题型")
-    if not str(reviewed.get("stem_markdown") or "").strip() or _crop_is_suspicious(reviewed):
-        raise ValueError("单题高清复核返回的题面或裁剪区域无效")
+    if not str(reviewed.get("stem_markdown") or "").strip():
+        raise ValueError("单题高清复核返回的题面无效")
     kind = _question_type(reviewed.get("type"))
     if kind in {"single_choice", "multiple_choice"} and len(reviewed.get("options") or []) < 2:
         raise ValueError("单题高清复核缺少选择题选项")
@@ -682,6 +759,12 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 raw["_recognition_warnings"].append(detail)
                 warnings.append(detail)
                 logger.warning("Focused question review failed: %s", _import_error_detail(exc))
+        repair_crop_regions(document, merged)
+        for raw in merged:
+            if _crop_is_suspicious(raw):
+                detail = f"第 {raw.get('source_page')} 页题目 {raw.get('number') or ''} 的裁剪区域仍异常，请人工替换图片"
+                raw.setdefault("_recognition_warnings", []).append(detail)
+                warnings.append(detail)
         for page_number, expected in expected_by_page.items():
             actual = sum(int(item.get("source_page") or 0) == page_number for item in merged)
             if actual != expected:
@@ -713,12 +796,27 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
         raise
 
 
-def _save_crop(db: Session, settings: Settings, question_set_id: int, document: Any, raw: dict[str, Any], index: int) -> int | None:
-    if not raw.get("has_visual") and not raw.get("bbox") and not raw.get("crop_regions"):
+def _save_crop(
+    db: Session,
+    settings: Settings,
+    question_set_id: int,
+    document: Any,
+    raw: dict[str, Any],
+    index: int,
+    kind: str = "question",
+    allow_page_fallback: bool = False,
+) -> int | None:
+    suspicious = _crop_is_suspicious(raw)
+    if suspicious and not allow_page_fallback:
         return None
     try:
         import pymupdf as fitz
-        regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox") or [0, 0, 1, 1]}]
+        if suspicious:
+            start = _positive_int(raw.get("source_page"), 1)
+            end = max(start, _positive_int(raw.get("source_end_page"), start))
+            regions = [{"source_page": page_number, "bbox": [0, 0, 1, 1]} for page_number in range(start, end + 1)]
+        else:
+            regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox") or [0, 0, 1, 1]}]
         crops: list[bytes] = []
         sizes: list[tuple[int, int]] = []
         for region in regions:
@@ -731,6 +829,8 @@ def _save_crop(db: Session, settings: Settings, question_set_id: int, document: 
                 raise ValueError("无效裁剪区域")
             rect = fitz.Rect(x0 * page.rect.width, y0 * page.rect.height, x1 * page.rect.width, y1 * page.rect.height)
             pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+            if pixmap.width < 24 or pixmap.height < 24 or pixmap.width * pixmap.height > 40_000_000:
+                raise ValueError("裁剪图片尺寸异常")
             crops.append(pixmap.tobytes("png"))
             sizes.append((pixmap.width, pixmap.height))
         if len(crops) == 1:
@@ -748,7 +848,7 @@ def _save_crop(db: Session, settings: Settings, question_set_id: int, document: 
         root = Path(settings.question_asset_dir)
         root.mkdir(parents=True, exist_ok=True)
         (root / key).write_bytes(data)
-        asset = QuestionAsset(question_set_id=question_set_id, storage_key=key, original_name=key, mime_type="image/png", kind="question", size_bytes=len(data))
+        asset = QuestionAsset(question_set_id=question_set_id, storage_key=key, original_name=key, mime_type="image/png", kind=kind, size_bytes=len(data))
         db.add(asset)
         db.flush()
         return asset.id
@@ -786,10 +886,12 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
             recognition_confidence=_confidence_value(raw),
             recognition_warnings_json=json.dumps(raw.get("_recognition_warnings") or [], ensure_ascii=False),
             show_source_crop=bool(raw.get("has_visual")),
+            source_section=str(raw.get("section") or "")[:180],
+            source_number=str(raw.get("number") or "")[:80],
         )
         db.add(question)
         db.flush()
-        question.source_asset_id = _save_crop(db, settings, question_set.id, document, raw, index)
+        question.source_asset_id = _save_crop(db, settings, question_set.id, document, raw, index, allow_page_fallback=True)
         if kind in {"single_choice", "multiple_choice"}:
             for option_index, option in enumerate(raw.get("options") or []):
                 question.options.append(QuestionOption(

@@ -27,10 +27,12 @@ from ..models import (
     Question,
     QuestionAsset,
     QuestionImportJob,
+    QuestionRecognitionJob,
     QuestionSet,
     WrongQuestion,
 )
 from ..question_imports import import_llm_configured
+from ..question_recognition import apply_job as apply_recognition_job, job_dict as recognition_job_dict, target_fingerprint
 from ..security import Principal, current_principal, require_admin
 
 
@@ -109,6 +111,7 @@ def import_llm_status(_principal: Principal = Depends(require_admin), settings: 
         "configured": import_llm_configured(settings),
         "base_url": settings.import_llm_base_url,
         "model": settings.import_llm_model,
+        "reasoning_effort": settings.import_llm_reasoning_effort.strip() or None,
         "batch_pages": settings.import_llm_batch_pages,
     }
 
@@ -250,6 +253,102 @@ def reorder_sets(payload: QuestionSetOrder, _principal: Principal = Depends(requ
 @router.get("/api/admin/question-sets/{set_id}")
 def get_set(set_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     return question_set_dict(_get_set(db, set_id))
+
+
+def _enqueue_recognition(db: Session, settings: Settings, question_set: QuestionSet, question: Question | None = None) -> QuestionRecognitionJob:
+    if not import_llm_configured(settings):
+        raise HTTPException(status_code=409, detail="请先配置独立的 PDF 识别模型")
+    _editable(question_set)
+    active = db.scalar(select(QuestionRecognitionJob.id).where(
+        QuestionRecognitionJob.target_set_id == question_set.id,
+        QuestionRecognitionJob.target_question_id == (question.id if question else None),
+        QuestionRecognitionJob.status.in_(["pending", "processing"]),
+    ).limit(1))
+    if active:
+        raise HTTPException(status_code=409, detail="当前目标已有重新识别任务正在处理")
+    source_asset_id = question.source_asset_id if question and question.source_asset_id else question_set.source_pdf_asset_id
+    if not source_asset_id:
+        raise HTTPException(status_code=409, detail="当前目标没有可用于重新识别的原题图片或 PDF")
+    job = QuestionRecognitionJob(
+        scope="question" if question else "set",
+        status="pending",
+        target_set_id=question_set.id,
+        target_question_id=question.id if question else None,
+        source_asset_id=source_asset_id,
+        target_fingerprint=target_fingerprint(question_set, question),
+        model=settings.import_llm_model,
+        base_url=settings.import_llm_base_url,
+        reasoning_effort=settings.import_llm_reasoning_effort.strip(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/api/admin/question-sets/{set_id}/re-recognition", status_code=202)
+def re_recognize_set(set_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    question_set = _get_set(db, set_id)
+    if not question_set.source_pdf_asset_id:
+        raise HTTPException(status_code=409, detail="当前题套没有保留原始 PDF")
+    return recognition_job_dict(db, _enqueue_recognition(db, settings, question_set))
+
+
+@router.post("/api/admin/questions/{question_id}/re-recognition", status_code=202)
+def re_recognize_question(question_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    question = db.get(Question, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    return recognition_job_dict(db, _enqueue_recognition(db, settings, _get_set(db, question.question_set_id), question))
+
+
+@router.get("/api/admin/question-recognition-jobs/{job_id}")
+def get_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    return recognition_job_dict(db, job)
+
+
+@router.get("/api/admin/question-recognition-jobs")
+def list_recognition_jobs(_principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    jobs = db.scalars(select(QuestionRecognitionJob).order_by(QuestionRecognitionJob.created_at.desc()).limit(50)).all()
+    return [recognition_job_dict(db, item, include_result=False) for item in jobs]
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/retry")
+def retry_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    if not import_llm_configured(settings):
+        raise HTTPException(status_code=409, detail="请先配置独立的 PDF 识别模型")
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    if job.status != "failed":
+        raise HTTPException(status_code=409, detail="只有失败任务可以重试")
+    question_set = _get_set(db, job.target_set_id)
+    _editable(question_set)
+    question = db.get(Question, job.target_question_id) if job.target_question_id else None
+    job.target_fingerprint = target_fingerprint(question_set, question if job.scope == "question" else None)
+    job.status = "pending"
+    job.attempts = 0
+    job.error = ""
+    job.processing_started_at = None
+    db.commit()
+    return recognition_job_dict(db, job)
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/apply")
+def apply_recognition(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    try:
+        question_set = apply_recognition_job(db, job)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "job": recognition_job_dict(db, job), "question_set": question_set_dict(_get_set(db, question_set.id))}
 
 
 @router.post("/api/admin/question-sets", status_code=201)
@@ -553,6 +652,8 @@ def question_asset(asset_id: int, principal: Principal = Depends(current_princip
     if not asset:
         raise HTTPException(status_code=404, detail="资源不存在")
     if principal.role == "child":
+        if asset.kind == "question_preview":
+            raise HTTPException(status_code=404, detail="资源不存在")
         published = asset.question_set_id and db.scalar(select(QuestionSet.id).where(QuestionSet.id == asset.question_set_id, QuestionSet.status == "published"))
         used_by_child = db.scalar(
             select(ExerciseSessionItem.id)

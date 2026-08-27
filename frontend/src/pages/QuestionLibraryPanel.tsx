@@ -10,12 +10,14 @@ import { api, jsonBody } from '../api'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionBlank, QuestionOption, QuestionSetSummary } from '../types'
 
 type ImportJob = { id: number; status: string; question_set_id?: number; page_count?: number; question_count?: number; source_filename?: string; error?: string; attempts: number; created_at: string; warnings?: string[]; counts?: Partial<Record<ExerciseQuestionType, number>>; retried_pages?: number[] }
-type LlmStatus = { configured: boolean; base_url: string; model: string; batch_pages: number }
+type LlmStatus = { configured: boolean; base_url: string; model: string; reasoning_effort?: string | null; batch_pages: number }
 type EditableQuestion = Omit<ExerciseQuestion, 'id'> & { id?: number }
 type ReviewFilter = 'pending' | 'reviewed' | 'all'
 type EditorState = { setId: number; setTitle: string; question: EditableQuestion; filter: ReviewFilter; queueIds: number[] }
 type ReferenceCasePreview = { id: number; status: string; stable: boolean; current_output: string; candidate_output: string; runs?: { status: string; stdout?: string; stderr?: string }[] }
 type ReferencePreview = { job_id: string; question_id: number; status: string; stale: boolean; cases: ReferenceCasePreview[] }
+type RecognitionChange = { status: 'matched' | 'added' | 'unmatched'; question_id?: number | null; current?: ExerciseQuestion | null; candidate?: EditableQuestion | null; changed_fields: string[] }
+type RecognitionJob = { id: number; scope: 'set' | 'question'; status: 'pending' | 'processing' | 'ready' | 'applied' | 'failed'; target_set_id: number; target_question_id?: number | null; model: string; reasoning_effort?: string | null; attempts: number; error?: string; stale: boolean; result?: { title?: string; description?: string; changes?: RecognitionChange[]; diagnostics?: { warnings?: string[] } }; created_at: string }
 
 const labels: Record<ExerciseQuestionType, string> = {
   single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', programming: '编程题',
@@ -23,7 +25,7 @@ const labels: Record<ExerciseQuestionType, string> = {
 
 const blankQuestion = (sortOrder = 0): EditableQuestion => ({
   type: 'single_choice', stem_markdown: '', explanation_markdown: '', points: 2, sort_order: sortOrder,
-  reviewed: false, correct_bool: true, source_page: null, source_end_page: null, recognition_confidence: null, recognition_warnings: [], source_asset_id: null, show_source_crop: false,
+  reviewed: false, correct_bool: true, source_page: null, source_end_page: null, source_section: '', source_number: '', recognition_confidence: null, recognition_warnings: [], source_asset_id: null, show_source_crop: false,
   options: [
     { label: 'A', content_markdown: '', correct: true, sort_order: 0 },
     { label: 'B', content_markdown: '', correct: false, sort_order: 1 },
@@ -102,6 +104,9 @@ export function QuestionLibraryPanel() {
   const [activeSetId, setActiveSetId] = useState<number | null>(null)
   const [reviewFilters, setReviewFilters] = useState<Record<number, ReviewFilter>>({})
   const [referencePreview, setReferencePreview] = useState<ReferencePreview | null>(null)
+  const [recognitionJobs, setRecognitionJobs] = useState<RecognitionJob[]>([])
+  const [recognitionPreviewId, setRecognitionPreviewId] = useState<number | null>(null)
+  const [recognitionDetail, setRecognitionDetail] = useState<RecognitionJob | null>(null)
   const knownJobIds = useRef<Set<number>>(new Set())
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -109,12 +114,13 @@ export function QuestionLibraryPanel() {
   )
 
   const reload = useCallback(async () => {
-    const [setItems, importItems, status] = await Promise.all([
+    const [setItems, importItems, status, recognitionItems] = await Promise.all([
       api<QuestionSetSummary[]>('/api/admin/question-sets'),
       api<ImportJob[]>('/api/admin/question-imports'),
       api<LlmStatus>('/api/admin/import-llm/status'),
+      api<RecognitionJob[]>('/api/admin/question-recognition-jobs'),
     ])
-    setSets(setItems); setJobs(importItems); setLlm(status)
+    setSets(setItems); setJobs(importItems); setLlm(status); setRecognitionJobs(Array.isArray(recognitionItems) ? recognitionItems : [])
     setExpandedJobs((current) => {
       const next = new Set(current ?? [])
       importItems.forEach((job, index) => {
@@ -126,12 +132,19 @@ export function QuestionLibraryPanel() {
   }, [])
 
   useEffect(() => { void reload().catch((e) => setError(e.message)) }, [reload])
-  const activeJobs = useMemo(() => jobs.some((job) => ['pending', 'processing'].includes(job.status)), [jobs])
+  const activeJobs = useMemo(() => jobs.some((job) => ['pending', 'processing'].includes(job.status)) || recognitionJobs.some((job) => ['pending', 'processing'].includes(job.status)), [jobs, recognitionJobs])
   useEffect(() => {
     if (!activeJobs) return
     const timer = window.setInterval(() => void reload().catch(() => {}), 2500)
     return () => window.clearInterval(timer)
   }, [activeJobs, reload])
+  useEffect(() => {
+    if (recognitionPreviewId == null) return
+    const summary = recognitionJobs.find((item) => item.id === recognitionPreviewId)
+    if (!summary) return
+    if (recognitionDetail?.id === summary.id && recognitionDetail.status === summary.status && (summary.status !== 'ready' || recognitionDetail.result)) return
+    void api<RecognitionJob>(`/api/admin/question-recognition-jobs/${summary.id}`).then(setRecognitionDetail).catch((e) => setError(e instanceof Error ? e.message : '读取重新识别结果失败'))
+  }, [recognitionDetail?.id, recognitionDetail?.result, recognitionDetail?.status, recognitionJobs, recognitionPreviewId])
 
   const action = async (work: () => Promise<unknown>, success: string) => {
     setError(''); setMessage('')
@@ -210,6 +223,37 @@ export function QuestionLibraryPanel() {
     return updated
   }
 
+  const startRecognition = async (path: string) => {
+    setError(''); setMessage('正在创建重新识别任务…')
+    try {
+      const job = await api<RecognitionJob>(path, { method: 'POST' })
+      setRecognitionPreviewId(job.id)
+      setRecognitionDetail(job)
+      await reload()
+      setMessage(job.scope === 'set' ? '整套题目已进入重新识别队列' : '当前题目已进入重新识别队列')
+    } catch (e) { setError(e instanceof Error ? e.message : '创建重新识别任务失败') }
+  }
+
+  const retryRecognition = async (jobId: number) => {
+    const ok = await action(() => api(`/api/admin/question-recognition-jobs/${jobId}/retry`, { method: 'POST' }), '重新识别任务已重新排队')
+    if (ok) setRecognitionPreviewId(jobId)
+  }
+
+  const applyRecognition = async (jobId: number) => {
+    const ok = await action(() => api(`/api/admin/question-recognition-jobs/${jobId}/apply`, { method: 'POST' }), '重新识别结果已应用，相关题目已恢复为待复核')
+    if (ok) {
+      setRecognitionPreviewId(null)
+      setRecognitionDetail(null)
+      setEditor(null)
+    }
+  }
+
+  const openRecognitionPreview = async (jobId: number) => {
+    setRecognitionPreviewId(jobId)
+    try { setRecognitionDetail(await api<RecognitionJob>(`/api/admin/question-recognition-jobs/${jobId}`)) }
+    catch (e) { setError(e instanceof Error ? e.message : '读取重新识别结果失败') }
+  }
+
   const generateOutputs = async (questionId: number) => {
     setError(''); setMessage('正在提交参考程序…')
     try {
@@ -274,12 +318,13 @@ export function QuestionLibraryPanel() {
   const visibleJobs = showAllJobs ? jobs : jobs.slice(0, 10)
   const activeSet = sets.find((item) => item.id === activeSetId)
   const editorQueueIndex = editor?.question.id ? editor.queueIds.indexOf(editor.question.id) : -1
+  const recognitionPreview = recognitionDetail?.id === recognitionPreviewId ? recognitionDetail : recognitionJobs.find((item) => item.id === recognitionPreviewId) ?? null
 
   return <>
     <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div></header>
     {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
     <section className={`card pdf-import-card library-disclosure-card${importPanelOpen ? ' expanded' : ' collapsed'}`}>
-      <header className="pdf-import-heading"><button type="button" className="course-disclosure pdf-import-disclosure" aria-expanded={importPanelOpen} aria-label={`${importPanelOpen ? '收起' : '展开'} PDF 智能识别`} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown className="disclosure-chevron" /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
+      <header className="pdf-import-heading"><button type="button" className="course-disclosure pdf-import-disclosure" aria-expanded={importPanelOpen} aria-label={`${importPanelOpen ? '收起' : '展开'} PDF 智能识别`} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown className="disclosure-chevron" /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页 · 思考级别：${llm.reasoning_effort || '模型默认'}` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
       {importPanelOpen && <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>}
       </header>
       {importPanelOpen && jobs.length > 0 && <div className="import-job-list">{visibleJobs.map((job) => {
@@ -295,6 +340,7 @@ export function QuestionLibraryPanel() {
           </div>}
         </article>
       })}{jobs.length > 10 && <button type="button" className="ghost import-show-all" onClick={() => setShowAllJobs((current) => !current)}>{showAllJobs ? '收起历史任务' : `显示全部 ${jobs.length} 项`}</button>}</div>}
+      {importPanelOpen && recognitionJobs.length > 0 && <div className="recognition-job-strip"><h4>重新识别任务</h4>{recognitionJobs.slice(0, 10).map((job) => <button type="button" className="ghost" onClick={() => void openRecognitionPreview(job.id)} key={job.id}><RefreshCcw className={['pending', 'processing'].includes(job.status) ? 'is-spinning' : ''} /><span>{job.scope === 'set' ? `题套 #${job.target_set_id}` : `题目 #${job.target_question_id}`}</span><em>{job.status === 'ready' ? '待确认' : job.status === 'processing' ? '识别中' : job.status === 'pending' ? '等待中' : job.status === 'failed' ? '失败' : '已应用'}</em></button>)}</div>}
     </section>
     <form className="inline-form card" onSubmit={createSet}><label>题套名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />手动新建题套</button></form>
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={({ active }) => setActiveSetId(Number(active.id))} onDragCancel={() => setActiveSetId(null)} onDragEnd={(event) => void finishSetReorder(event)}>
@@ -309,7 +355,7 @@ export function QuestionLibraryPanel() {
       <header><button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
         {set.status === 'draft' && <div className="question-set-review-tools"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
           ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
-        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions"><button className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></div></div>}
+        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions">{set.source_pdf_asset_id && <button type="button" className="ghost" disabled={recognitionJobs.some((job) => job.target_set_id === set.id && !job.target_question_id && ['pending', 'processing'].includes(job.status))} onClick={() => void startRecognition(`/api/admin/question-sets/${set.id}/re-recognition`)}><RefreshCcw />整套重识别</button>}<button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></div></div>}
         {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
         {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
         {set.status !== 'published' && <button className="danger-button" aria-label={`永久删除题套 ${set.title}`} onClick={() => window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。') && void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除')}><Trash2 /></button>}
@@ -324,12 +370,13 @@ export function QuestionLibraryPanel() {
     </SortableContext>
     <DragOverlay>{activeSet && <div className="question-set-drag-overlay card"><GripVertical /><div><strong>{activeSet.title}</strong><small>{activeSet.question_count} 题 · {activeSet.total_points} 分</small></div></div>}</DragOverlay>
     </DndContext>
-    {editor && <QuestionEditor key={`editor-${editor.setId}`} value={editor.question} setTitle={editor.setTitle} currentPosition={editorQueueIndex >= 0 ? editorQueueIndex + 1 : 0} queueSize={editor.queueIds.length} canPrevious={!!editor.question.id && editorQueueIndex > 0} canNext={!!editor.question.id && editorQueueIndex >= 0 && editorQueueIndex < editor.queueIds.length - 1} onCancel={() => setEditor(null)} onSave={(value) => saveQuestion(value)} onSaveReviewNext={(value) => saveQuestion(value, true, true)} onNavigate={navigateEditor} onUploadImage={uploadSourceImage} />}
+    {editor && <QuestionEditor key={`editor-${editor.setId}`} value={editor.question} setTitle={editor.setTitle} currentPosition={editorQueueIndex >= 0 ? editorQueueIndex + 1 : 0} queueSize={editor.queueIds.length} canPrevious={!!editor.question.id && editorQueueIndex > 0} canNext={!!editor.question.id && editorQueueIndex >= 0 && editorQueueIndex < editor.queueIds.length - 1} onCancel={() => setEditor(null)} onSave={(value) => saveQuestion(value)} onSaveReviewNext={(value) => saveQuestion(value, true, true)} onNavigate={navigateEditor} onUploadImage={uploadSourceImage} onRecognize={(questionId) => startRecognition(`/api/admin/questions/${questionId}/re-recognition`)} recognitionPending={!!editor.question.id && recognitionJobs.some((job) => job.target_question_id === editor.question.id && ['pending', 'processing'].includes(job.status))} />}
     {referencePreview && <ReferenceOutputModal preview={referencePreview} onCancel={() => setReferencePreview(null)} onApply={() => void applyReferenceOutputs()} />}
+    {recognitionPreview && <RecognitionPreviewModal job={recognitionPreview} onCancel={() => { setRecognitionPreviewId(null); setRecognitionDetail(null) }} onApply={() => void applyRecognition(recognitionPreview.id)} onRetry={() => void retryRecognition(recognitionPreview.id)} />}
   </>
 }
 
-function QuestionEditor({ value, setTitle, currentPosition, queueSize, canPrevious, canNext, onCancel, onSave, onSaveReviewNext, onNavigate, onUploadImage }: { value: EditableQuestion; setTitle: string; currentPosition: number; queueSize: number; canPrevious: boolean; canNext: boolean; onCancel: () => void; onSave: (value: EditableQuestion) => Promise<void>; onSaveReviewNext: (value: EditableQuestion) => Promise<void>; onNavigate: (offset: number) => void; onUploadImage: (questionId: number, file: File) => Promise<ExerciseQuestion> }) {
+function QuestionEditor({ value, setTitle, currentPosition, queueSize, canPrevious, canNext, onCancel, onSave, onSaveReviewNext, onNavigate, onUploadImage, onRecognize, recognitionPending }: { value: EditableQuestion; setTitle: string; currentPosition: number; queueSize: number; canPrevious: boolean; canNext: boolean; onCancel: () => void; onSave: (value: EditableQuestion) => Promise<void>; onSaveReviewNext: (value: EditableQuestion) => Promise<void>; onNavigate: (offset: number) => void; onUploadImage: (questionId: number, file: File) => Promise<ExerciseQuestion>; onRecognize: (questionId: number) => Promise<void>; recognitionPending: boolean }) {
   const [question, setQuestion] = useState<EditableQuestion>(() => cloneQuestion(value))
   const [uploadingImage, setUploadingImage] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
@@ -348,6 +395,7 @@ function QuestionEditor({ value, setTitle, currentPosition, queueSize, canPrevio
   }))
   const close = useCallback(() => { if (!dirty || window.confirm('有尚未保存的修改，确认关闭？')) onCancel() }, [dirty, onCancel])
   const navigate = (offset: number) => { if (!dirty || window.confirm('有尚未保存的修改，确认切换题目？')) onNavigate(offset) }
+  const recognize = () => { if (question.id && (!dirty || window.confirm('重新识别基于已保存内容，未保存修改不会进入识别任务。确认继续？'))) void onRecognize(question.id) }
   const save = async (review = false) => {
     if (saving) return
     setSaving(true)
@@ -365,7 +413,7 @@ function QuestionEditor({ value, setTitle, currentPosition, queueSize, canPrevio
   }, [close, question, saving])
   return <div className="modal-backdrop question-editor-backdrop" role="presentation"><form className="question-editor-modal card" aria-label="题目编辑器" onSubmit={(e) => { e.preventDefault(); void save(false) }}>
     <header className="question-editor-header"><div><p className="eyebrow">题目编辑</p><div className="question-editor-title-row"><h2>{setTitle}</h2><span className={`status-pill ${question.reviewed ? 'published' : 'draft'}`}>{question.reviewed ? '已复核' : '待复核'}</span>{question.id && queueSize > 0 && <span className="question-editor-position">第 {currentPosition} / {queueSize} 题</span>}</div><p>{question.id ? '校对题面与答案后完成复核' : '添加一道新题目'}</p></div><div className="question-editor-header-actions"><button type="button" className="ghost" aria-label={sourceCollapsed ? '展开原题区域' : '收起原题区域'} title={sourceCollapsed ? '展开原题区域' : '收起原题区域'} onClick={() => setSourceCollapsed((current) => !current)}>{sourceCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}<span>{sourceCollapsed ? '展开原图' : '收起原图'}</span></button><button type="button" className="ghost editor-close" aria-label="关闭" title="关闭（Esc）" onClick={close}><X /></button></div></header>
-    <div className={`question-editor-body${sourceCollapsed ? ' source-collapsed' : ''}`}><aside className="question-source-panel">{sourceCollapsed ? <button type="button" className="source-panel-rail" aria-label="展开原题区域" onClick={() => setSourceCollapsed(false)}><PanelLeftOpen /><span>原题</span></button> : <><div className="question-source-heading"><h3>原题图片</h3>{question.source_asset_id && <label className="source-visibility-toggle"><input type="checkbox" aria-label="向学生显示原题截图" checked={question.show_source_crop ?? false} onChange={(e) => setQuestion({ ...question, show_source_crop: e.target.checked, reviewed: false })} /><span>向学生显示</span></label>}</div><div className="question-source-canvas">{question.source_asset_id ? <img className="question-source-preview" src={`/api/question-assets/${question.source_asset_id}`} alt="原题截图" /> : <p className="notice">当前题目没有原题图片</p>}</div><div className="question-source-meta">{question.id && <label className="file-picker"><FileUp />{uploadingImage ? '正在上传…' : '本地图片替换'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploadingImage} onChange={async (event) => { const file = event.target.files?.[0]; if (!file || !question.id) return; setUploadingImage(true); try { const updated = await onUploadImage(question.id, file); setQuestion(cloneQuestion(updated)) } finally { setUploadingImage(false) } }} /></label>}{question.recognition_confidence != null && <p className="recognition-confidence">识别置信度：<strong>{Math.round(question.recognition_confidence * 100)}%</strong></p>}{question.recognition_warnings?.map((warning) => <p className="notice warning" key={warning}>{warning}</p>)}</div></>}</aside><div className="question-editor-fields">
+    <div className={`question-editor-body${sourceCollapsed ? ' source-collapsed' : ''}`}><aside className="question-source-panel">{sourceCollapsed ? <button type="button" className="source-panel-rail" aria-label="展开原题区域" onClick={() => setSourceCollapsed(false)}><PanelLeftOpen /><span>原题</span></button> : <><div className="question-source-heading"><h3>原题图片</h3>{question.source_asset_id && <label className="source-visibility-toggle"><input type="checkbox" aria-label="向学生显示原题截图" checked={question.show_source_crop ?? false} onChange={(e) => setQuestion({ ...question, show_source_crop: e.target.checked, reviewed: false })} /><span>向学生显示</span></label>}</div><div className="question-source-canvas">{question.source_asset_id ? <img className="question-source-preview" src={`/api/question-assets/${question.source_asset_id}`} alt="原题截图" /> : <p className="notice">当前题目没有原题图片</p>}</div><div className="question-source-meta">{question.id && <div className="source-image-actions"><label className="file-picker"><FileUp />{uploadingImage ? '正在上传…' : '本地图片替换'}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploadingImage} onChange={async (event) => { const file = event.target.files?.[0]; if (!file || !question.id) return; setUploadingImage(true); try { const updated = await onUploadImage(question.id, file); setQuestion(cloneQuestion(updated)) } finally { setUploadingImage(false) } }} /></label><button type="button" className="ghost" disabled={recognitionPending} onClick={recognize}><RefreshCcw className={recognitionPending ? 'is-spinning' : ''} />{recognitionPending ? '重新识别中…' : '重新识别本题'}</button></div>}{question.recognition_confidence != null && <p className="recognition-confidence">识别置信度：<strong>{Math.round(question.recognition_confidence * 100)}%</strong></p>}{question.recognition_warnings?.map((warning) => <p className="notice warning" key={warning}>{warning}</p>)}</div></>}</aside><div className="question-editor-fields">
       <section className="question-editor-section"><h3>基础信息</h3><div className="question-basic-grid"><label>题型<select value={question.type} onChange={(e) => changeType(e.target.value as ExerciseQuestionType)}>{Object.entries(labels).map(([type, label]) => <option value={type} key={type}>{label}</option>)}</select></label><label>分值<input type="number" min="1" value={question.points} onChange={(e) => setQuestion({ ...question, points: Number(e.target.value), reviewed: false })} /></label></div></section>
       <section className="question-editor-section"><h3>题目内容</h3><label>题面<textarea className="question-stem-input" rows={8} value={question.stem_markdown} onChange={(e) => setQuestion({ ...question, stem_markdown: e.target.value, reviewed: false })} required /></label></section>
       <section className="question-editor-section"><h3>答案设置</h3>{(question.type === 'single_choice' || question.type === 'multiple_choice') && <section className="option-editor"><h4>选择题答案</h4>{question.options.map((option, index) => <div key={index}><input aria-label={`选项 ${index + 1} 标签`} value={option.label} onChange={(e) => updateOption(index, { label: e.target.value })} /><textarea aria-label={`选项 ${index + 1} 内容`} rows={2} value={option.content_markdown} onChange={(e) => updateOption(index, { content_markdown: e.target.value })} required /><label className="check-label"><input type={question.type === 'single_choice' ? 'radio' : 'checkbox'} name="correct-option" checked={option.correct ?? false} onChange={(e) => setQuestion((current) => ({ ...current, reviewed: false, options: current.options.map((item, itemIndex) => ({ ...item, correct: question.type === 'single_choice' ? itemIndex === index : itemIndex === index ? e.target.checked : item.correct })) }))} />正确</label><button type="button" className="danger-button" aria-label={`删除选项 ${index + 1}`} onClick={() => setQuestion({ ...question, reviewed: false, options: question.options.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 /></button></div>)}<button type="button" className="ghost" onClick={() => setQuestion({ ...question, reviewed: false, options: [...question.options, { label: String.fromCharCode(65 + question.options.length), content_markdown: '', correct: false, sort_order: question.options.length }] })}><Plus />添加选项</button></section>}
@@ -400,6 +448,40 @@ function ProgrammingEditor({ program, setProgram, updateCase }: { program: NonNu
     <h3>测试点</h3>{program.cases.map((item, index) => <div className="case-editor" key={item.id ?? index}><div><strong>{item.is_sample ? '公开样例' : '隐藏测试点'}</strong><label className="check-label"><input type="checkbox" checked={item.is_sample} onChange={(e) => updateCase(index, { is_sample: e.target.checked, weight: e.target.checked ? 0 : item.weight })} />公开</label>{!item.is_sample && <label className="check-label"><input type="checkbox" checked={item.confirmed ?? false} onChange={(e) => updateCase(index, { confirmed: e.target.checked })} />已确认</label>}</div><label>输入<textarea className="code-input" rows={3} value={item.input_data} onChange={(e) => updateCase(index, { input_data: e.target.value, confirmed: false })} /></label><label>期望输出<textarea className="code-input" rows={3} value={item.expected_output} onChange={(e) => updateCase(index, { expected_output: e.target.value, confirmed: false })} /></label>{!item.is_sample && <label>权重<input type="number" min="0" value={item.weight} onChange={(e) => updateCase(index, { weight: Number(e.target.value), confirmed: false })} /></label>}<button type="button" className="danger-button" onClick={() => setProgram({ ...program, cases: program.cases.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 />删除测试点</button></div>)}
     <button type="button" className="ghost" onClick={() => setProgram({ ...program, cases: [...program.cases, { input_data: '', expected_output: '', is_sample: false, weight: 0, confirmed: false, note: '' }] })}><Plus />添加测试点</button>
   </section>
+}
+
+const recognitionFieldLabels: Record<string, string> = {
+  type: '题型', stem_markdown: '题面', explanation_markdown: '解析', points: '分值', correct_bool: '判断答案',
+  source_page: '来源页', source_end_page: '结束页', options: '选项与答案', blanks: '填空答案', programming: '编程规格', source_asset_id: '原题图片',
+}
+
+const recognitionValue = (value: unknown) => {
+  if (value == null || value === '') return '（空）'
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, null, 2)
+}
+
+function RecognitionPreviewModal({ job, onCancel, onApply, onRetry }: { job: RecognitionJob; onCancel: () => void; onApply: () => void; onRetry: () => void }) {
+  const changes = job.result?.changes ?? []
+  const matched = changes.filter((item) => item.status === 'matched').length
+  const added = changes.filter((item) => item.status === 'added').length
+  const unmatched = changes.filter((item) => item.status === 'unmatched').length
+  return <div className="modal-backdrop" role="presentation"><section className="question-editor-modal card recognition-preview-modal" role="dialog" aria-modal="true" aria-label="重新识别预览">
+    <header><div><p className="eyebrow">{job.scope === 'set' ? '整套重新识别' : '单题重新识别'}</p><h2>{job.status === 'ready' ? '确认识别差异' : job.status === 'failed' ? '重新识别失败' : job.status === 'applied' ? '结果已应用' : '模型正在识别'}</h2><p>{job.model} · 思考级别：{job.reasoning_effort || '模型默认'}</p></div><button type="button" className="ghost" aria-label="关闭" onClick={onCancel}><X /></button></header>
+    {['pending', 'processing'].includes(job.status) && <div className="recognition-progress"><RefreshCcw className="is-spinning" /><strong>{job.status === 'pending' ? '正在等待识别资源…' : '正在生成候选结果与截图…'}</strong><p>可以关闭窗口，任务会在后台继续运行。</p></div>}
+    {job.status === 'failed' && <><p className="notice error">{job.error || '模型请求失败'}</p><div className="button-row"><button type="button" className="ghost" onClick={onCancel}>关闭</button><button type="button" className="primary" onClick={onRetry}><RefreshCcw />重新排队</button></div></>}
+    {job.status === 'ready' && <>
+      {job.stale && <p className="notice error">识别期间题目内容、图片或排序发生了变化，当前结果已过期，请重新创建任务。</p>}
+      <div className="recognition-summary"><span><strong>{matched}</strong>匹配更新</span><span><strong>{added}</strong>新增题目</span><span><strong>{unmatched}</strong>保留旧题</span><span><strong>{job.result?.diagnostics?.warnings?.length ?? 0}</strong>识别警告</span></div>
+      {!!job.result?.diagnostics?.warnings?.length && <details className="recognition-job-warnings"><summary>查看整套识别警告</summary><ul>{job.result.diagnostics.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul></details>}
+      <div className="recognition-change-list">{changes.map((change, index) => <details className={`recognition-change ${change.status}`} open={job.scope === 'question'} key={`${change.status}-${change.question_id ?? index}`}><summary><strong>{change.status === 'added' ? '新增题目' : change.status === 'unmatched' ? '未匹配旧题（保留）' : `题目 ${change.question_id}`}</strong><span>{change.status === 'unmatched' ? '不删除，恢复待复核' : `${change.changed_fields.length} 项变化`}</span></summary><div className="recognition-change-body">
+        {(change.current?.source_asset_id || change.candidate?.source_asset_id) && <div className="recognition-image-compare"><figure><figcaption>当前图片</figcaption>{change.current?.source_asset_id ? <img src={`/api/question-assets/${change.current.source_asset_id}`} alt="当前原题截图" /> : <p>无</p>}</figure><figure><figcaption>候选图片</figcaption>{change.candidate?.source_asset_id ? <img src={`/api/question-assets/${change.candidate.source_asset_id}`} alt="重新识别截图" /> : <p>未生成可靠截图，将保留旧图</p>}</figure></div>}
+        {change.changed_fields.filter((field) => field !== 'source_asset_id').map((field) => <section className="recognition-field-diff" key={field}><h4>{recognitionFieldLabels[field] || field}</h4><div><label>当前值<pre>{recognitionValue(change.current?.[field as keyof ExerciseQuestion])}</pre></label><label>候选值<pre>{recognitionValue(change.candidate?.[field as keyof EditableQuestion])}</pre></label></div></section>)}
+        {change.status === 'unmatched' && <p className="notice warning">模型没有找到对应题目。应用后该题仍会保留，并加入人工复核警告。</p>}
+      </div></details>)}</div>
+      <div className="button-row"><button type="button" className="ghost" onClick={onCancel}>暂不应用</button><button type="button" className="primary" disabled={job.stale} onClick={onApply}><CheckCircle2 />确认应用识别结果</button></div>
+    </>}
+  </section></div>
 }
 
 function ReferenceOutputModal({ preview, onCancel, onApply }: { preview: ReferencePreview; onCancel: () => void; onApply: () => void }) {

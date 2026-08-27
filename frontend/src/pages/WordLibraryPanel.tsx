@@ -162,7 +162,7 @@ export function WordLibraryPanel() {
   return <>
     {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
     <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div></header>
-    <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><div className="llm-status-copy"><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div><button className="ghost" onClick={() => void refreshStatus()} disabled={refreshing} aria-busy={refreshing}><RefreshCcw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在刷新…' : '刷新补全状态'}</button></div>
+    <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><div className="llm-status-copy"><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url} · 思考级别：${llm.reasoning_effort || '模型默认'}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div><button className="ghost" onClick={() => void refreshStatus()} disabled={refreshing} aria-busy={refreshing}><RefreshCcw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在刷新…' : '刷新补全状态'}</button></div>
     <form className="inline-form card" onSubmit={createSet}><label>单词集名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建单词集</button></form>
     <DndContext
       sensors={sensors}

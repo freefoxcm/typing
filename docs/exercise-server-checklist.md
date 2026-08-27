@@ -51,6 +51,7 @@ docker exec kidtype-judge python -c "import socket; socket.create_connection(('1
 IMPORT_LLM_BASE_URL=https://api.openai.com/v1
 IMPORT_LLM_API_KEY=replace-me
 IMPORT_LLM_MODEL=replace-with-a-vision-model
+IMPORT_LLM_REASONING_EFFORT=
 IMPORT_LLM_BATCH_PAGES=3
 ```
 

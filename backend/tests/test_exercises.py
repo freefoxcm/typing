@@ -19,11 +19,13 @@ from app.models import (
     PracticeAttempt,
     QuestionAsset,
     QuestionImportJob,
+    QuestionRecognitionJob,
     QuestionSet,
     Word,
     WordSet,
     WrongQuestion,
 )
+from app.question_recognition import set_fingerprint
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -75,6 +77,56 @@ def create_objective_set(client: TestClient) -> tuple[int, int, int]:
     published = client.post(f"/api/admin/question-sets/{question_set['id']}/publish")
     assert published.status_code == 200
     return question_set["id"], single.json()["id"], judgment.json()["id"]
+
+
+def test_recognition_preview_apply_preserves_question_id_and_rejects_stale_result(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "重识别题套", "description": "旧说明"}).json()
+        payload = {
+            "type": "single_choice", "stem_markdown": "旧题面", "explanation_markdown": "旧解析", "points": 2,
+            "sort_order": 0, "reviewed": False, "correct_bool": None, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "source_section": "一", "source_number": "1",
+            "options": [
+                {"label": "A", "content_markdown": "错误", "correct": False, "sort_order": 0},
+                {"label": "B", "content_markdown": "正确", "correct": True, "sort_order": 1},
+            ], "blanks": [], "programming": None,
+        }
+        current = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=payload).json()
+        candidate = {key: value for key, value in current.items() if key not in {"id", "question_set_id"}}
+        candidate.update({"stem_markdown": "重新识别后的题面", "reviewed": False, "source_asset_id": None})
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="source-test.pdf", original_name="source.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush()
+            stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set), model="vision", base_url="https://example.test/v1",
+                result_json=json.dumps({"title": stored_set.title, "description": stored_set.description, "changes": [{
+                    "status": "matched", "question_id": current["id"], "current": current, "candidate": candidate, "changed_fields": ["stem_markdown"],
+                }], "diagnostics": {}}, ensure_ascii=False),
+            )
+            db.add(job); db.commit(); job_id = job.id
+
+        applied = client.post(f"/api/admin/question-recognition-jobs/{job_id}/apply")
+        assert applied.status_code == 200, applied.text
+        updated = applied.json()["question_set"]["questions"][0]
+        assert updated["id"] == current["id"]
+        assert updated["stem_markdown"] == "重新识别后的题面"
+        assert updated["reviewed"] is False
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            stale_job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=stored_set.source_pdf_asset_id,
+                target_fingerprint=set_fingerprint(stored_set), result_json=json.dumps({"changes": []}),
+            )
+            db.add(stale_job); db.commit(); stale_id = stale_job.id
+        changed = client.put(f"/api/admin/questions/{current['id']}", json={**candidate, "stem_markdown": "人工又修改了"})
+        assert changed.status_code == 200
+        assert client.post(f"/api/admin/question-recognition-jobs/{stale_id}/apply").status_code == 409
 
 
 def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):

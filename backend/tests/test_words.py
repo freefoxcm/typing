@@ -5,7 +5,7 @@ from pathlib import Path
 from app.config import Settings
 from app.database import create_db
 from app.models import Base, Word, WordSet
-from app.word_enrichment import _claim_word, _complete_word, _fail_word, llm_configured, mark_word_readiness, parse_llm_content
+from app.word_enrichment import _claim_word, _complete_word, _fail_word, _request_body, llm_configured, mark_word_readiness, parse_llm_content
 from app.word_imports import normalize_spelling, parse_word_import, validate_spelling
 from fastapi.testclient import TestClient
 
@@ -25,6 +25,12 @@ def make_client(tmp_path: Path) -> TestClient:
 
 def login_admin(client: TestClient) -> None:
     assert client.post("/api/auth/admin/login", json={"username": "root", "password": "correct-horse"}).status_code == 200
+
+
+def test_word_reasoning_effort_is_omitted_or_forwarded():
+    messages = [{"role": "user", "content": "test"}]
+    assert "reasoning_effort" not in _request_body(Settings(), messages)
+    assert _request_body(Settings(llm_reasoning_effort=" low "), messages)["reasoning_effort"] == "low"
 
 
 def add_child_and_login(client: TestClient) -> None:

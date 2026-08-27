@@ -13,6 +13,7 @@ from .database import Base, create_db
 from .routers import admin, admin_exercises, admin_words, auth, exercises, library, practice
 from .seed import bootstrap
 from .question_imports import question_import_worker
+from .question_recognition import question_recognition_worker
 from .word_enrichment import enrichment_worker
 
 
@@ -29,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         workers = [
             asyncio.create_task(enrichment_worker(session_factory, settings)),
             asyncio.create_task(question_import_worker(session_factory, settings)),
+            asyncio.create_task(question_recognition_worker(session_factory, settings)),
         ]
         try:
             yield
