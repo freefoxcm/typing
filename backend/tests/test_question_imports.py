@@ -304,6 +304,7 @@ def test_parse_pdf_repairs_semantically_invalid_question_without_failing_set(mon
     path = tmp_path / "judgment.pdf"
     make_pdf(path)
     focused_calls = 0
+    progress_events: list[dict] = []
 
     async def fake_batch(_settings, _pages, primary_pages=None):
         return {
@@ -320,14 +321,55 @@ def test_parse_pdf_repairs_semantically_invalid_question_without_failing_set(mon
 
     monkeypatch.setattr(question_imports, "_request_batch", fake_batch)
     monkeypatch.setattr(question_imports, "_request_focused_review", fake_focused)
-    document, _, payload = asyncio.run(parse_pdf(Settings(import_llm_batch_pages=3), path))
+
+    async def capture_progress(progress):
+        progress_events.append(progress)
+
+    document, _, payload = asyncio.run(parse_pdf(Settings(import_llm_batch_pages=3), path, capture_progress))
     try:
         assert focused_calls == 1
         assert payload["questions"][0]["correct_bool"] is True
         assert payload["questions"][0]["_repair_attempted"] is True
         assert payload["diagnostics"]["invalid_count"] == 0
+        assert [item["percent"] for item in progress_events] == sorted(item["percent"] for item in progress_events)
+        assert {item["phase"] for item in progress_events} >= {"reading_pdf", "batch_recognition", "focused_review", "crop_processing"}
+        batch = next(item for item in progress_events if item["phase"] == "batch_recognition")
+        assert batch["current"] == batch["total"] == 1 and batch["unit"] == "batch"
     finally:
         document.close()
+
+
+def test_parse_pdf_closes_document_when_running_model_request_is_cancelled(monkeypatch, tmp_path):
+    class FakeDocument:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    document = FakeDocument()
+    request_started = asyncio.Event()
+
+    monkeypatch.setattr(question_imports, "_extract_pages", lambda _path, _settings: (document, [{"number": 1, "text": "题目", "image": "data:image/png;base64,AA=="}]))
+
+    async def blocked_batch(_settings, _pages, primary_pages=None):
+        request_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(question_imports, "_request_batch", blocked_batch)
+
+    async def scenario():
+        task = asyncio.create_task(parse_pdf(Settings(import_llm_batch_pages=1), tmp_path / "cancel.pdf"))
+        await request_started.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("parse task was not cancelled")
+
+    asyncio.run(scenario())
+    assert document.closed is True
 
 
 def test_imported_programming_question_drops_empty_schema_case(tmp_path):

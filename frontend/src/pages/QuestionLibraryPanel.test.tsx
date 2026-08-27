@@ -83,6 +83,64 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText(/判断题缺少明确的正确答案/)).toBeInTheDocument()
   })
 
+  it('shows import progress with counters and cancels an active import after confirmation', async () => {
+    let job = { id: 18, status: 'processing', attempts: 1, created_at: '2026-08-27', source_filename: '进度试卷.pdf', progress: { phase: 'batch_recognition', label: '正在批量识别', percent: 32, current: 2, total: 5, unit: 'batch', detail: '正在等待模型返回第 2/5 批', updated_at: new Date().toISOString() } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return []
+      if (path === '/api/admin/question-imports') return [job]
+      if (path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/question-imports/18/cancel' && options?.method === 'POST') {
+        job = { ...job, status: 'cancelled', progress: { ...job.progress, phase: 'cancelled', label: '已终止' } }
+        return job
+      }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /PDF 智能识别/ }))
+    const progress = await screen.findByRole('progressbar', { name: '正在批量识别' })
+    expect(progress).toHaveAttribute('aria-valuenow', '32')
+    expect(screen.getByText(/2 \/ 5 批/)).toBeInTheDocument()
+    expect(screen.getByText(/正在等待模型返回第 2\/5 批/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /终止任务/ }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('确认终止这个识别任务'))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-imports/18/cancel', expect.objectContaining({ method: 'POST' })))
+    expect(await screen.findByText('识别任务已终止，可稍后重新排队')).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('shows re-recognition progress in the row, editor, and modal and can stop it', async () => {
+    const question = { id: 61, question_set_id: 6, type: 'true_false' as const, stem_markdown: '进度判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    let recognition = { id: 20, scope: 'question', status: 'processing', target_set_id: 6, target_question_id: 61, model: 'vision', attempts: 1, stale: false, created_at: '2026-08-27', progress: { phase: 'model_review', label: '正在重新识别本题', percent: 25, current: 1, total: 1, unit: 'question', detail: '正在等待模型返回单题识别结果', updated_at: new Date().toISOString() } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 6, title: '进度题套', description: '', status: 'draft', source_pdf_asset_id: 9, question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [question] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return [recognition]
+      if (path === '/api/admin/question-recognition-jobs/20') return recognition
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/question-recognition-jobs/20/cancel' && options?.method === 'POST') {
+        recognition = { ...recognition, status: 'cancelled', progress: { ...recognition.progress, phase: 'cancelled', label: '已终止' } }
+        return recognition
+      }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 进度题套' }))
+    expect(screen.getByRole('button', { name: /识别中 25%/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    expect(screen.getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
+    expect(screen.getByRole('progressbar', { name: '正在重新识别本题' })).toHaveAttribute('aria-valuenow', '25')
+    fireEvent.click(screen.getByRole('button', { name: /PDF 智能识别/ }))
+    fireEvent.click(screen.getByRole('button', { name: /题目 #61/ }))
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText(/正在等待模型返回单题识别结果/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: /终止任务/ }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/20/cancel', expect.objectContaining({ method: 'POST' })))
+    confirm.mockRestore()
+  })
+
   it('shows single-question recognition in the row and keeps invalid single results unapplied', async () => {
     const question = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
     const noSourceQuestion = { ...question, id: 52, stem_markdown: '没有来源的题目', sort_order: 1, source_asset_id: null }

@@ -8,17 +8,34 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 import httpx
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .config import Settings
+from .job_control import progress_payload, register_active_job, unregister_active_job
 from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionBlank, QuestionImportJob, QuestionOption, QuestionSet
 
 
 logger = logging.getLogger("uvicorn.error")
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+async def _emit_progress(
+    callback: ProgressCallback | None,
+    phase: str,
+    label: str,
+    percent: int,
+    *,
+    current: int | None = None,
+    total: int | None = None,
+    unit: str | None = None,
+    detail: str = "",
+) -> None:
+    if callback:
+        await callback(progress_payload(phase, label, percent, current=current, total=total, unit=unit, detail=detail))
 
 
 def _redact_secret(value: str) -> str:
@@ -718,8 +735,23 @@ def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
         start += step
 
 
-async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
+async def parse_pdf(
+    settings: Settings,
+    path: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
+    await _emit_progress(progress_callback, "reading_pdf", "正在读取 PDF", 5, detail="正在解析页面与文本层")
     document, pages = _extract_pages(path, settings)
+    await _emit_progress(
+        progress_callback,
+        "reading_pdf",
+        "PDF 读取完成",
+        9,
+        current=len(pages),
+        total=len(pages),
+        unit="page",
+        detail=f"共 {len(pages)} 页，准备分批识别",
+    )
     combined: dict[str, Any] = {"title": path.stem, "description": "", "questions": []}
     candidates: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -743,6 +775,16 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 batch[-1]["number"],
                 primary_numbers,
                 len(batch),
+            )
+            await _emit_progress(
+                progress_callback,
+                "batch_recognition",
+                "正在批量识别",
+                10 + int(35 * (batch_index - 1) / max(1, len(batches))),
+                current=batch_index,
+                total=len(batches),
+                unit="batch",
+                detail=f"正在等待模型返回第 {batch_index}/{len(batches)} 批（第 {batch[0]['number']}-{batch[-1]['number']} 页）",
             )
             payload = await _request_batch(settings, batch, primary_numbers)
             if payload.get("title") and combined["title"] == path.stem:
@@ -778,6 +820,17 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 if not raw.get("complete", True):
                     retried_pages.add(int(raw["source_page"]))
 
+            await _emit_progress(
+                progress_callback,
+                "batch_recognition",
+                "正在批量识别",
+                10 + int(35 * batch_index / max(1, len(batches))),
+                current=batch_index,
+                total=len(batches),
+                unit="batch",
+                detail=f"第 {batch_index}/{len(batches)} 批识别完成",
+            )
+
         numbering_pages, numbering_warnings = _numbering_anomalies(candidates)
         retried_pages.update(numbering_pages)
         warnings.extend(numbering_warnings)
@@ -788,6 +841,16 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
         for retry_index, page_number in enumerate(sorted(retried_pages), start=1):
             focus = [page for page in pages if page_number - 1 <= int(page["number"]) <= page_number + 2]
             logger.info("PDF import focused retry %s: file=%s primary=%s context=%s", retry_index, path.name, page_number, [page["number"] for page in focus])
+            await _emit_progress(
+                progress_callback,
+                "page_retry",
+                "正在修复异常页面",
+                45 + int(15 * (retry_index - 1) / max(1, len(retried_pages))),
+                current=retry_index,
+                total=len(retried_pages),
+                unit="page",
+                detail=f"正在等待模型重新识别第 {page_number} 页",
+            )
             payload = await _request_batch(settings, focus, [page_number])
             added = 0
             for candidate_index, value in enumerate(payload.get("questions") or [], start=1):
@@ -808,7 +871,19 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
             if not added:
                 warnings.append(f"第 {page_number} 页定向重试仍未识别到题目")
 
+        await _emit_progress(
+            progress_callback,
+            "page_retry",
+            "页面修复完成",
+            60,
+            current=len(retried_pages),
+            total=len(retried_pages),
+            unit="page",
+            detail=f"已处理 {len(retried_pages)} 个需要重试的页面" if retried_pages else "没有需要重试的页面",
+        )
+
         reconciliation: dict[str, Any] | None = None
+        await _emit_progress(progress_callback, "merging", "正在合并题目", 62, detail="正在校对重复题与跨页题")
         if len(candidates) > 1:
             try:
                 reconciliation = await _request_reconciliation(settings, candidates)
@@ -817,14 +892,44 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append("题目元数据自动校对失败，已使用本地规则合并，请重点检查跨页题")
         merged, merge_warnings, merged_count = _merge_candidates(candidates, reconciliation)
         warnings.extend(merge_warnings)
+        await _emit_progress(
+            progress_callback,
+            "merging",
+            "题目合并完成",
+            65,
+            current=len(merged),
+            total=len(merged),
+            unit="question",
+            detail=f"得到 {len(merged)} 道题目候选",
+        )
         focused_count = 0
         for index, raw in enumerate(list(merged)):
             raw.setdefault("_recognition_warnings", [])
             if not _needs_focused_review(raw):
                 raw["_validation_errors"] = []
                 raw["_repair_attempted"] = False
+                await _emit_progress(
+                    progress_callback,
+                    "focused_review",
+                    "正在逐题校验",
+                    65 + int(20 * (index + 1) / max(1, len(merged))),
+                    current=index + 1,
+                    total=len(merged),
+                    unit="question",
+                    detail=f"第 {index + 1}/{len(merged)} 道题校验完成",
+                )
                 continue
             raw["_repair_attempted"] = True
+            await _emit_progress(
+                progress_callback,
+                "focused_review",
+                "正在高清修复",
+                65 + int(20 * index / max(1, len(merged))),
+                current=index + 1,
+                total=len(merged),
+                unit="question",
+                detail=f"正在等待模型复核第 {index + 1}/{len(merged)} 道题",
+            )
             try:
                 reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
                 reviewed.setdefault("source_page", raw.get("source_page"))
@@ -838,6 +943,17 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 raw["_recognition_warnings"].append(detail)
                 warnings.append(detail)
                 logger.warning("Focused question review failed: %s", _import_error_detail(exc))
+            await _emit_progress(
+                progress_callback,
+                "focused_review",
+                "正在逐题校验",
+                65 + int(20 * (index + 1) / max(1, len(merged))),
+                current=index + 1,
+                total=len(merged),
+                unit="question",
+                detail=f"第 {index + 1}/{len(merged)} 道题校验完成",
+            )
+        await _emit_progress(progress_callback, "crop_processing", "正在校正题目截图", 87, detail="正在计算并校验逐题裁剪区域")
         repair_crop_regions(document, merged)
         invalid_questions: list[dict[str, Any]] = []
         for index, raw in enumerate(merged, start=1):
@@ -886,8 +1002,18 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
         }
         if not combined["questions"]:
             raise ValueError("没有识别到题目")
+        await _emit_progress(
+            progress_callback,
+            "crop_processing",
+            "识别结果已生成",
+            90,
+            current=len(merged),
+            total=len(merged),
+            unit="question",
+            detail=f"已生成 {len(merged)} 道题目的结构化候选",
+        )
         return document, pages, combined
-    except Exception:
+    except BaseException:
         document.close()
         raise
 
@@ -1062,12 +1188,42 @@ def _claim_job(session_factory: Callable[[], Session]) -> int | None:
         job.processing_started_at = now
         job.attempts += 1
         job.error = ""
+        job.diagnostics_json = json.dumps({
+            "progress": progress_payload("starting", "正在启动识别", 1, detail=f"第 {job.attempts} 次尝试"),
+        }, ensure_ascii=False)
         db.commit()
         return job.id
 
 
+def _progress_callback(session_factory: Callable[[], Session], job_id: int) -> ProgressCallback:
+    async def report(progress: dict[str, Any]) -> None:
+        with session_factory() as db:
+            job = db.get(QuestionImportJob, job_id)
+            if not job or job.status == "cancelled":
+                raise asyncio.CancelledError
+            if job.status != "processing":
+                return
+            diagnostics = _json_mapping(job.diagnostics_json)
+            previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+            progress["percent"] = max(int(previous.get("percent") or 0), int(progress.get("percent") or 0))
+            diagnostics["progress"] = progress
+            job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
+            db.commit()
+
+    return report
+
+
+def _json_mapping(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 async def _process_job(session_factory: Callable[[], Session], settings: Settings, job_id: int) -> None:
     document = None
+    progress = _progress_callback(session_factory, job_id)
     try:
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
@@ -1083,18 +1239,46 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
             settings.import_llm_base_url,
             path.name,
         )
-        document, pages, payload = await parse_pdf(settings, path)
+        document, pages, payload = await parse_pdf(settings, path, progress)
+        await _emit_progress(
+            progress,
+            "saving",
+            "正在保存草稿题套",
+            95,
+            current=len(payload.get("questions") or []),
+            total=len(payload.get("questions") or []),
+            unit="question",
+            detail="正在写入题目、答案与原题截图",
+        )
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
             asset = db.get(QuestionAsset, asset_id)
-            if not job or not asset:
+            if not job or not asset or job.status == "cancelled":
                 return
             question_set = materialize_draft(db, settings, asset, document, payload)
-            job.question_set_id = question_set.id
-            job.page_count = len(pages)
-            job.diagnostics_json = json.dumps(payload.get("diagnostics") or {}, ensure_ascii=False)
-            job.status = "ready"
-            job.processing_started_at = None
+            diagnostics = dict(payload.get("diagnostics") or {})
+            diagnostics["progress"] = progress_payload(
+                "completed",
+                "识别完成",
+                100,
+                current=len(payload.get("questions") or []),
+                total=len(payload.get("questions") or []),
+                unit="question",
+                detail=f"已生成 {len(payload.get('questions') or [])} 道草稿题目",
+            )
+            updated = db.execute(update(QuestionImportJob).where(
+                QuestionImportJob.id == job_id,
+                QuestionImportJob.status == "processing",
+            ).values(
+                question_set_id=question_set.id,
+                page_count=len(pages),
+                diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+                status="ready",
+                processing_started_at=None,
+            ))
+            if updated.rowcount != 1:
+                db.rollback()
+                return
             db.commit()
             logger.info(
                 "PDF import job %s completed: pages=%s questions=%s question_set_id=%s",
@@ -1103,15 +1287,28 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
                 len(payload.get("questions", [])),
                 question_set.id,
             )
+    except asyncio.CancelledError:
+        logger.info("PDF import job %s was cancelled or interrupted", job_id)
+        raise
     except Exception as exc:
         error_detail = _import_error_detail(exc)
         final_status = "pending"
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
-            if job:
+            if job and job.status != "cancelled":
+                diagnostics = _json_mapping(job.diagnostics_json)
+                previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+                terminal = job.attempts >= settings.import_llm_max_retries
+                diagnostics["progress"] = progress_payload(
+                    "failed" if terminal else "retry_wait",
+                    "识别失败" if terminal else "等待自动重试",
+                    int(previous.get("percent") or 0),
+                    detail=error_detail[:500],
+                )
                 job.error = error_detail
-                job.status = "failed" if job.attempts >= settings.import_llm_max_retries else "pending"
+                job.status = "failed" if terminal else "pending"
                 job.processing_started_at = None if job.status == "failed" else datetime.utcnow() + timedelta(seconds=min(300, 2 ** job.attempts))
+                job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
                 final_status = job.status
                 db.commit()
         logger.error(
@@ -1135,4 +1332,13 @@ async def question_import_worker(session_factory: Callable[[], Session], setting
         if job_id is None:
             await asyncio.sleep(1)
             continue
-        await _process_job(session_factory, settings, job_id)
+        task = asyncio.create_task(_process_job(session_factory, settings, job_id))
+        register_active_job("import", job_id, task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current and current.cancelling():
+                raise
+        finally:
+            unregister_active_job("import", job_id, task)

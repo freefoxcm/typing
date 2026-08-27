@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 from sqlalchemy import or_, select, update
@@ -15,12 +15,14 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .exercise_library import question_dict, replace_question
 from .exercise_schemas import QuestionWrite
+from .job_control import progress_payload, register_active_job, unregister_active_job
 from .models import Question, QuestionAsset, QuestionRecognitionJob, QuestionSet
 from .question_imports import (
     _confidence_value,
     _boolean_value,
     _bounded_int,
     _crop_is_suspicious,
+    _emit_progress,
     _import_error_detail,
     _mapping_items,
     _question_type,
@@ -34,6 +36,7 @@ from .question_imports import (
 
 
 logger = logging.getLogger("uvicorn.error")
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 def _loads(value: str, default: Any) -> Any:
@@ -225,19 +228,57 @@ def _claim_job(session_factory: Callable[[], Session]) -> int | None:
         job.processing_started_at = now
         job.attempts += 1
         job.error = ""
+        job.diagnostics_json = json.dumps({
+            "progress": progress_payload("starting", "正在启动重新识别", 1, detail=f"第 {job.attempts} 次尝试"),
+        }, ensure_ascii=False)
         db.commit()
         return job.id
 
 
-async def _process_set_job(db: Session, settings: Settings, job: QuestionRecognitionJob, source: QuestionAsset) -> dict[str, Any]:
+def _progress_callback(session_factory: Callable[[], Session], job_id: int) -> ProgressCallback:
+    async def report(progress: dict[str, Any]) -> None:
+        with session_factory() as db:
+            job = db.get(QuestionRecognitionJob, job_id)
+            if not job or job.status == "cancelled":
+                raise asyncio.CancelledError
+            if job.status != "processing":
+                return
+            diagnostics = _loads(job.diagnostics_json, {})
+            diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+            previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+            progress["percent"] = max(int(previous.get("percent") or 0), int(progress.get("percent") or 0))
+            diagnostics["progress"] = progress
+            job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
+            db.commit()
+
+    return report
+
+
+async def _process_set_job(
+    db: Session,
+    settings: Settings,
+    job: QuestionRecognitionJob,
+    source: QuestionAsset,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     path = Path(settings.question_asset_dir) / source.storage_key
-    document, _, payload = await parse_pdf(settings, path)
+    document, _, payload = await (parse_pdf(settings, path, progress_callback) if progress_callback else parse_pdf(settings, path))
     try:
         question_set = db.get(QuestionSet, job.target_set_id)
         if not question_set:
             raise ValueError("目标题套不存在")
         available = list(question_set.questions)
         changes = []
+        await _emit_progress(
+            progress_callback,
+            "diff_generation",
+            "正在生成题目差异",
+            92,
+            current=0,
+            total=len(payload.get("questions") or []),
+            unit="question",
+            detail="正在匹配原题并生成候选截图",
+        )
         for index, raw in enumerate(payload.get("questions") or []):
             ranked = sorted((( _match_score(item, raw), item) for item in available), key=lambda value: value[0], reverse=True)
             matched = ranked[0][1] if ranked and ranked[0][0] >= .35 else None
@@ -278,7 +319,13 @@ async def _process_set_job(db: Session, settings: Settings, job: QuestionRecogni
         document.close()
 
 
-async def _process_question_job(db: Session, settings: Settings, job: QuestionRecognitionJob, source: QuestionAsset) -> dict[str, Any]:
+async def _process_question_job(
+    db: Session,
+    settings: Settings,
+    job: QuestionRecognitionJob,
+    source: QuestionAsset,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     import pymupdf as fitz
 
     question = db.get(Question, job.target_question_id)
@@ -288,6 +335,7 @@ async def _process_question_job(db: Session, settings: Settings, job: QuestionRe
     current = question_dict(question)
     raw = _raw_from_question(question)
     path = Path(settings.question_asset_dir) / source.storage_key
+    await _emit_progress(progress_callback, "reading_source", "正在读取原题", 10, detail="正在准备题目图片与定位信息")
     document = fitz.open(path)
     original_page = question.source_page or 1
     using_question_image = source.kind != "source_pdf"
@@ -296,22 +344,31 @@ async def _process_question_job(db: Session, settings: Settings, job: QuestionRe
             local_raw = deepcopy(raw)
             local_raw["source_page"] = 1
             local_raw["source_end_page"] = 1
+            await _emit_progress(progress_callback, "model_review", "正在重新识别本题", 25, current=1, total=1, unit="question", detail="正在等待模型返回单题识别结果")
             reviewed = await _request_focused_review(settings, document, local_raw, allow_type_change=True)
+            await _emit_progress(progress_callback, "validation", "正在校验识别结果", 80, current=1, total=1, unit="question", detail="模型已返回，正在校验题型与答案")
             repair_crop_regions(document, [reviewed])
+            await _emit_progress(progress_callback, "crop_processing", "正在生成候选截图", 86, current=1, total=1, unit="question", detail="正在裁剪本题原图")
             asset_id = _save_crop(db, settings, question_set.id, document, reviewed, question.id, kind="question_preview")
             reviewed["source_page"] = original_page
             reviewed["source_end_page"] = question.source_end_page or original_page
         else:
+            await _emit_progress(progress_callback, "model_review", "正在重新识别本题", 25, current=1, total=1, unit="question", detail="正在等待模型返回单题识别结果")
             reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
+            await _emit_progress(progress_callback, "validation", "正在校验识别结果", 80, current=1, total=1, unit="question", detail="模型已返回，正在校验题型与答案")
             repair_crop_regions(document, [reviewed])
+            await _emit_progress(progress_callback, "crop_processing", "正在生成候选截图", 86, current=1, total=1, unit="question", detail="正在裁剪本题原图")
             asset_id = _save_crop(db, settings, question_set.id, document, reviewed, question.id, kind="question_preview")
         if asset_id is None and question_set.source_pdf_asset_id and source.id != question_set.source_pdf_asset_id:
             pdf_asset = db.get(QuestionAsset, question_set.source_pdf_asset_id)
             if pdf_asset:
                 document.close()
                 document = fitz.open(Path(settings.question_asset_dir) / pdf_asset.storage_key)
+                await _emit_progress(progress_callback, "model_review", "正在从原 PDF 重试", 25, current=1, total=1, unit="question", detail="当前图片无法可靠裁剪，正在等待模型从原 PDF 重新定位")
                 reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
+                await _emit_progress(progress_callback, "validation", "正在校验识别结果", 80, current=1, total=1, unit="question", detail="模型已返回，正在校验题型与答案")
                 repair_crop_regions(document, [reviewed])
+                await _emit_progress(progress_callback, "crop_processing", "正在生成候选截图", 86, current=1, total=1, unit="question", detail="正在裁剪本题原图")
                 asset_id = _save_crop(db, settings, question_set.id, document, reviewed, question.id, kind="question_preview")
         try:
             candidate = _candidate_dict(reviewed, question.sort_order, asset_id)
@@ -343,26 +400,64 @@ async def _process_question_job(db: Session, settings: Settings, job: QuestionRe
 
 
 async def _process_job(session_factory: Callable[[], Session], settings: Settings, job_id: int) -> None:
+    progress = _progress_callback(session_factory, job_id)
     try:
         with session_factory() as db:
             job = db.get(QuestionRecognitionJob, job_id)
             source = db.get(QuestionAsset, job.source_asset_id) if job else None
-            if not job or not source:
+            if not job or not source or job.status == "cancelled":
                 return
-            result = await (_process_question_job(db, settings, job, source) if job.scope == "question" else _process_set_job(db, settings, job, source))
-            job.result_json = json.dumps(result, ensure_ascii=False)
-            job.diagnostics_json = json.dumps(result.get("diagnostics") or {}, ensure_ascii=False)
-            job.status = "ready"
-            job.processing_started_at = None
+            result = await (
+                _process_question_job(db, settings, job, source, progress)
+                if job.scope == "question"
+                else _process_set_job(db, settings, job, source, progress)
+            )
+            diagnostics = dict(result.get("diagnostics") or {})
+            question_count = len(result.get("changes") or [])
+            diagnostics["progress"] = progress_payload(
+                "completed",
+                "重新识别完成",
+                100,
+                current=question_count,
+                total=question_count,
+                unit="question",
+                detail="候选结果已生成，等待管理员确认",
+            )
+            updated = db.execute(update(QuestionRecognitionJob).where(
+                QuestionRecognitionJob.id == job_id,
+                QuestionRecognitionJob.status == "processing",
+            ).values(
+                result_json=json.dumps(result, ensure_ascii=False),
+                diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+                status="ready",
+                processing_started_at=None,
+            ))
+            if updated.rowcount != 1:
+                db.rollback()
+                return
             db.commit()
+    except asyncio.CancelledError:
+        logger.info("Question recognition job %s was cancelled or interrupted", job_id)
+        raise
     except Exception as exc:
         detail = _import_error_detail(exc)
         with session_factory() as db:
             job = db.get(QuestionRecognitionJob, job_id)
-            if job:
+            if job and job.status != "cancelled":
+                diagnostics = _loads(job.diagnostics_json, {})
+                diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+                previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+                terminal = job.attempts >= settings.import_llm_max_retries
+                diagnostics["progress"] = progress_payload(
+                    "failed" if terminal else "retry_wait",
+                    "重新识别失败" if terminal else "等待自动重试",
+                    int(previous.get("percent") or 0),
+                    detail=detail[:500],
+                )
                 job.error = detail
-                job.status = "failed" if job.attempts >= settings.import_llm_max_retries else "pending"
+                job.status = "failed" if terminal else "pending"
                 job.processing_started_at = None if job.status == "failed" else datetime.utcnow() + timedelta(seconds=min(300, 2 ** job.attempts))
+                job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
                 db.commit()
         logger.error("Question recognition job %s failed: %s", job_id, detail, exc_info=True)
 
@@ -373,7 +468,16 @@ async def question_recognition_worker(session_factory: Callable[[], Session], se
         if job_id is None:
             await asyncio.sleep(1)
             continue
-        await _process_job(session_factory, settings, job_id)
+        task = asyncio.create_task(_process_job(session_factory, settings, job_id))
+        register_active_job("recognition", job_id, task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current and current.cancelling():
+                raise
+        finally:
+            unregister_active_job("recognition", job_id, task)
 
 
 def job_dict(db: Session, job: QuestionRecognitionJob, include_result: bool = True) -> dict[str, Any]:
@@ -383,6 +487,19 @@ def job_dict(db: Session, job: QuestionRecognitionJob, include_result: bool = Tr
         not question_set or target_fingerprint(question_set, question if job.scope == "question" else None) != job.target_fingerprint
     )
     result = _loads(job.result_json, {}) if include_result else None
+    diagnostics = _loads(job.diagnostics_json, {})
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    progress = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else None
+    if progress is None:
+        fallback = {
+            "pending": ("queued", "等待重新识别", 0),
+            "processing": ("processing", "正在重新识别", 1),
+            "ready": ("completed", "重新识别完成", 100),
+            "applied": ("completed", "结果已应用", 100),
+            "cancelled": ("cancelled", "已终止", 0),
+            "failed": ("failed", "重新识别失败", 0),
+        }.get(job.status, (job.status, job.status, 0))
+        progress = progress_payload(*fallback)
     return {
         "id": job.id,
         "scope": job.scope,
@@ -394,6 +511,7 @@ def job_dict(db: Session, job: QuestionRecognitionJob, include_result: bool = Tr
         "reasoning_effort": job.reasoning_effort or None,
         "attempts": job.attempts,
         "error": job.error,
+        "progress": progress,
         "stale": stale,
         "result": result,
         "created_at": job.created_at,

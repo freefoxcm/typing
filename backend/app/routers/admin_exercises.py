@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings, get_settings
@@ -18,6 +18,7 @@ from ..exercise_imports import ExerciseImportResult, parse_exercise_import
 from ..exercise_library import publication_errors, question_dict, question_errors, question_set_dict, replace_question
 from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite, ReferenceOutputApply, ReviewWrite
 from ..judge_queue import enqueue, result as judge_result
+from ..job_control import cancel_active_job, progress_payload
 from ..models import (
     ExerciseAnswer,
     ExerciseSession,
@@ -48,9 +49,27 @@ def _import_diagnostics(item: QuestionImportJob) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _loads_recognition_diagnostics(item: QuestionRecognitionJob) -> dict:
+    try:
+        value = json.loads(item.diagnostics_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
 def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
     diagnostics = _import_diagnostics(item)
     counts = diagnostics.get("counts", {})
+    progress = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else None
+    if progress is None:
+        fallback = {
+            "pending": ("queued", "等待识别", 0),
+            "processing": ("processing", "正在识别", 1),
+            "ready": ("completed", "识别完成", 100),
+            "cancelled": ("cancelled", "已终止", 0),
+            "failed": ("failed", "识别失败", 0),
+        }.get(item.status, (item.status, item.status, 0))
+        progress = progress_payload(*fallback)
     return {
         "id": item.id,
         "status": item.status,
@@ -65,6 +84,7 @@ def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
         "retried_pages": diagnostics.get("retried_pages", []),
         "invalid_count": diagnostics.get("invalid_count", 0),
         "invalid_questions": diagnostics.get("invalid_questions", []),
+        "progress": progress,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -195,11 +215,15 @@ async def create_import(
     asset = QuestionAsset(storage_key=key, original_name=(file.filename or "试卷.pdf")[:255], mime_type="application/pdf", kind="source_pdf", size_bytes=len(data))
     db.add(asset)
     db.flush()
-    job = QuestionImportJob(source_asset_id=asset.id, status="pending")
+    job = QuestionImportJob(
+        source_asset_id=asset.id,
+        status="pending",
+        diagnostics_json=json.dumps({"progress": progress_payload("queued", "等待识别", 0, detail="任务已进入识别队列")}, ensure_ascii=False),
+    )
     db.add(job)
     db.commit()
     db.refresh(job)
-    return {"id": job.id, "status": job.status, "created_at": job.created_at}
+    return _import_dict(job, asset)
 
 
 @router.get("/api/admin/question-imports")
@@ -224,15 +248,50 @@ def retry_import(job_id: int, _principal: Principal = Depends(require_admin), db
     item = db.get(QuestionImportJob, job_id)
     if not item:
         raise HTTPException(status_code=404, detail="导入任务不存在")
-    if item.status not in {"failed", "pending"}:
+    if item.status not in {"failed", "pending", "cancelled"}:
         raise HTTPException(status_code=409, detail="当前任务不能重试")
     item.status = "pending"
     item.attempts = 0
     item.error = ""
-    item.diagnostics_json = "{}"
+    item.diagnostics_json = json.dumps({"progress": progress_payload("queued", "等待识别", 0, detail="任务已重新进入识别队列")}, ensure_ascii=False)
     item.processing_started_at = None
     db.commit()
-    return {"ok": True, "status": item.status}
+    return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
+
+
+@router.post("/api/admin/question-imports/{job_id}/cancel")
+def cancel_import(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(QuestionImportJob, job_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+    if item.status == "cancelled":
+        return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
+    if item.status not in {"pending", "processing"}:
+        raise HTTPException(status_code=409, detail="只有等待中或识别中的任务可以终止")
+    diagnostics = _import_diagnostics(item)
+    previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+    diagnostics["progress"] = progress_payload(
+        "cancelled",
+        "已终止",
+        int(previous.get("percent") or 0),
+        detail="管理员手动终止",
+    )
+    changed = db.execute(update(QuestionImportJob).where(
+        QuestionImportJob.id == job_id,
+        QuestionImportJob.status.in_(["pending", "processing"]),
+    ).values(
+        status="cancelled",
+        error="管理员手动终止",
+        diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+        processing_started_at=None,
+    ).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务状态已变化，请刷新后重试")
+    db.commit()
+    cancel_active_job("import", job_id)
+    db.refresh(item)
+    return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
 
 
 @router.get("/api/admin/question-sets")
@@ -286,6 +345,7 @@ def _enqueue_recognition(db: Session, settings: Settings, question_set: Question
         model=settings.import_llm_model,
         base_url=settings.import_llm_base_url,
         reasoning_effort=settings.import_llm_reasoning_effort.strip(),
+        diagnostics_json=json.dumps({"progress": progress_payload("queued", "等待重新识别", 0, detail="任务已进入识别队列")}, ensure_ascii=False),
     )
     db.add(job)
     db.commit()
@@ -335,7 +395,7 @@ def retry_recognition_job(job_id: int, _principal: Principal = Depends(require_a
     ready_invalid = job.status == "ready" and bool(changes) and all(
         isinstance(item, dict) and item.get("status") == "invalid" for item in changes
     )
-    if job.status != "failed" and not ready_invalid:
+    if job.status not in {"failed", "cancelled"} and not ready_invalid:
         raise HTTPException(status_code=409, detail="只有失败任务或无效的单题结果可以重试")
     question_set = _get_set(db, job.target_set_id)
     _editable(question_set)
@@ -345,7 +405,44 @@ def retry_recognition_job(job_id: int, _principal: Principal = Depends(require_a
     job.attempts = 0
     job.error = ""
     job.processing_started_at = None
+    job.result_json = "{}"
+    job.diagnostics_json = json.dumps({"progress": progress_payload("queued", "等待重新识别", 0, detail="任务已重新进入识别队列")}, ensure_ascii=False)
     db.commit()
+    return recognition_job_dict(db, job)
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/cancel")
+def cancel_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    if job.status == "cancelled":
+        return recognition_job_dict(db, job)
+    if job.status not in {"pending", "processing"}:
+        raise HTTPException(status_code=409, detail="只有等待中或识别中的任务可以终止")
+    diagnostics = _loads_recognition_diagnostics(job)
+    previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+    diagnostics["progress"] = progress_payload(
+        "cancelled",
+        "已终止",
+        int(previous.get("percent") or 0),
+        detail="管理员手动终止",
+    )
+    changed = db.execute(update(QuestionRecognitionJob).where(
+        QuestionRecognitionJob.id == job_id,
+        QuestionRecognitionJob.status.in_(["pending", "processing"]),
+    ).values(
+        status="cancelled",
+        error="管理员手动终止",
+        diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+        processing_started_at=None,
+    ).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务状态已变化，请刷新后重试")
+    db.commit()
+    cancel_active_job("recognition", job_id)
+    db.refresh(job)
     return recognition_job_dict(db, job)
 
 

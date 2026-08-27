@@ -11,6 +11,8 @@ from sqlalchemy import select
 from app.config import Settings
 from app.main import create_app
 import app.question_recognition as question_recognition
+from app.job_control import cancel_active_job, register_active_job, unregister_active_job
+from app.routers import admin_exercises as admin_exercises_router
 from app.routers import exercises as exercises_router
 from app.models import (
     AttemptError,
@@ -80,6 +82,107 @@ def create_objective_set(client: TestClient) -> tuple[int, int, int]:
     published = client.post(f"/api/admin/question-sets/{question_set['id']}/publish")
     assert published.status_code == 200
     return question_set["id"], single.json()["id"], judgment.json()["id"]
+
+
+def test_import_and_recognition_jobs_can_be_cancelled_idempotently_and_retried(monkeypatch, tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "取消任务", "description": ""}).json()
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="cancel.pdf", original_name="cancel.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            import_job = QuestionImportJob(
+                source_asset_id=asset.id,
+                status="processing",
+                attempts=1,
+                diagnostics_json=json.dumps({"progress": {"phase": "batch_recognition", "label": "正在批量识别", "percent": 42, "updated_at": "2026-08-27T00:00:00Z"}}),
+            )
+            recognition_job = QuestionRecognitionJob(
+                scope="set", status="pending", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set),
+            )
+            ready_job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set),
+            )
+            db.add_all([import_job, recognition_job, ready_job]); db.commit()
+            import_id, recognition_id, ready_id = import_job.id, recognition_job.id, ready_job.id
+
+        cancelled_import = client.post(f"/api/admin/question-imports/{import_id}/cancel")
+        assert cancelled_import.status_code == 200
+        assert cancelled_import.json()["status"] == "cancelled"
+        assert cancelled_import.json()["progress"]["percent"] == 42
+        assert client.post(f"/api/admin/question-imports/{import_id}/cancel").status_code == 200
+
+        cancelled_recognition = client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/cancel")
+        assert cancelled_recognition.status_code == 200
+        assert cancelled_recognition.json()["status"] == "cancelled"
+        assert client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/cancel").status_code == 200
+        assert client.post(f"/api/admin/question-recognition-jobs/{ready_id}/cancel").status_code == 409
+
+        monkeypatch.setattr(admin_exercises_router, "import_llm_configured", lambda _settings: True)
+        retried_import = client.post(f"/api/admin/question-imports/{import_id}/retry")
+        assert retried_import.status_code == 200 and retried_import.json()["status"] == "pending"
+        retried_recognition = client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/retry")
+        assert retried_recognition.status_code == 200 and retried_recognition.json()["status"] == "pending"
+        assert retried_recognition.json()["progress"]["percent"] == 0
+
+
+def test_active_job_registry_cancels_only_the_target_task():
+    async def scenario():
+        blocker = asyncio.Event()
+        task = asyncio.create_task(blocker.wait())
+        register_active_job("recognition", 812, task)
+        try:
+            assert cancel_active_job("recognition", 812) is True
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("active recognition task was not cancelled")
+            assert cancel_active_job("recognition", 999) is False
+        finally:
+            unregister_active_job("recognition", 812, task)
+
+    asyncio.run(scenario())
+
+
+def test_recognition_worker_continues_after_one_job_is_cancelled(monkeypatch):
+    async def scenario():
+        started = asyncio.Event()
+        reclaimed = asyncio.Event()
+        calls = 0
+
+        def fake_claim(_session_factory):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return 913
+            reclaimed.set()
+            return None
+
+        async def fake_process(_session_factory, _settings, _job_id):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(question_recognition, "_claim_job", fake_claim)
+        monkeypatch.setattr(question_recognition, "_process_job", fake_process)
+        worker = asyncio.create_task(question_recognition.question_recognition_worker(lambda: None, Settings()))
+        try:
+            await started.wait()
+            assert cancel_active_job("recognition", 913) is True
+            await asyncio.wait_for(reclaimed.wait(), timeout=1)
+            assert worker.done() is False
+        finally:
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
 
 
 def test_recognition_preview_apply_preserves_question_id_and_rejects_stale_result(tmp_path):
