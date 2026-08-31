@@ -21,7 +21,7 @@ B. input
 分值：2""")
 
     assert result.valid, result.errors
-    assert result.counts == {"single_choice": 1, "multiple_choice": 0, "true_false": 1, "programming": 0}
+    assert result.counts == {"single_choice": 1, "multiple_choice": 0, "true_false": 1, "fill_blank": 0, "programming": 0}
     assert "以下选项" in result.question_sets[0].questions[0].stem_markdown
     assert result.question_sets[0].questions[0].reviewed is False
 
@@ -79,3 +79,17 @@ def test_txt_and_csv_reject_programming_questions_with_json_guidance():
 
     assert not txt.valid and any("改用 JSON" in item for item in txt.errors)
     assert not csv.valid and any("改用 JSON" in item for item in csv.errors)
+
+
+def test_txt_import_supports_multiple_fill_blanks_and_alternatives():
+    result = parse_exercise_import("txt", """题套：填空
+类型：填空题
+题目：{{1}} 使用 {{2}} 输出。
+填空答案：[[\"Python\", \"python\"], [\"print\"]]
+分值：4""")
+
+    assert result.valid, result.errors
+    question = result.question_sets[0].questions[0]
+    assert question.type == "fill_blank"
+    assert question.blanks[0].accepted_answers == ["Python", "python"]
+    assert question.blanks[1].accepted_answers == ["print"]

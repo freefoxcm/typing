@@ -4,9 +4,9 @@ __pycache__/
 .venv/
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 coverage/
 .env
 data/
 *.db
 *.sqlite3
-

@@ -6,18 +6,36 @@ import logging
 import re
 from copy import deepcopy
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 import httpx
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .config import Settings
-from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionImportJob, QuestionOption, QuestionSet
+from .job_control import progress_payload, register_active_job, unregister_active_job
+from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionBlank, QuestionImportJob, QuestionOption, QuestionSet
 
 
 logger = logging.getLogger("uvicorn.error")
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+async def _emit_progress(
+    callback: ProgressCallback | None,
+    phase: str,
+    label: str,
+    percent: int,
+    *,
+    current: int | None = None,
+    total: int | None = None,
+    unit: str | None = None,
+    detail: str = "",
+) -> None:
+    if callback:
+        await callback(progress_payload(phase, label, percent, current=current, total=total, unit=unit, detail=detail))
 
 
 def _redact_secret(value: str) -> str:
@@ -111,6 +129,7 @@ def _question_type(value: Any) -> str:
         "single": "single_choice", "single_choice": "single_choice", "单选": "single_choice", "单选题": "single_choice",
         "multiple": "multiple_choice", "multiple_choice": "multiple_choice", "多选": "multiple_choice", "多选题": "multiple_choice",
         "true_false": "true_false", "judgment": "true_false", "判断": "true_false", "判断题": "true_false",
+        "fill_blank": "fill_blank", "blank": "fill_blank", "填空": "fill_blank", "填空题": "fill_blank",
         "programming": "programming", "code": "programming", "编程": "programming", "编程题": "programming",
     }
     return aliases.get(text, "single_choice")
@@ -127,7 +146,7 @@ def _extract_pages(path: Path, settings: Settings) -> tuple[Any, list[dict[str, 
         raise ValueError(f"PDF 超过 {settings.import_max_pages} 页限制")
     pages: list[dict[str, Any]] = []
     for index, page in enumerate(document):
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.25, 1.25), alpha=False)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         pages.append({
             "number": index + 1,
             "text": page.get_text("text")[:30000],
@@ -149,10 +168,13 @@ async def _request_batch(
         '"page_inventory":[{"source_page":1,"questions":[{"candidate_id":"p1-q1",'
         '"number":"1","section":"一、选择题","type":"single_choice"}]}],"questions":[{'
         '"candidate_id":"p1-q1","number":"1","section":"一、选择题",'
-        '"type":"single_choice|multiple_choice|true_false|programming",'
+        '"type":"single_choice|multiple_choice|true_false|fill_blank|programming",'
         '"stem_markdown":"题面","explanation_markdown":"解析","points":2,"correct_bool":null,'
-        '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0,0,1,1],'
+        '"source_page":1,"source_end_page":1,"complete":true,"has_visual":false,"bbox":[0.08,0.12,0.92,0.36],'
+        '"crop_regions":[{"source_page":1,"bbox":[0.08,0.12,0.92,0.36]}],'
+        '"confidence":{"stem":0.95,"answer":0.95,"crop":0.95},'
         '"options":[{"label":"A","content_markdown":"选项","correct":true}],'
+        '"blanks":[{"position":1,"accepted_answers":["答案","等价答案"]}],'
         '"programming":{"input_markdown":"","output_markdown":"","constraints_markdown":"",'
         '"starter_code":"","reference_solution":"","time_limit_ms":1000,"memory_limit_mb":128,'
         '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":""}]}}]}。'
@@ -161,6 +183,9 @@ async def _request_batch(
         "一道编程题的题面、小问、代码、样例和续页必须合并为同一题，除非试卷明确印有新题号和独立分值。"
         "题目被截断或续页不足时 complete=false，source_end_page 是实际覆盖的最后页。"
         "bbox 使用起始页的相对坐标 0 到 1。识别答案表但不要把答案表写入题面；保留代码块和原始缩进。"
+        "填空题将每个印刷空格在题面中写成连续的 {{1}}、{{2}}，blanks 与占位符一一对应。"
+        "判断题的 correct_bool 必须根据答案明确返回 true 或 false，不得返回 null；单选题必须且只能标记一个正确选项，多选题至少标记一个正确选项。"
+        "每一道题无论 has_visual 是否为 true，都必须返回 crop_regions，且只覆盖该题的完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
@@ -170,16 +195,10 @@ async def _request_batch(
         content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(page["png"]).decode("ascii")}})
     endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
-    request_body: dict[str, Any] = {
-        "model": settings.import_llm_model,
-        "temperature": 0,
-        "messages": [
+    request_body = _model_request_body(settings, [
             {"role": "system", "content": "你是严谨的中文试卷数字化编辑。只能输出一个语法严格合法的 JSON 对象，不要解释，不要使用 Markdown 代码围栏。"},
             {"role": "user", "content": content},
-        ],
-    }
-    if settings.import_llm_model.strip().lower() == "minimax-m3":
-        request_body["thinking"] = {"type": "disabled"}
+        ])
     async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
         response = await client.post(endpoint, headers=headers, json=request_body)
         response.raise_for_status()
@@ -194,10 +213,7 @@ async def _request_batch(
                 "PDF import model returned invalid JSON; attempting one repair request: %s",
                 original_error,
             )
-            repair_body: dict[str, Any] = {
-                "model": settings.import_llm_model,
-                "temperature": 0,
-                "messages": [
+            repair_body = _model_request_body(settings, [
                     {
                         "role": "system",
                         "content": (
@@ -207,10 +223,7 @@ async def _request_batch(
                         ),
                     },
                     {"role": "user", "content": raw_content},
-                ],
-            }
-            if settings.import_llm_model.strip().lower() == "minimax-m3":
-                repair_body["thinking"] = {"type": "disabled"}
+                ])
             repair_response = await client.post(endpoint, headers=headers, json=repair_body)
             repair_response.raise_for_status()
             repair_choice = repair_response.json()["choices"][0]
@@ -231,7 +244,10 @@ def _model_request_body(settings: Settings, messages: list[dict[str, Any]]) -> d
         "temperature": 0,
         "messages": messages,
     }
-    if settings.import_llm_model.strip().lower() == "minimax-m3":
+    effort = settings.import_llm_reasoning_effort.strip()
+    if effort:
+        body["reasoning_effort"] = effort
+    elif settings.import_llm_model.strip().lower() == "minimax-m3":
         body["thinking"] = {"type": "disabled"}
     return body
 
@@ -284,6 +300,79 @@ def _positive_int(value: Any, default: int = 1) -> int:
     return max(1, _integer(value, default))
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, _integer(value, default)))
+
+
+def _boolean_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "正确", "对", "是"}:
+        return True
+    if text in {"false", "0", "no", "错误", "错", "否"}:
+        return False
+    return None
+
+
+def _mapping_items(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def candidate_validation_errors(raw: dict[str, Any]) -> list[str]:
+    """Return actionable semantic errors without trusting the model's shapes."""
+    errors: list[str] = []
+    kind = _question_type(raw.get("type"))
+    if not _safe_markdown(raw.get("stem_markdown")):
+        errors.append("缺少题面")
+    if _integer(raw.get("source_page"), 0) < 1:
+        errors.append("来源页无效")
+    if raw.get("points") is not None and raw.get("points") != "":
+        try:
+            if int(raw.get("points")) < 1:
+                errors.append("分值必须大于 0")
+        except (TypeError, ValueError):
+            errors.append("分值不是有效整数")
+
+    if kind in {"single_choice", "multiple_choice"}:
+        raw_options = raw.get("options")
+        options = _mapping_items(raw_options)
+        if not isinstance(raw_options, list) or len(options) != len(raw_options):
+            errors.append("选项结构无效")
+        if len(options) < 2:
+            errors.append("选择题至少需要两个选项")
+        correct_count = sum(_boolean_value(item.get("correct")) is True for item in options)
+        if kind == "single_choice" and correct_count != 1:
+            errors.append("单选题必须且只能有一个正确选项")
+        if kind == "multiple_choice" and correct_count < 1:
+            errors.append("多选题至少需要一个正确选项")
+    elif kind == "true_false":
+        if _boolean_value(raw.get("correct_bool")) is None:
+            errors.append("判断题缺少明确的正确答案")
+    elif kind == "fill_blank":
+        raw_blanks = raw.get("blanks")
+        blanks = _mapping_items(raw_blanks)
+        if not isinstance(raw_blanks, list) or len(blanks) != len(raw_blanks):
+            errors.append("填空答案结构无效")
+        markers = [int(item) for item in re.findall(r"\{\{(\d+)\}\}", str(raw.get("stem_markdown") or ""))]
+        positions = [_positive_int(item.get("position"), index) for index, item in enumerate(blanks, start=1)]
+        if not blanks or markers != list(range(1, len(blanks) + 1)) or positions != list(range(1, len(blanks) + 1)):
+            errors.append("填空占位符与答案不一致")
+        if any(not isinstance(item.get("accepted_answers"), list) or not any(str(value).strip() for value in item.get("accepted_answers")) for item in blanks):
+            errors.append("填空题存在空的可接受答案")
+    elif kind == "programming":
+        program = raw.get("programming")
+        if not isinstance(program, dict):
+            errors.append("编程题缺少有效的编程规格")
+        else:
+            cases = program.get("cases", [])
+            if not isinstance(cases, list) or len(_mapping_items(cases)) != len(cases):
+                errors.append("编程测试点结构无效")
+    return list(dict.fromkeys(errors))
+
+
 def _question_key(raw: dict[str, Any]) -> tuple[str, str, int]:
     page = _positive_int(raw.get("source_page"), 1)
     section = _normalize_key_part(raw.get("section"))
@@ -301,13 +390,197 @@ def _question_key(raw: dict[str, Any]) -> tuple[str, str, int]:
 def _candidate_score(raw: dict[str, Any]) -> int:
     program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
     options = raw.get("options") if isinstance(raw.get("options"), list) else []
+    blanks = raw.get("blanks") if isinstance(raw.get("blanks"), list) else []
     return (
         (100000 if raw.get("complete", True) else 0)
         + len(str(raw.get("stem_markdown") or ""))
         + len(str(raw.get("explanation_markdown") or ""))
         + len(json.dumps(program, ensure_ascii=False))
         + len(options) * 100
+        + len(blanks) * 100
     )
+
+
+def _confidence_value(raw: dict[str, Any]) -> float | None:
+    value = raw.get("confidence")
+    if isinstance(value, dict):
+        values = []
+        for item in value.values():
+            try:
+                values.append(float(item))
+            except (TypeError, ValueError):
+                pass
+        return max(0.0, min(1.0, min(values))) if values else None
+    try:
+        return max(0.0, min(1.0, float(value))) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _crop_is_suspicious(raw: dict[str, Any]) -> bool:
+    regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox")}]
+    if not isinstance(regions, list) or not regions:
+        return True
+    for region in regions:
+        bbox = region.get("bbox") if isinstance(region, dict) else None
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return True
+        try:
+            x0, y0, x1, y1 = [float(item) for item in bbox]
+        except (TypeError, ValueError):
+            return True
+        width, height = x1 - x0, y1 - y0
+        if (
+            x0 < 0 or y0 < 0 or x1 > 1 or y1 > 1 or x1 <= x0 or y1 <= y0
+            or width * height < .005 or width < .02 or height < .02
+            or width * height >= .85
+            or x0 <= .01 and y0 <= .01 and x1 >= .99 and y1 >= .99
+        ):
+            return True
+    return False
+
+
+def _recognition_text(raw: dict[str, Any]) -> str:
+    values = [str(raw.get("number") or ""), str(raw.get("stem_markdown") or "")]
+    values.extend(str(item.get("content_markdown") or "") for item in raw.get("options") or [] if isinstance(item, dict))
+    program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
+    values.extend(str(program.get(key) or "") for key in ("input_markdown", "output_markdown", "constraints_markdown"))
+    return _normalize_key_part(" ".join(values))
+
+
+def _page_blocks(page: Any) -> list[tuple[float, float, float, float, str]]:
+    return [
+        (float(x0), float(y0), float(x1), float(y1), _normalize_key_part(text))
+        for x0, y0, x1, y1, text, *_ in page.get_text("blocks")
+        if _normalize_key_part(text)
+    ]
+
+
+def _locate_question_top(page: Any, raw: dict[str, Any]) -> tuple[float, float] | None:
+    needle = _recognition_text(raw)
+    if not needle:
+        return None
+    best: tuple[float, tuple[float, float]] | None = None
+    for x0, y0, x1, y1, text in _page_blocks(page):
+        exact = next((size for size in range(min(32, len(needle), len(text)), 7, -1) if needle[:size] in text or text[:size] in needle), 0)
+        score = 1.0 if exact >= 12 else SequenceMatcher(None, needle[:120], text[:240]).ratio()
+        if best is None or score > best[0]:
+            best = (score, (y0, y1))
+    return best[1] if best and best[0] >= .28 else None
+
+
+def repair_crop_regions(document: Any, questions: list[dict[str, Any]]) -> None:
+    """Replace suspicious model crops with deterministic PDF text-layer bounds."""
+    starts: dict[int, list[tuple[float, dict[str, Any]]]] = {}
+    for raw in questions:
+        page_number = _positive_int(raw.get("source_page"), 1)
+        if page_number > document.page_count:
+            continue
+        located = _locate_question_top(document[page_number - 1], raw)
+        if located:
+            starts.setdefault(page_number, []).append((located[0], raw))
+    for values in starts.values():
+        values.sort(key=lambda item: item[0])
+
+    for raw in questions:
+        if not _crop_is_suspicious(raw):
+            continue
+        start = _positive_int(raw.get("source_page"), 1)
+        end = min(document.page_count, max(start, _positive_int(raw.get("source_end_page"), start)))
+        if start > document.page_count:
+            continue
+        located = _locate_question_top(document[start - 1], raw)
+        if not located:
+            raw.setdefault("_recognition_warnings", []).append("模型裁剪区域异常，且无法通过 PDF 文本层可靠定位")
+            continue
+        regions: list[dict[str, Any]] = []
+        for page_number in range(start, end + 1):
+            page = document[page_number - 1]
+            blocks = _page_blocks(page)
+            if not blocks:
+                continue
+            content_top = min(item[1] for item in blocks)
+            content_bottom = max(item[3] for item in blocks)
+            top = located[0] if page_number == start else content_top
+            bottom = content_bottom
+            if page_number == start:
+                later = [value for value, item in starts.get(page_number, []) if value > top + 1 and item is not raw]
+                if later:
+                    bottom = min(later)
+            overlapping = [item for item in blocks if item[3] >= top and item[1] <= bottom]
+            if not overlapping or bottom <= top:
+                continue
+            x0 = min(item[0] for item in overlapping) / page.rect.width
+            x1 = max(item[2] for item in overlapping) / page.rect.width
+            regions.append({"source_page": page_number, "bbox": [x0, top / page.rect.height, x1, bottom / page.rect.height]})
+        if regions:
+            raw["crop_regions"] = regions
+            raw["bbox"] = regions[0]["bbox"]
+            raw.setdefault("_recognition_warnings", []).append("模型裁剪区域异常，已使用 PDF 文本层重新定位")
+
+
+def _needs_focused_review(raw: dict[str, Any]) -> bool:
+    kind = _question_type(raw.get("type"))
+    confidence = _confidence_value(raw)
+    stem = str(raw.get("stem_markdown") or "")
+    return bool(
+        kind in {"fill_blank", "programming"}
+        or raw.get("has_visual")
+        or not raw.get("complete", True)
+        or _positive_int(raw.get("source_end_page"), 1) > _positive_int(raw.get("source_page"), 1)
+        or confidence is not None and confidence < .9
+        or _crop_is_suspicious(raw)
+        or candidate_validation_errors(raw)
+        or "```" in stem or "$" in stem
+    )
+
+
+async def _request_focused_review(settings: Settings, document: Any, raw: dict[str, Any], allow_type_change: bool = False) -> dict[str, Any]:
+    start = _positive_int(raw.get("source_page"), 1)
+    end = min(document.page_count, max(start, _positive_int(raw.get("source_end_page"), start)))
+    content: list[dict[str, Any]] = [{
+        "type": "text",
+        "text": (
+            "请对照高清原页复核这一道题。纠正题面、选项、答案、填空占位符、代码缩进和跨页范围，"
+            "并重新给出覆盖完整题目的逐页 crop_regions。不得新增题目。只返回与原结构相同、questions 仅含一道题的严格 JSON。\n"
+            + json.dumps({"questions": [raw]}, ensure_ascii=False, default=str)
+        ),
+    }]
+    import pymupdf as fitz
+    for page_number in range(start, end + 1):
+        page = document[page_number - 1]
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+        content.append({"type": "text", "text": f"第 {page_number} 页高清原图"})
+        content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(pixmap.tobytes("png")).decode("ascii")}})
+    endpoint = f"{settings.import_llm_base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.import_llm_api_key}", "Content-Type": "application/json"}
+    body = _model_request_body(settings, [
+        {"role": "system", "content": "你是严谨的试卷逐题校对员，只输出一个严格 JSON 对象。"},
+        {"role": "user", "content": content},
+    ])
+    async with httpx.AsyncClient(timeout=settings.import_llm_timeout_seconds) as client:
+        response = await client.post(endpoint, headers=headers, json=body)
+        response.raise_for_status()
+    payload = _json_content(str(response.json()["choices"][0]["message"].get("content") or ""))
+    questions = payload.get("questions") or []
+    if len(questions) != 1 or not isinstance(questions[0], dict):
+        raise ValueError("单题高清复核未返回唯一题目")
+    reviewed = questions[0]
+    if not allow_type_change and _question_type(reviewed.get("type")) != _question_type(raw.get("type")):
+        raise ValueError("单题高清复核改变了题型")
+    if not str(reviewed.get("stem_markdown") or "").strip():
+        raise ValueError("单题高清复核返回的题面无效")
+    kind = _question_type(reviewed.get("type"))
+    if kind in {"single_choice", "multiple_choice"} and len(reviewed.get("options") or []) < 2:
+        raise ValueError("单题高清复核缺少选择题选项")
+    if kind == "fill_blank":
+        markers = re.findall(r"\{\{\d+\}\}", str(reviewed.get("stem_markdown") or ""))
+        if not markers or len(markers) != len(reviewed.get("blanks") or []):
+            raise ValueError("单题高清复核的填空占位符与答案不一致")
+    if kind == "programming" and not isinstance(reviewed.get("programming"), dict):
+        raise ValueError("单题高清复核缺少编程题规格")
+    reviewed["_candidate_id"] = raw.get("_candidate_id")
+    return reviewed
 
 
 def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
@@ -320,6 +593,12 @@ def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
     if _question_type(result.get("type")) in {"single_choice", "multiple_choice"}:
         result["options"] = max(
             (item.get("options") for item in group if isinstance(item.get("options"), list)),
+            key=len,
+            default=[],
+        )
+    if _question_type(result.get("type")) == "fill_blank":
+        result["blanks"] = max(
+            (item.get("blanks") for item in group if isinstance(item.get("blanks"), list)),
             key=len,
             default=[],
         )
@@ -456,8 +735,23 @@ def _page_batches(pages: list[dict[str, Any]], batch_pages: int):
         start += step
 
 
-async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
+async def parse_pdf(
+    settings: Settings,
+    path: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Any, list[dict[str, Any]], dict[str, Any]]:
+    await _emit_progress(progress_callback, "reading_pdf", "正在读取 PDF", 5, detail="正在解析页面与文本层")
     document, pages = _extract_pages(path, settings)
+    await _emit_progress(
+        progress_callback,
+        "reading_pdf",
+        "PDF 读取完成",
+        9,
+        current=len(pages),
+        total=len(pages),
+        unit="page",
+        detail=f"共 {len(pages)} 页，准备分批识别",
+    )
     combined: dict[str, Any] = {"title": path.stem, "description": "", "questions": []}
     candidates: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -481,6 +775,16 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 batch[-1]["number"],
                 primary_numbers,
                 len(batch),
+            )
+            await _emit_progress(
+                progress_callback,
+                "batch_recognition",
+                "正在批量识别",
+                10 + int(35 * (batch_index - 1) / max(1, len(batches))),
+                current=batch_index,
+                total=len(batches),
+                unit="batch",
+                detail=f"正在等待模型返回第 {batch_index}/{len(batches)} 批（第 {batch[0]['number']}-{batch[-1]['number']} 页）",
             )
             payload = await _request_batch(settings, batch, primary_numbers)
             if payload.get("title") and combined["title"] == path.stem:
@@ -516,6 +820,17 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 if not raw.get("complete", True):
                     retried_pages.add(int(raw["source_page"]))
 
+            await _emit_progress(
+                progress_callback,
+                "batch_recognition",
+                "正在批量识别",
+                10 + int(35 * batch_index / max(1, len(batches))),
+                current=batch_index,
+                total=len(batches),
+                unit="batch",
+                detail=f"第 {batch_index}/{len(batches)} 批识别完成",
+            )
+
         numbering_pages, numbering_warnings = _numbering_anomalies(candidates)
         retried_pages.update(numbering_pages)
         warnings.extend(numbering_warnings)
@@ -526,6 +841,16 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
         for retry_index, page_number in enumerate(sorted(retried_pages), start=1):
             focus = [page for page in pages if page_number - 1 <= int(page["number"]) <= page_number + 2]
             logger.info("PDF import focused retry %s: file=%s primary=%s context=%s", retry_index, path.name, page_number, [page["number"] for page in focus])
+            await _emit_progress(
+                progress_callback,
+                "page_retry",
+                "正在修复异常页面",
+                45 + int(15 * (retry_index - 1) / max(1, len(retried_pages))),
+                current=retry_index,
+                total=len(retried_pages),
+                unit="page",
+                detail=f"正在等待模型重新识别第 {page_number} 页",
+            )
             payload = await _request_batch(settings, focus, [page_number])
             added = 0
             for candidate_index, value in enumerate(payload.get("questions") or [], start=1):
@@ -546,7 +871,19 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
             if not added:
                 warnings.append(f"第 {page_number} 页定向重试仍未识别到题目")
 
+        await _emit_progress(
+            progress_callback,
+            "page_retry",
+            "页面修复完成",
+            60,
+            current=len(retried_pages),
+            total=len(retried_pages),
+            unit="page",
+            detail=f"已处理 {len(retried_pages)} 个需要重试的页面" if retried_pages else "没有需要重试的页面",
+        )
+
         reconciliation: dict[str, Any] | None = None
+        await _emit_progress(progress_callback, "merging", "正在合并题目", 62, detail="正在校对重复题与跨页题")
         if len(candidates) > 1:
             try:
                 reconciliation = await _request_reconciliation(settings, candidates)
@@ -555,6 +892,89 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append("题目元数据自动校对失败，已使用本地规则合并，请重点检查跨页题")
         merged, merge_warnings, merged_count = _merge_candidates(candidates, reconciliation)
         warnings.extend(merge_warnings)
+        await _emit_progress(
+            progress_callback,
+            "merging",
+            "题目合并完成",
+            65,
+            current=len(merged),
+            total=len(merged),
+            unit="question",
+            detail=f"得到 {len(merged)} 道题目候选",
+        )
+        focused_count = 0
+        for index, raw in enumerate(list(merged)):
+            raw.setdefault("_recognition_warnings", [])
+            if not _needs_focused_review(raw):
+                raw["_validation_errors"] = []
+                raw["_repair_attempted"] = False
+                await _emit_progress(
+                    progress_callback,
+                    "focused_review",
+                    "正在逐题校验",
+                    65 + int(20 * (index + 1) / max(1, len(merged))),
+                    current=index + 1,
+                    total=len(merged),
+                    unit="question",
+                    detail=f"第 {index + 1}/{len(merged)} 道题校验完成",
+                )
+                continue
+            raw["_repair_attempted"] = True
+            await _emit_progress(
+                progress_callback,
+                "focused_review",
+                "正在高清修复",
+                65 + int(20 * index / max(1, len(merged))),
+                current=index + 1,
+                total=len(merged),
+                unit="question",
+                detail=f"正在等待模型复核第 {index + 1}/{len(merged)} 道题",
+            )
+            try:
+                reviewed = await _request_focused_review(settings, document, raw, allow_type_change=True)
+                reviewed.setdefault("source_page", raw.get("source_page"))
+                reviewed.setdefault("source_end_page", raw.get("source_end_page"))
+                reviewed["_recognition_warnings"] = list(raw.get("_recognition_warnings") or [])
+                reviewed["_repair_attempted"] = True
+                merged[index] = reviewed
+                focused_count += 1
+            except Exception as exc:
+                detail = f"第 {raw.get('source_page')} 页题目 {raw.get('number') or index + 1} 高清复核失败，请人工核对"
+                raw["_recognition_warnings"].append(detail)
+                warnings.append(detail)
+                logger.warning("Focused question review failed: %s", _import_error_detail(exc))
+            await _emit_progress(
+                progress_callback,
+                "focused_review",
+                "正在逐题校验",
+                65 + int(20 * (index + 1) / max(1, len(merged))),
+                current=index + 1,
+                total=len(merged),
+                unit="question",
+                detail=f"第 {index + 1}/{len(merged)} 道题校验完成",
+            )
+        await _emit_progress(progress_callback, "crop_processing", "正在校正题目截图", 87, detail="正在计算并校验逐题裁剪区域")
+        repair_crop_regions(document, merged)
+        invalid_questions: list[dict[str, Any]] = []
+        for index, raw in enumerate(merged, start=1):
+            validation_errors = candidate_validation_errors(raw)
+            raw["_validation_errors"] = validation_errors
+            if validation_errors:
+                label = raw.get("number") or index
+                detail = f"第 {raw.get('source_page')} 页题目 {label} 识别结果不完整：{'；'.join(validation_errors)}"
+                raw.setdefault("_recognition_warnings", []).append(detail)
+                warnings.append(detail)
+                invalid_questions.append({
+                    "index": index,
+                    "source_page": _positive_int(raw.get("source_page"), 1),
+                    "number": str(raw.get("number") or ""),
+                    "errors": validation_errors,
+                    "repair_attempted": bool(raw.get("_repair_attempted")),
+                })
+            if _crop_is_suspicious(raw):
+                detail = f"第 {raw.get('source_page')} 页题目 {raw.get('number') or ''} 的裁剪区域仍异常，请人工替换图片"
+                raw.setdefault("_recognition_warnings", []).append(detail)
+                warnings.append(detail)
         for page_number, expected in expected_by_page.items():
             actual = sum(int(item.get("source_page") or 0) == page_number for item in merged)
             if actual != expected:
@@ -564,7 +984,7 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
                 warnings.append(f"第 {item.get('source_page')} 页的题目 {item.get('number') or ''} 可能不完整")
         # Preserve order while removing repeated diagnostics.
         warnings = list(dict.fromkeys(item for item in warnings if item.strip()))[:100]
-        counts = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "programming")}
+        counts = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "fill_blank", "programming")}
         for raw in merged:
             kind = _question_type(raw.get("type"))
             counts[kind] = counts.get(kind, 0) + 1
@@ -576,32 +996,81 @@ async def parse_pdf(settings: Settings, path: Path) -> tuple[Any, list[dict[str,
             "inventory_count": sum(expected_by_page.values()),
             "candidate_count": len(candidates),
             "merged_count": merged_count,
+            "focused_review_count": focused_count,
+            "invalid_count": len(invalid_questions),
+            "invalid_questions": invalid_questions,
         }
         if not combined["questions"]:
             raise ValueError("没有识别到题目")
+        await _emit_progress(
+            progress_callback,
+            "crop_processing",
+            "识别结果已生成",
+            90,
+            current=len(merged),
+            total=len(merged),
+            unit="question",
+            detail=f"已生成 {len(merged)} 道题目的结构化候选",
+        )
         return document, pages, combined
-    except Exception:
+    except BaseException:
         document.close()
         raise
 
 
-def _save_crop(db: Session, settings: Settings, question_set_id: int, document: Any, raw: dict[str, Any], index: int) -> int | None:
-    if not raw.get("has_visual") and not raw.get("bbox"):
+def _save_crop(
+    db: Session,
+    settings: Settings,
+    question_set_id: int,
+    document: Any,
+    raw: dict[str, Any],
+    index: int,
+    kind: str = "question",
+    allow_page_fallback: bool = False,
+) -> int | None:
+    suspicious = _crop_is_suspicious(raw)
+    if suspicious and not allow_page_fallback:
         return None
     try:
         import pymupdf as fitz
-        page_number = max(1, int(raw.get("source_page") or 1))
-        page = document[page_number - 1]
-        bbox = raw.get("bbox") or [0, 0, 1, 1]
-        x0, y0, x1, y1 = [float(value) for value in bbox]
-        rect = fitz.Rect(x0 * page.rect.width, y0 * page.rect.height, x1 * page.rect.width, y1 * page.rect.height)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1.75, 1.75), clip=rect, alpha=False)
-        data = pixmap.tobytes("png")
+        if suspicious:
+            start = _positive_int(raw.get("source_page"), 1)
+            end = max(start, _positive_int(raw.get("source_end_page"), start))
+            regions = [{"source_page": page_number, "bbox": [0, 0, 1, 1]} for page_number in range(start, end + 1)]
+        else:
+            regions = raw.get("crop_regions") or [{"source_page": raw.get("source_page"), "bbox": raw.get("bbox") or [0, 0, 1, 1]}]
+        crops: list[bytes] = []
+        sizes: list[tuple[int, int]] = []
+        for region in regions:
+            page_number = max(1, int(region.get("source_page") or raw.get("source_page") or 1))
+            page = document[page_number - 1]
+            x0, y0, x1, y1 = [float(value) for value in (region.get("bbox") or [0, 0, 1, 1])]
+            x0, y0 = max(0, x0 - .02), max(0, y0 - .02)
+            x1, y1 = min(1, x1 + .02), min(1, y1 + .02)
+            if x1 <= x0 or y1 <= y0:
+                raise ValueError("无效裁剪区域")
+            rect = fitz.Rect(x0 * page.rect.width, y0 * page.rect.height, x1 * page.rect.width, y1 * page.rect.height)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=rect, alpha=False)
+            if pixmap.width < 24 or pixmap.height < 24 or pixmap.width * pixmap.height > 40_000_000:
+                raise ValueError("裁剪图片尺寸异常")
+            crops.append(pixmap.tobytes("png"))
+            sizes.append((pixmap.width, pixmap.height))
+        if len(crops) == 1:
+            data = crops[0]
+        else:
+            canvas = fitz.open()
+            target = canvas.new_page(width=max(width for width, _ in sizes), height=sum(height for _, height in sizes))
+            top = 0
+            for crop, (width, height) in zip(crops, sizes):
+                target.insert_image(fitz.Rect(0, top, width, top + height), stream=crop)
+                top += height
+            data = target.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False).tobytes("png")
+            canvas.close()
         key = f"question-{question_set_id}-{index}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.png"
         root = Path(settings.question_asset_dir)
         root.mkdir(parents=True, exist_ok=True)
         (root / key).write_bytes(data)
-        asset = QuestionAsset(question_set_id=question_set_id, storage_key=key, original_name=key, mime_type="image/png", kind="question", size_bytes=len(data))
+        asset = QuestionAsset(question_set_id=question_set_id, storage_key=key, original_name=key, mime_type="image/png", kind=kind, size_bytes=len(data))
         db.add(asset)
         db.flush()
         return asset.id
@@ -623,8 +1092,15 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
     db.flush()
     source_asset.question_set_id = question_set.id
     for index, raw in enumerate(payload.get("questions", []), start=1):
+        if not isinstance(raw, dict):
+            continue
         kind = _question_type(raw.get("type"))
-        points = max(1, min(10000, int(raw.get("points") or (25 if kind == "programming" else 2))))
+        points = _bounded_int(raw.get("points"), 25 if kind == "programming" else 2, 1, 10000)
+        source_page = _positive_int(raw.get("source_page"), 1)
+        validation_errors = list(raw.get("_validation_errors") or candidate_validation_errors(raw))
+        recognition_warnings = [str(item) for item in raw.get("_recognition_warnings") or [] if str(item).strip()]
+        if validation_errors:
+            recognition_warnings.append("识别结果不完整，请人工补全：" + "；".join(validation_errors))
         question = Question(
             question_set_id=question_set.id,
             type=kind,
@@ -633,33 +1109,46 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
             points=points,
             sort_order=index - 1,
             reviewed=False,
-            correct_bool=raw.get("correct_bool") if kind == "true_false" else None,
-            source_page=_positive_int(raw.get("source_page"), 1),
+            correct_bool=_boolean_value(raw.get("correct_bool")) if kind == "true_false" else None,
+            source_page=source_page,
+            source_end_page=max(source_page, _positive_int(raw.get("source_end_page"), source_page)),
+            recognition_confidence=_confidence_value(raw),
+            recognition_warnings_json=json.dumps(list(dict.fromkeys(recognition_warnings))[:100], ensure_ascii=False),
             show_source_crop=bool(raw.get("has_visual")),
+            source_section=str(raw.get("section") or "")[:180],
+            source_number=str(raw.get("number") or "")[:80],
         )
         db.add(question)
         db.flush()
-        question.source_asset_id = _save_crop(db, settings, question_set.id, document, raw, index)
+        question.source_asset_id = _save_crop(db, settings, question_set.id, document, raw, index, allow_page_fallback=True)
         if kind in {"single_choice", "multiple_choice"}:
-            for option_index, option in enumerate(raw.get("options") or []):
+            for option_index, option in enumerate(_mapping_items(raw.get("options"))):
                 question.options.append(QuestionOption(
                     label=str(option.get("label") or chr(65 + option_index))[:16],
                     content_markdown=_safe_markdown(option.get("content_markdown"), 10000) or "（待补充）",
-                    correct=bool(option.get("correct")),
+                    correct=_boolean_value(option.get("correct")) is True,
                     sort_order=option_index,
                 ))
+        elif kind == "fill_blank":
+            for blank_index, blank in enumerate(_mapping_items(raw.get("blanks")), start=1):
+                accepted = blank.get("accepted_answers") if isinstance(blank.get("accepted_answers"), list) else []
+                answers = [str(value).strip() for value in accepted if str(value).strip()]
+                question.blanks.append(QuestionBlank(
+                    position=_positive_int(blank.get("position"), blank_index),
+                    accepted_answers_json=json.dumps(list(dict.fromkeys(answers)), ensure_ascii=False),
+                ))
         elif kind == "programming":
-            program = raw.get("programming") or {}
+            program = raw.get("programming") if isinstance(raw.get("programming"), dict) else {}
             spec = ProgrammingSpec(
                 input_markdown=_safe_markdown(program.get("input_markdown"), 20000),
                 output_markdown=_safe_markdown(program.get("output_markdown"), 20000),
                 constraints_markdown=_safe_markdown(program.get("constraints_markdown"), 20000),
                 starter_code=str(program.get("starter_code") or "")[:100000],
                 reference_solution=str(program.get("reference_solution") or "")[:100000],
-                time_limit_ms=max(100, min(settings.judge_max_time_ms, int(program.get("time_limit_ms") or settings.judge_default_time_ms))),
-                memory_limit_mb=max(32, min(settings.judge_max_memory_mb, int(program.get("memory_limit_mb") or settings.judge_default_memory_mb))),
+                time_limit_ms=_bounded_int(program.get("time_limit_ms"), settings.judge_default_time_ms, 100, settings.judge_max_time_ms),
+                memory_limit_mb=_bounded_int(program.get("memory_limit_mb"), settings.judge_default_memory_mb, 32, settings.judge_max_memory_mb),
             )
-            for case in program.get("cases") or []:
+            for case in _mapping_items(program.get("cases")):
                 input_data = str(case.get("input_data") or "")[:100000]
                 expected_output = str(case.get("expected_output") or "")[:100000]
                 # The JSON schema contains an empty case to describe its shape.
@@ -672,7 +1161,7 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
                     input_data=input_data,
                     expected_output=expected_output if is_sample else "",
                     is_sample=is_sample,
-                    weight=0 if is_sample else max(0, int(case.get("weight") or 0)),
+                    weight=0 if is_sample else _bounded_int(case.get("weight"), 0, 0, 10000),
                     confirmed=False,
                     note=_safe_markdown(case.get("note"), 1000),
                 ))
@@ -699,12 +1188,42 @@ def _claim_job(session_factory: Callable[[], Session]) -> int | None:
         job.processing_started_at = now
         job.attempts += 1
         job.error = ""
+        job.diagnostics_json = json.dumps({
+            "progress": progress_payload("starting", "正在启动识别", 1, detail=f"第 {job.attempts} 次尝试"),
+        }, ensure_ascii=False)
         db.commit()
         return job.id
 
 
+def _progress_callback(session_factory: Callable[[], Session], job_id: int) -> ProgressCallback:
+    async def report(progress: dict[str, Any]) -> None:
+        with session_factory() as db:
+            job = db.get(QuestionImportJob, job_id)
+            if not job or job.status == "cancelled":
+                raise asyncio.CancelledError
+            if job.status != "processing":
+                return
+            diagnostics = _json_mapping(job.diagnostics_json)
+            previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+            progress["percent"] = max(int(previous.get("percent") or 0), int(progress.get("percent") or 0))
+            diagnostics["progress"] = progress
+            job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
+            db.commit()
+
+    return report
+
+
+def _json_mapping(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 async def _process_job(session_factory: Callable[[], Session], settings: Settings, job_id: int) -> None:
     document = None
+    progress = _progress_callback(session_factory, job_id)
     try:
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
@@ -720,18 +1239,46 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
             settings.import_llm_base_url,
             path.name,
         )
-        document, pages, payload = await parse_pdf(settings, path)
+        document, pages, payload = await parse_pdf(settings, path, progress)
+        await _emit_progress(
+            progress,
+            "saving",
+            "正在保存草稿题套",
+            95,
+            current=len(payload.get("questions") or []),
+            total=len(payload.get("questions") or []),
+            unit="question",
+            detail="正在写入题目、答案与原题截图",
+        )
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
             asset = db.get(QuestionAsset, asset_id)
-            if not job or not asset:
+            if not job or not asset or job.status == "cancelled":
                 return
             question_set = materialize_draft(db, settings, asset, document, payload)
-            job.question_set_id = question_set.id
-            job.page_count = len(pages)
-            job.diagnostics_json = json.dumps(payload.get("diagnostics") or {}, ensure_ascii=False)
-            job.status = "ready"
-            job.processing_started_at = None
+            diagnostics = dict(payload.get("diagnostics") or {})
+            diagnostics["progress"] = progress_payload(
+                "completed",
+                "识别完成",
+                100,
+                current=len(payload.get("questions") or []),
+                total=len(payload.get("questions") or []),
+                unit="question",
+                detail=f"已生成 {len(payload.get('questions') or [])} 道草稿题目",
+            )
+            updated = db.execute(update(QuestionImportJob).where(
+                QuestionImportJob.id == job_id,
+                QuestionImportJob.status == "processing",
+            ).values(
+                question_set_id=question_set.id,
+                page_count=len(pages),
+                diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+                status="ready",
+                processing_started_at=None,
+            ))
+            if updated.rowcount != 1:
+                db.rollback()
+                return
             db.commit()
             logger.info(
                 "PDF import job %s completed: pages=%s questions=%s question_set_id=%s",
@@ -740,15 +1287,28 @@ async def _process_job(session_factory: Callable[[], Session], settings: Setting
                 len(payload.get("questions", [])),
                 question_set.id,
             )
+    except asyncio.CancelledError:
+        logger.info("PDF import job %s was cancelled or interrupted", job_id)
+        raise
     except Exception as exc:
         error_detail = _import_error_detail(exc)
         final_status = "pending"
         with session_factory() as db:
             job = db.get(QuestionImportJob, job_id)
-            if job:
+            if job and job.status != "cancelled":
+                diagnostics = _json_mapping(job.diagnostics_json)
+                previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+                terminal = job.attempts >= settings.import_llm_max_retries
+                diagnostics["progress"] = progress_payload(
+                    "failed" if terminal else "retry_wait",
+                    "识别失败" if terminal else "等待自动重试",
+                    int(previous.get("percent") or 0),
+                    detail=error_detail[:500],
+                )
                 job.error = error_detail
-                job.status = "failed" if job.attempts >= settings.import_llm_max_retries else "pending"
+                job.status = "failed" if terminal else "pending"
                 job.processing_started_at = None if job.status == "failed" else datetime.utcnow() + timedelta(seconds=min(300, 2 ** job.attempts))
+                job.diagnostics_json = json.dumps(diagnostics, ensure_ascii=False)
                 final_status = job.status
                 db.commit()
         logger.error(
@@ -772,4 +1332,13 @@ async def question_import_worker(session_factory: Callable[[], Session], setting
         if job_id is None:
             await asyncio.sleep(1)
             continue
-        await _process_job(session_factory, settings, job_id)
+        task = asyncio.create_task(_process_job(session_factory, settings, job_id))
+        register_active_job("import", job_id, task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current and current.cancelling():
+                raise
+        finally:
+            unregister_active_job("import", job_id, task)

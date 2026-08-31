@@ -14,8 +14,9 @@
 - 独立单词练习：每轮随机洗牌，输入时同步展示美式音标、常用中文释义和计算机领域释义。
 - 单词资料缺失时可通过 OpenAI 兼容接口在后台自动补全，失败任务可重试。
 - TXT、CSV、JSON 预览导入，JSON 词库备份，CSV 成绩导出。
-- 在线习题：单选、多选、判断和 Python 编程题，支持整套练习、随机组题和错题重练。
-- PDF 试卷通过独立视觉模型识别为可校对草稿；编程题由无网络判题工作器执行公开样例和隐藏测试点。
+- 在线习题：单选、多选、判断、多空填空和 Python 编程题，支持整套练习、随机组题和错题重练。
+- PDF 试卷通过独立视觉模型识别为可校对草稿，复杂题会以高清页面二次校对；原题截图可在复核时本地替换。
+- 编程题由无网络判题工作器执行公开样例和隐藏测试点；参考输出会双跑校验并经管理员确认后写入。
 - SQLite 持久化；密码和 PIN 使用 Argon2 哈希。
 
 ## Docker 部署
@@ -32,7 +33,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-如需自动补全单词资料，另行设置 `LLM_API_KEY` 和 `LLM_MODEL`；`LLM_BASE_URL` 默认是 `https://api.openai.com/v1`，也可改为其他兼容 Chat Completions 的服务。修改这些配置后需要重启容器。未配置 LLM 时，完整词条仍可正常练习，缺少音标或常用释义的词条会保留在等待状态。
+如需自动补全单词资料，另行设置 `LLM_API_KEY` 和 `LLM_MODEL`；`LLM_BASE_URL` 默认是 `https://api.openai.com/v1`，也可改为其他兼容 Chat Completions 的服务。可选的 `LLM_REASONING_EFFORT` 会原样作为 `reasoning_effort` 发送；留空时不发送该字段并采用模型默认规则。修改这些配置后需要重新创建容器。未配置 LLM 时，完整词条仍可正常练习，缺少音标或常用释义的词条会保留在等待状态。
 
 访问 `http://服务器地址:8080`。首次启动会创建管理员和少量原创示例课程。数据库位于名为 `kidtype_data` 的 Docker 卷中。
 
@@ -44,17 +45,17 @@ docker compose logs -f kidtype
 docker compose logs -f judge
 ```
 
-编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。PDF 默认每次向模型发送 3 页，可通过 `IMPORT_LLM_BATCH_PAGES` 在 1–8 页之间调整。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
+编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。`IMPORT_LLM_REASONING_EFFORT` 可单独设置识别模型的思考级别，留空时使用模型默认值。PDF 默认每次向模型发送 3 页，可通过 `IMPORT_LLM_BATCH_PAGES` 在 1–8 页之间调整。单道候选结构异常时会定向高清修复；仍不完整的首次导入题会保留为待补草稿，不会终止整套任务。草稿题套可从原 PDF 整套重新识别，单题也可从当前截图或原 PDF 生成差异预览；只有管理员确认后才会应用。首次导入和重新识别任务都会展示阶段、百分比及页数或题数，管理员可在界面终止等待中或运行中的任务，并在需要时重新排队。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
 
 升级时拉取或替换代码，然后重新运行 `docker compose up -d --build`；容器启动会自动执行 Alembic 数据库迁移。
 
 ## 数据备份
 
-词库可在管理后台导出 JSON。完整备份应在停止容器后备份 Docker 卷中的 `/data/typing.db`：
+词库可在管理后台导出 JSON。完整备份应在停止容器后备份整个 `kidtype_data` 卷，其中包含数据库和题目图片：
 
 ```bash
 docker compose stop kidtype
-docker run --rm -v kidtype_data:/data -v "$PWD":/backup alpine cp /data/typing.db /backup/typing.db
+docker run --rm -v kidtype_data:/data -v "$PWD":/backup alpine tar -czf /backup/kidtype_data.tar.gz -C /data .
 docker compose start kidtype
 ```
 

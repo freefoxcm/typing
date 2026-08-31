@@ -29,3 +29,15 @@ def test_reference_mode_returns_captured_output():
     result = worker.run_case("print(int(input()) * 2)", {"id": 9, "input": "6\n", "weight": 0}, "reference", 500, 128, 65536)
     assert result["status"] == "AC"
     assert worker.normalize_output(result["stdout"]) == "12"
+
+
+def test_reference_execution_detects_unstable_output(monkeypatch):
+    outputs = iter(["first\n", "second\n"])
+
+    def fake_run_case(code, case, kind, time_ms, memory_mb, output_limit):
+        return {"id": case["id"], "status": "AC", "duration_ms": 1, "weight": 0, "stdout": next(outputs), "stderr": ""}
+
+    monkeypatch.setattr(worker, "run_case", fake_run_case)
+    result = worker.execute({"kind": "reference", "code": "", "cases": [{"id": 1, "input": ""}], "repeat_count": 2})
+    assert result["cases"][0]["stable"] is False
+    assert result["cases"][0]["status"] == "Unstable"

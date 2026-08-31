@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '../api'
 import { QuestionLibraryPanel, reorderQuestionList, reorderQuestionSetList, saveQuestionOrder, saveQuestionSetOrder } from './QuestionLibraryPanel'
 
@@ -68,7 +68,7 @@ describe('QuestionLibraryPanel', () => {
   it('shows recognition counts, focused retries, and warnings', async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/question-sets') return []
-      if (path === '/api/admin/question-imports') return [{ id: 2, status: 'ready', attempts: 1, created_at: '2026-07-21', page_count: 5, counts: { single_choice: 15, multiple_choice: 0, true_false: 10, programming: 2 }, retried_pages: [4], warnings: ['第 4 页需要人工核对'] }]
+      if (path === '/api/admin/question-imports') return [{ id: 2, status: 'ready', attempts: 1, created_at: '2026-07-21', page_count: 5, counts: { single_choice: 15, multiple_choice: 0, true_false: 10, programming: 2 }, retried_pages: [4], warnings: ['第 4 页需要人工核对'], invalid_count: 1, invalid_questions: [{ index: 8, source_page: 3, number: '8', errors: ['判断题缺少明确的正确答案'], repair_attempted: true }] }]
       if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
       if (path === '/api/admin/exercise-reports/summary') return { session_count: 0, average_percent: 0, unresolved_wrong_count: 0 }
       return { id: 1 }
@@ -79,6 +79,289 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByText('定向重试页：4')).toBeInTheDocument()
     expect(screen.getByText('15').parentElement).toHaveTextContent('单选题')
     expect(screen.getByText('第 4 页需要人工核对')).toBeInTheDocument()
+    expect(screen.getByText('已导入但需人工补全（1）')).toBeInTheDocument()
+    expect(screen.getByText(/判断题缺少明确的正确答案/)).toBeInTheDocument()
+  })
+
+  it('shows import progress with counters and cancels an active import after confirmation', async () => {
+    let job = { id: 18, status: 'processing', attempts: 1, created_at: '2026-08-27', source_filename: '进度试卷.pdf', progress: { phase: 'batch_recognition', label: '正在批量识别', percent: 32, current: 2, total: 5, unit: 'batch', detail: '正在等待模型返回第 2/5 批', updated_at: new Date().toISOString() } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return []
+      if (path === '/api/admin/question-imports') return [job]
+      if (path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/question-imports/18/cancel' && options?.method === 'POST') {
+        job = { ...job, status: 'cancelled', progress: { ...job.progress, phase: 'cancelled', label: '已终止' } }
+        return job
+      }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /PDF 智能识别/ }))
+    const progress = await screen.findByRole('progressbar', { name: '正在批量识别' })
+    expect(progress).toHaveAttribute('aria-valuenow', '32')
+    expect(screen.getByText(/2 \/ 5 批/)).toBeInTheDocument()
+    expect(screen.getByText(/正在等待模型返回第 2\/5 批/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /终止任务/ }))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('确认终止这个识别任务'))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-imports/18/cancel', expect.objectContaining({ method: 'POST' })))
+    expect(await screen.findByText('识别任务已终止，可稍后重新排队')).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('shows re-recognition progress in the row, editor, and modal and can stop it', async () => {
+    const question = { id: 61, question_set_id: 6, type: 'true_false' as const, stem_markdown: '进度判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    let recognition = { id: 20, scope: 'question', status: 'processing', target_set_id: 6, target_question_id: 61, model: 'vision', attempts: 1, stale: false, created_at: '2026-08-27', progress: { phase: 'model_review', label: '正在重新识别本题', percent: 25, current: 1, total: 1, unit: 'question', detail: '正在等待模型返回单题识别结果', updated_at: new Date().toISOString() } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 6, title: '进度题套', description: '', status: 'draft', source_pdf_asset_id: 9, question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [question] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return [recognition]
+      if (path === '/api/admin/question-recognition-jobs/20') return recognition
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/question-recognition-jobs/20/cancel' && options?.method === 'POST') {
+        recognition = { ...recognition, status: 'cancelled', progress: { ...recognition.progress, phase: 'cancelled', label: '已终止' } }
+        return recognition
+      }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 进度题套' }))
+    expect(screen.getByRole('button', { name: /识别中 25%/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    expect(screen.getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
+    expect(screen.getByRole('progressbar', { name: '正在重新识别本题' })).toHaveAttribute('aria-valuenow', '25')
+    fireEvent.click(screen.getByRole('button', { name: /PDF 智能识别/ }))
+    fireEvent.click(screen.getByRole('button', { name: /题目 #61/ }))
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText(/正在等待模型返回单题识别结果/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: /终止任务/ }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/20/cancel', expect.objectContaining({ method: 'POST' })))
+    confirm.mockRestore()
+  })
+
+  it('shows single-question recognition in the row and keeps invalid single results unapplied', async () => {
+    const question = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    const noSourceQuestion = { ...question, id: 52, stem_markdown: '没有来源的题目', sort_order: 1, source_asset_id: null }
+    const invalidJob = { id: 12, scope: 'question', status: 'ready', target_set_id: 5, target_question_id: 51, model: 'vision', attempts: 1, stale: false, created_at: '2026-08-27', result: { changes: [{ status: 'invalid', question_id: 51, current: question, candidate: { ...question, id: undefined, question_set_id: undefined, correct_bool: null }, changed_fields: ['correct_bool'], validation_errors: ['判断题缺少明确的正确答案'], repair_attempted: true }], diagnostics: { warnings: ['判断题缺少明确的正确答案'], invalid_count: 1 } } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 5, title: '单题入口', description: '', status: 'draft', source_pdf_asset_id: null, question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: [question, noSourceQuestion] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      if (path === '/api/admin/questions/51/re-recognition' && options?.method === 'POST') return invalidJob
+      if (path === '/api/admin/question-recognition-jobs/12/retry' && options?.method === 'POST') return { ...invalidJob, status: 'pending' }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 单题入口' }))
+    const triggers = screen.getAllByRole('button', { name: '重新识别' })
+    expect(triggers[0]).toBeEnabled()
+    expect(triggers[1]).toBeDisabled()
+    fireEvent.click(triggers[0])
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText('高清修复后仍未通过校验')).toBeInTheDocument()
+    expect(within(dialog).getAllByText('判断题缺少明确的正确答案')).toHaveLength(2)
+    expect(within(dialog).queryByRole('button', { name: /确认应用/ })).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '重新识别' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/12/retry', expect.objectContaining({ method: 'POST' })))
+  })
+
+  it('starts set re-recognition and previews image and field differences before applying', async () => {
+    const current = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '旧题面', explanation_markdown: '', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
+    const candidate = { ...current, id: undefined, question_set_id: undefined, stem_markdown: '新题面', reviewed: false, source_asset_id: 11 }
+    const readyJob = { id: 9, scope: 'set', status: 'ready', target_set_id: 5, target_question_id: null, model: 'vision', reasoning_effort: 'high', attempts: 1, stale: false, created_at: '2026-08-27', result: { title: '重识别题套', changes: [{ status: 'matched', question_id: 51, current, candidate, changed_fields: ['stem_markdown', 'source_asset_id'] }], diagnostics: { warnings: [] } } }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 5, title: '重识别题套', description: '', status: 'draft', source_pdf_asset_id: 7, question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [current] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return [readyJob]
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', reasoning_effort: 'high', batch_pages: 3 }
+      if (path === '/api/admin/question-sets/5/re-recognition' && options?.method === 'POST') return readyJob
+      if (path === '/api/admin/question-recognition-jobs/9/apply' && options?.method === 'POST') return { ok: true }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: /整套重识别/ }))
+    const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
+    expect(within(dialog).getByText(/思考级别：high/)).toBeInTheDocument()
+    expect(within(dialog).getByAltText('当前原题截图')).toHaveAttribute('src', '/api/question-assets/10')
+    expect(within(dialog).getByAltText('重新识别截图')).toHaveAttribute('src', '/api/question-assets/11')
+    expect(within(dialog).getByText('旧题面')).toBeInTheDocument()
+    expect(within(dialog).getByText('新题面')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: /确认应用识别结果/ }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/9/apply', expect.objectContaining({ method: 'POST' })))
+  })
+
+  it('filters the review queue by pending and reviewed state', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{
+        id: 5, title: '复核题套', description: '', status: 'draft', question_count: 2, total_points: 4,
+        counts: { true_false: 2 }, questions: [
+          { id: 51, question_set_id: 5, type: 'true_false', stem_markdown: '等待复核题', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+          { id: 52, question_set_id: 5, type: 'true_false', stem_markdown: '已经复核题', points: 2, sort_order: 1, reviewed: true, correct_bool: true, options: [], programming: null },
+        ],
+      }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 复核题套' }))
+    expect(screen.getByText('等待复核题')).toBeInTheDocument()
+    expect(screen.queryByText('已经复核题')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '已复核 1' }))
+    expect(screen.getByText('已经复核题')).toBeInTheDocument()
+    expect(screen.queryByText('等待复核题')).not.toBeInTheDocument()
+  })
+
+  it('keeps review filters independent for each draft set and shows empty states', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [
+        { id: 5, title: '题套甲', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: [
+          { id: 51, question_set_id: 5, type: 'true_false', stem_markdown: '甲待复核', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+          { id: 52, question_set_id: 5, type: 'true_false', stem_markdown: '甲已复核', points: 2, sort_order: 1, reviewed: true, correct_bool: true, options: [], programming: null },
+        ] },
+        { id: 6, title: '题套乙', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [
+          { id: 61, question_set_id: 6, type: 'true_false', stem_markdown: '乙待复核', points: 2, sort_order: 0, reviewed: false, correct_bool: true, options: [], programming: null },
+        ] },
+        { id: 7, title: '已发布题套', description: '', status: 'published', question_count: 0, total_points: 0, counts: {}, questions: [] },
+      ]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    const firstFilter = await screen.findByRole('group', { name: '题套甲复核状态过滤' })
+    const secondFilter = screen.getByRole('group', { name: '题套乙复核状态过滤' })
+    expect(screen.queryByRole('group', { name: '已发布题套复核状态过滤' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '已复核 1' }))
+    expect(await screen.findByText('甲已复核')).toBeInTheDocument()
+    const firstSetCard = firstFilter.closest('article') as HTMLElement
+    expect(within(firstSetCard).getByRole('button', { name: '拖动题目调整顺序' })).toBeDisabled()
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '全部 2' }))
+    expect(within(firstSetCard).getAllByRole('button', { name: '拖动题目调整顺序' })[0]).not.toBeDisabled()
+    fireEvent.click(within(firstFilter).getByRole('button', { name: '已复核 1' }))
+    expect(within(secondFilter).getByRole('button', { name: '待复核 1' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(secondFilter).getByRole('button', { name: '已复核 0' }))
+    expect(screen.getByText('当前题套没有已复核题目')).toBeInTheDocument()
+    expect(within(firstFilter).getByRole('button', { name: '已复核 1' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('navigates only inside the active set and keeps the editor open after saving a draft', async () => {
+    const firstSetQuestions = [
+      { id: 71, question_set_id: 7, type: 'true_false' as const, stem_markdown: '第一题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 3, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 72, question_set_id: 7, type: 'true_false' as const, stem_markdown: '第二题', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: false, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [
+        { id: 7, title: '当前题套', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: firstSetQuestions },
+        { id: 8, title: '其他题套', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [{ ...firstSetQuestions[0], id: 81, question_set_id: 8, stem_markdown: '不应进入的题目' }] },
+      ]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/71' && options?.method === 'PUT') return { ...firstSetQuestions[0], ...JSON.parse(String(options.body)) }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 当前题套' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    expect(screen.getByRole('heading', { level: 2, name: '当前题套' })).toBeInTheDocument()
+    expect(screen.getByText('第 1 / 2 题')).toBeInTheDocument()
+    const sourceSwitch = screen.getByLabelText('向学生显示完整原题截图')
+    expect(sourceSwitch.closest('.question-source-heading')).not.toBeNull()
+    fireEvent.click(sourceSwitch)
+    expect(sourceSwitch).toBeChecked()
+    fireEvent.click(sourceSwitch)
+    expect(sourceSwitch).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }))
+    expect(screen.getByLabelText('题面')).toHaveValue('第二题')
+    expect(screen.queryByDisplayValue('不应进入的题目')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '上一题' }))
+    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '第一题（已修改）' } })
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true })
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/71', expect.objectContaining({ method: 'PUT' })))
+    expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
+    expect(screen.getByLabelText('题面')).toHaveValue('第一题（已修改）')
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
+  })
+
+  it('persists the source panel state while reviewing the current set and protects dirty Escape', async () => {
+    const questions = [
+      { id: 91, question_set_id: 9, type: 'true_false' as const, stem_markdown: '一', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 4, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 92, question_set_id: 9, type: 'true_false' as const, stem_markdown: '二', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: true, source_asset_id: 5, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '折叠测试', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 折叠测试' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    fireEvent.click(screen.getByRole('button', { name: '收起原题区域' }))
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }))
+    expect(screen.getByRole('form', { name: '题目编辑器' }).querySelector('.question-editor-body')).toHaveClass('source-collapsed')
+    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '二（修改）' } })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(confirm).toHaveBeenCalledWith('有尚未保存的修改，确认关闭？')
+    expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('uploads and removes a student-facing stem illustration without replacing the source screenshot', async () => {
+    const question = { id: 95, question_set_id: 9, type: 'true_false' as const, stem_markdown: '带图判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 4, stem_image_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '题干配图测试', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [question] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/95/stem-image' && options?.method === 'PUT') return { ...question, stem_image_asset_id: 44 }
+      if (path === '/api/admin/questions/95/stem-image' && options?.method === 'DELETE') return { ...question, stem_image_asset_id: null }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 题干配图测试' }))
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    const file = new File(['image'], 'diagram.png', { type: 'image/png' })
+    fireEvent.change(screen.getByLabelText('上传题干配图'), { target: { files: [file] } })
+    expect(await screen.findByAltText('题干配图预览')).toHaveAttribute('src', '/api/question-assets/44')
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) }))
+    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    await waitFor(() => expect(screen.queryByAltText('题干配图预览')).not.toBeInTheDocument())
+    expect(screen.getByText('当前没有题干配图')).toBeInTheDocument()
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'DELETE' }))
+    confirm.mockRestore()
+  })
+
+  it('reviews forward with the keyboard and closes after the last item in the set queue', async () => {
+    const questions = [
+      { id: 101, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核一', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+      { id: 102, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核二', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 10, title: '快捷复核', description: '', status: 'draft', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (/^\/api\/admin\/questions\/\d+$/.test(path) && options?.method === 'PUT') return { ...questions.find((item) => path.endsWith(String(item.id))), ...JSON.parse(String(options.body)), reviewed: false }
+      if (/^\/api\/admin\/questions\/\d+\/review$/.test(path)) return { ...questions.find((item) => path.includes(`/${item.id}/`)), reviewed: true }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 快捷复核' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(screen.getByLabelText('题面')).toHaveValue('复核二'))
+    expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(screen.queryByRole('form', { name: '题目编辑器' })).not.toBeInTheDocument())
+    expect(screen.getByText('当前过滤队列已复核完成')).toBeInTheDocument()
+    expect(mockedApi.mock.calls.filter(([path]) => /\/review$/.test(path))).toHaveLength(2)
   })
 
   it('reorders sets and questions and saves complete id lists', async () => {

@@ -168,12 +168,19 @@ class Question(Base):
     reviewed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     correct_bool: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     source_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_end_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_section: Mapped[str] = mapped_column(String(180), default="")
+    source_number: Mapped[str] = mapped_column(String(80), default="")
+    recognition_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recognition_warnings_json: Mapped[str] = mapped_column(Text, default="[]")
     source_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_assets.id", ondelete="SET NULL"), nullable=True)
+    stem_image_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_assets.id", ondelete="SET NULL"), nullable=True)
     show_source_crop: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
     question_set: Mapped[QuestionSet] = relationship(back_populates="questions")
     options: Mapped[list["QuestionOption"]] = relationship(back_populates="question", cascade="all, delete-orphan", order_by="QuestionOption.sort_order")
+    blanks: Mapped[list["QuestionBlank"]] = relationship(back_populates="question", cascade="all, delete-orphan", order_by="QuestionBlank.position")
     programming: Mapped[Optional["ProgrammingSpec"]] = relationship(back_populates="question", cascade="all, delete-orphan", uselist=False)
 
 
@@ -186,6 +193,16 @@ class QuestionOption(Base):
     correct: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     question: Mapped[Question] = relationship(back_populates="options")
+
+
+class QuestionBlank(Base):
+    __tablename__ = "question_blanks"
+    __table_args__ = (UniqueConstraint("question_id", "position", name="uq_question_blank_position"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    accepted_answers_json: Mapped[str] = mapped_column(Text, default="[]")
+    question: Mapped[Question] = relationship(back_populates="blanks")
 
 
 class ProgrammingSpec(Base):
@@ -238,6 +255,28 @@ class QuestionImportJob(Base):
     diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class QuestionRecognitionJob(Base):
+    __tablename__ = "question_recognition_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    target_set_id: Mapped[int] = mapped_column(ForeignKey("question_sets.id", ondelete="CASCADE"), index=True)
+    target_question_id: Mapped[Optional[int]] = mapped_column(ForeignKey("questions.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_asset_id: Mapped[int] = mapped_column(ForeignKey("question_assets.id", ondelete="CASCADE"), index=True)
+    target_fingerprint: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(180), default="")
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    reasoning_effort: Mapped[str] = mapped_column(String(40), default="")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    diagnostics_json: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str] = mapped_column(Text, default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

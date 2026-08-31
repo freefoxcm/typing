@@ -20,17 +20,20 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = ""
+    llm_reasoning_effort: str = ""
     llm_timeout_seconds: float = Field(default=30, gt=0, le=300)
     llm_max_retries: int = Field(default=3, ge=1, le=20)
     import_llm_base_url: str = "https://api.openai.com/v1"
     import_llm_api_key: str = ""
     import_llm_model: str = ""
+    import_llm_reasoning_effort: str = ""
     import_llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
     import_llm_max_retries: int = Field(default=3, ge=1, le=20)
     import_llm_batch_pages: int = Field(default=3, ge=1, le=8)
     import_max_file_mb: int = Field(default=25, ge=1, le=100)
     import_max_pages: int = Field(default=100, ge=1, le=500)
     question_asset_dir: str = "/data/question-assets"
+    question_image_max_mb: int = Field(default=10, ge=1, le=50)
     judge_queue_dir: str = "/judge-queue"
     judge_default_time_ms: int = Field(default=1000, ge=100, le=5000)
     judge_default_memory_mb: int = Field(default=128, ge=32, le=512)

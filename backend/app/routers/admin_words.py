@@ -65,6 +65,7 @@ def llm_status(settings: Settings = Depends(get_settings)):
         "configured": llm_configured(settings),
         "base_url": settings.llm_base_url,
         "model": settings.llm_model,
+        "reasoning_effort": settings.llm_reasoning_effort.strip() or None,
     }
 
 

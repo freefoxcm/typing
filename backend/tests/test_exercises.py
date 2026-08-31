@@ -1,4 +1,6 @@
+import asyncio
 import json
+import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,6 +10,9 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.main import create_app
+import app.question_recognition as question_recognition
+from app.job_control import cancel_active_job, register_active_job, unregister_active_job
+from app.routers import admin_exercises as admin_exercises_router
 from app.routers import exercises as exercises_router
 from app.models import (
     AttemptError,
@@ -16,13 +21,16 @@ from app.models import (
     ExerciseSession,
     ExerciseSessionItem,
     PracticeAttempt,
+    Question,
     QuestionAsset,
     QuestionImportJob,
+    QuestionRecognitionJob,
     QuestionSet,
     Word,
     WordSet,
     WrongQuestion,
 )
+from app.question_recognition import question_fingerprint, set_fingerprint
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -74,6 +82,351 @@ def create_objective_set(client: TestClient) -> tuple[int, int, int]:
     published = client.post(f"/api/admin/question-sets/{question_set['id']}/publish")
     assert published.status_code == 200
     return question_set["id"], single.json()["id"], judgment.json()["id"]
+
+
+def test_import_and_recognition_jobs_can_be_cancelled_idempotently_and_retried(monkeypatch, tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "取消任务", "description": ""}).json()
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="cancel.pdf", original_name="cancel.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            import_job = QuestionImportJob(
+                source_asset_id=asset.id,
+                status="processing",
+                attempts=1,
+                diagnostics_json=json.dumps({"progress": {"phase": "batch_recognition", "label": "正在批量识别", "percent": 42, "updated_at": "2026-08-27T00:00:00Z"}}),
+            )
+            recognition_job = QuestionRecognitionJob(
+                scope="set", status="pending", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set),
+            )
+            ready_job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set),
+            )
+            db.add_all([import_job, recognition_job, ready_job]); db.commit()
+            import_id, recognition_id, ready_id = import_job.id, recognition_job.id, ready_job.id
+
+        cancelled_import = client.post(f"/api/admin/question-imports/{import_id}/cancel")
+        assert cancelled_import.status_code == 200
+        assert cancelled_import.json()["status"] == "cancelled"
+        assert cancelled_import.json()["progress"]["percent"] == 42
+        assert client.post(f"/api/admin/question-imports/{import_id}/cancel").status_code == 200
+
+        cancelled_recognition = client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/cancel")
+        assert cancelled_recognition.status_code == 200
+        assert cancelled_recognition.json()["status"] == "cancelled"
+        assert client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/cancel").status_code == 200
+        assert client.post(f"/api/admin/question-recognition-jobs/{ready_id}/cancel").status_code == 409
+
+        monkeypatch.setattr(admin_exercises_router, "import_llm_configured", lambda _settings: True)
+        retried_import = client.post(f"/api/admin/question-imports/{import_id}/retry")
+        assert retried_import.status_code == 200 and retried_import.json()["status"] == "pending"
+        retried_recognition = client.post(f"/api/admin/question-recognition-jobs/{recognition_id}/retry")
+        assert retried_recognition.status_code == 200 and retried_recognition.json()["status"] == "pending"
+        assert retried_recognition.json()["progress"]["percent"] == 0
+
+
+def test_active_job_registry_cancels_only_the_target_task():
+    async def scenario():
+        blocker = asyncio.Event()
+        task = asyncio.create_task(blocker.wait())
+        register_active_job("recognition", 812, task)
+        try:
+            assert cancel_active_job("recognition", 812) is True
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError("active recognition task was not cancelled")
+            assert cancel_active_job("recognition", 999) is False
+        finally:
+            unregister_active_job("recognition", 812, task)
+
+    asyncio.run(scenario())
+
+
+def test_recognition_worker_continues_after_one_job_is_cancelled(monkeypatch):
+    async def scenario():
+        started = asyncio.Event()
+        reclaimed = asyncio.Event()
+        calls = 0
+
+        def fake_claim(_session_factory):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return 913
+            reclaimed.set()
+            return None
+
+        async def fake_process(_session_factory, _settings, _job_id):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(question_recognition, "_claim_job", fake_claim)
+        monkeypatch.setattr(question_recognition, "_process_job", fake_process)
+        worker = asyncio.create_task(question_recognition.question_recognition_worker(lambda: None, Settings()))
+        try:
+            await started.wait()
+            assert cancel_active_job("recognition", 913) is True
+            await asyncio.wait_for(reclaimed.wait(), timeout=1)
+            assert worker.done() is False
+        finally:
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
+
+
+def test_recognition_preview_apply_preserves_question_id_and_rejects_stale_result(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "重识别题套", "description": "旧说明"}).json()
+        payload = {
+            "type": "single_choice", "stem_markdown": "旧题面", "explanation_markdown": "旧解析", "points": 2,
+            "sort_order": 0, "reviewed": False, "correct_bool": None, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "source_section": "一", "source_number": "1",
+            "options": [
+                {"label": "A", "content_markdown": "错误", "correct": False, "sort_order": 0},
+                {"label": "B", "content_markdown": "正确", "correct": True, "sort_order": 1},
+            ], "blanks": [], "programming": None,
+        }
+        current = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=payload).json()
+        candidate = {key: value for key, value in current.items() if key not in {"id", "question_set_id"}}
+        candidate.update({"stem_markdown": "重新识别后的题面", "reviewed": False, "source_asset_id": None})
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="source-test.pdf", original_name="source.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush()
+            stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set), model="vision", base_url="https://example.test/v1",
+                result_json=json.dumps({"title": stored_set.title, "description": stored_set.description, "changes": [{
+                    "status": "matched", "question_id": current["id"], "current": current, "candidate": candidate, "changed_fields": ["stem_markdown"],
+                }], "diagnostics": {}}, ensure_ascii=False),
+            )
+            db.add(job); db.commit(); job_id = job.id
+
+        applied = client.post(f"/api/admin/question-recognition-jobs/{job_id}/apply")
+        assert applied.status_code == 200, applied.text
+        updated = applied.json()["question_set"]["questions"][0]
+        assert updated["id"] == current["id"]
+        assert updated["stem_markdown"] == "重新识别后的题面"
+        assert updated["reviewed"] is False
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            stale_job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=stored_set.source_pdf_asset_id,
+                target_fingerprint=set_fingerprint(stored_set), result_json=json.dumps({"changes": []}),
+            )
+            db.add(stale_job); db.commit(); stale_id = stale_job.id
+        changed = client.put(f"/api/admin/questions/{current['id']}", json={**candidate, "stem_markdown": "人工又修改了"})
+        assert changed.status_code == 200
+        assert client.post(f"/api/admin/question-recognition-jobs/{stale_id}/apply").status_code == 409
+
+
+def test_recognition_apply_keeps_invalid_match_in_order_and_skips_invalid_new_question(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "局部容错", "description": ""}).json()
+        first_payload = {
+            "type": "true_false", "stem_markdown": "原判断题", "explanation_markdown": "", "points": 2,
+            "sort_order": 0, "reviewed": True, "correct_bool": True, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }
+        second_payload = {
+            "type": "true_false", "stem_markdown": "原第二题", "explanation_markdown": "", "points": 2,
+            "sort_order": 1, "reviewed": True, "correct_bool": False, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }
+        first = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=first_payload).json()
+        second = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=second_payload).json()
+        valid_candidate = {key: value for key, value in second.items() if key not in {"id", "question_set_id"}}
+        valid_candidate.update({"stem_markdown": "更新后的第二题", "reviewed": False})
+        invalid_candidate = {key: value for key, value in first.items() if key not in {"id", "question_set_id"}}
+        invalid_candidate.update({"correct_bool": None, "reviewed": False})
+
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="tolerant.pdf", original_name="tolerant.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(
+                scope="set", status="ready", target_set_id=stored_set.id, source_asset_id=asset.id,
+                target_fingerprint=set_fingerprint(stored_set), result_json=json.dumps({"title": stored_set.title, "description": "", "changes": [
+                    {"status": "invalid", "question_id": first["id"], "current": first, "candidate": invalid_candidate, "changed_fields": ["correct_bool"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True},
+                    {"status": "matched", "question_id": second["id"], "current": second, "candidate": valid_candidate, "changed_fields": ["stem_markdown"]},
+                    {"status": "invalid", "question_id": None, "current": None, "candidate": invalid_candidate, "changed_fields": ["新增题目"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True},
+                ], "diagnostics": {"invalid_count": 2}}, ensure_ascii=False),
+            )
+            db.add(job); db.commit(); job_id = job.id
+
+        applied = client.post(f"/api/admin/question-recognition-jobs/{job_id}/apply")
+        assert applied.status_code == 200, applied.text
+        questions = applied.json()["question_set"]["questions"]
+        assert [item["id"] for item in questions] == [first["id"], second["id"]]
+        assert questions[0]["stem_markdown"] == "原判断题" and questions[0]["reviewed"] is False
+        assert "判断题缺少明确的正确答案" in " ".join(questions[0]["recognition_warnings"])
+        assert questions[1]["stem_markdown"] == "更新后的第二题"
+
+        with client.app.state.session_factory() as db:
+            stored_first = db.get(Question, first["id"])
+            single_job = QuestionRecognitionJob(
+                scope="question", status="ready", target_set_id=question_set["id"], target_question_id=stored_first.id,
+                source_asset_id=db.get(QuestionSet, question_set["id"]).source_pdf_asset_id,
+                target_fingerprint=question_fingerprint(stored_first), result_json=json.dumps({"changes": [{
+                    "status": "invalid", "question_id": stored_first.id, "current": first, "candidate": invalid_candidate,
+                    "changed_fields": ["correct_bool"], "validation_errors": ["判断题缺少明确的正确答案"], "repair_attempted": True,
+                }]}, ensure_ascii=False),
+            )
+            db.add(single_job); db.commit(); single_job_id = single_job.id
+        rejected = client.post(f"/api/admin/question-recognition-jobs/{single_job_id}/apply")
+        assert rejected.status_code == 422
+        assert "单题重新识别结果无效" in rejected.json()["detail"]
+
+
+def test_set_recognition_builds_partial_preview_when_one_candidate_is_invalid(monkeypatch, tmp_path):
+    class FakeDocument:
+        def close(self):
+            pass
+
+    async def fake_parse_pdf(_settings, _path):
+        return FakeDocument(), [], {"title": "局部预览", "description": "", "questions": [
+            {"type": "true_false", "stem_markdown": "旧判断题", "source_page": 1, "correct_bool": None, "_repair_attempted": True, "_validation_errors": ["判断题缺少明确的正确答案"]},
+            {"type": "true_false", "stem_markdown": "新增有效题", "source_page": 1, "correct_bool": True, "_repair_attempted": False, "_validation_errors": []},
+        ], "diagnostics": {"warnings": [], "invalid_count": 1}}
+
+    monkeypatch.setattr(question_recognition, "parse_pdf", fake_parse_pdf)
+    monkeypatch.setattr(question_recognition, "_save_crop", lambda *_args, **_kwargs: None)
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "局部预览", "description": ""}).json()
+        current = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "true_false", "stem_markdown": "旧判断题", "explanation_markdown": "", "points": 2,
+            "sort_order": 0, "reviewed": False, "correct_bool": True, "show_source_crop": False,
+            "source_page": 1, "source_end_page": 1, "options": [], "blanks": [], "programming": None,
+        }).json()
+        with client.app.state.session_factory() as db:
+            stored_set = db.get(QuestionSet, question_set["id"])
+            asset = QuestionAsset(question_set_id=stored_set.id, storage_key="partial.pdf", original_name="partial.pdf", mime_type="application/pdf", kind="source_pdf", size_bytes=10)
+            db.add(asset); db.flush(); stored_set.source_pdf_asset_id = asset.id
+            job = QuestionRecognitionJob(scope="set", status="processing", target_set_id=stored_set.id, source_asset_id=asset.id, target_fingerprint=set_fingerprint(stored_set))
+            db.add(job); db.flush()
+            result = asyncio.run(question_recognition._process_set_job(db, Settings(question_asset_dir=str(tmp_path / "assets")), job, asset))
+        assert [item["status"] for item in result["changes"]] == ["invalid", "added"]
+        assert result["changes"][0]["question_id"] == current["id"]
+        assert result["changes"][0]["validation_errors"] == ["判断题缺少明确的正确答案"]
+        assert result["diagnostics"]["invalid_count"] == 1
+
+
+def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        create_child(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "填空练习", "description": ""}).json()
+        payload = {
+            "type": "fill_blank", "stem_markdown": "{{1}} 使用 {{2}} 输出内容。", "explanation_markdown": "Python 使用 print。",
+            "points": 4, "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": True,
+            "options": [], "blanks": [
+                {"position": 1, "accepted_answers": ["Python", "python"]},
+                {"position": 2, "accepted_answers": ["print"]},
+            ], "programming": None,
+        }
+        created = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json=payload)
+        assert created.status_code == 201, created.text
+        question_id = created.json()["id"]
+
+        updated = client.put(f"/api/admin/questions/{question_id}", json={**payload, "reviewed": True, "explanation_markdown": "已修改"})
+        assert updated.status_code == 200 and updated.json()["reviewed"] is False
+        reviewed = client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True})
+        assert reviewed.status_code == 200 and reviewed.json()["reviewed"] is True
+
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        image = client.put(f"/api/admin/questions/{question_id}/source-image", files={"file": ("replacement.png", png, "image/png")})
+        assert image.status_code == 200, image.text
+        source_asset_id = image.json()["source_asset_id"]
+        assert source_asset_id and image.json()["reviewed"] is False
+        stem_image = client.put(f"/api/admin/questions/{question_id}/stem-image", files={"file": ("diagram.png", png, "image/png")})
+        assert stem_image.status_code == 200, stem_image.text
+        stem_asset_id = stem_image.json()["stem_image_asset_id"]
+        assert stem_asset_id and stem_asset_id != source_asset_id
+        assert stem_image.json()["source_asset_id"] == source_asset_id
+        assert stem_image.json()["reviewed"] is False
+        assert client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True}).status_code == 200
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
+
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [question_set["id"]], "counts": {}}).json()
+        item = session["items"][0]
+        assert item["question"]["stem_image_asset_id"] == stem_asset_id
+        assert client.get(f"/api/question-assets/{stem_asset_id}").status_code == 200
+        assert "accepted_answers" not in item["question"]["blanks"][0]
+        saved = client.post(f"/api/exercises/sessions/{session['id']}/answers/{item['id']}", json={
+            "selected_option_ids": [], "bool_answer": None, "blank_answers": [" Python ", "print"], "code": "",
+        })
+        assert saved.status_code == 200
+        assert client.post(f"/api/exercises/sessions/{session['id']}/submit").json()["status"] == "completed"
+        result = client.get(f"/api/exercises/sessions/{session['id']}/result").json()
+        assert result["score"] == 4
+        assert result["items"][0]["answer"]["details"]["blank_correct"] == [True, True]
+        assert result["items"][0]["question"]["blanks"][0]["accepted_answers"] == ["Python", "python"]
+
+        client.post("/api/auth/logout")
+        admin_login(client)
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/unpublish").status_code == 200
+        removed = client.delete(f"/api/admin/questions/{question_id}/stem-image")
+        assert removed.status_code == 200 and removed.json()["stem_image_asset_id"] is None
+        assert removed.json()["source_asset_id"] == source_asset_id
+        child_login(client)
+        assert client.get(f"/api/question-assets/{stem_asset_id}").status_code == 200
+
+
+def test_reference_output_requires_stable_preview_and_explicit_apply(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "输出预览", "description": ""}).json()
+        question = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "输出两倍。", "explanation_markdown": "", "points": 10,
+            "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [], "blanks": [],
+            "programming": {
+                "input_markdown": "整数", "output_markdown": "两倍", "constraints_markdown": "", "starter_code": "",
+                "reference_solution": "print(int(input()) * 2)", "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [{"input_data": "3\n", "expected_output": "old\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""}],
+            },
+        }).json()
+        queued = client.post(f"/api/admin/questions/{question['id']}/reference-output").json()
+        incoming = tmp_path / "judge" / "incoming" / f"{queued['job_id']}.json"
+        job = json.loads(incoming.read_text(encoding="utf-8"))
+        case_id = job["cases"][0]["id"]
+        outgoing = tmp_path / "judge" / "outgoing"
+        outgoing.mkdir(parents=True, exist_ok=True)
+        (outgoing / f"{queued['job_id']}.json").write_text(json.dumps({
+            "job_id": queued["job_id"], "kind": "reference", "status": "complete", "question_id": question["id"],
+            "fingerprint": job["fingerprint"], "cases": [{"id": case_id, "status": "AC", "stable": True, "stdout": "6\n", "stderr": "", "runs": []}],
+        }), encoding="utf-8")
+
+        preview = client.get(f"/api/admin/reference-output/{queued['job_id']}").json()
+        assert preview["stale"] is False
+        assert preview["cases"][0]["current_output"] == "old\n"
+        assert preview["cases"][0]["candidate_output"] == "6\n"
+        unchanged = client.get(f"/api/admin/question-sets/{question_set['id']}").json()
+        assert unchanged["questions"][0]["programming"]["cases"][0]["expected_output"] == "old\n"
+
+        applied = client.post(f"/api/admin/reference-output/{queued['job_id']}/apply", json={"case_ids": [case_id]})
+        assert applied.status_code == 200, applied.text
+        saved = applied.json()["question"]
+        assert saved["programming"]["cases"][0]["expected_output"] == "6\n"
+        assert saved["programming"]["cases"][0]["confirmed"] is False
+        assert saved["reviewed"] is False
 
 
 def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):

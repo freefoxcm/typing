@@ -13,7 +13,7 @@ curl -fsS http://127.0.0.1:${APP_PORT:-8080}/api/health
 ```
 
 - `kidtype` 和 `judge` 均应保持运行，Web 健康检查返回 `{"status":"ok"}`。
-- `kidtype` 日志应显示 Alembic 已升级到 `0003_exercises`，且没有数据库或权限异常。
+- `kidtype` 日志应显示 Alembic 已升级到当前 `head`，且没有数据库或权限异常。
 - 重启 `docker compose restart` 后，管理员、题套、PDF 资源和历史练习仍应存在。
 
 ## 判题队列与网络隔离
@@ -51,6 +51,7 @@ docker exec kidtype-judge python -c "import socket; socket.create_connection(('1
 IMPORT_LLM_BASE_URL=https://api.openai.com/v1
 IMPORT_LLM_API_KEY=replace-me
 IMPORT_LLM_MODEL=replace-with-a-vision-model
+IMPORT_LLM_REASONING_EFFORT=
 IMPORT_LLM_BATCH_PAGES=3
 ```
 

@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -8,15 +9,16 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_imports import ExerciseImportResult, parse_exercise_import
-from ..exercise_library import publication_errors, question_dict, question_set_dict, replace_question
-from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite
+from ..exercise_library import publication_errors, question_dict, question_errors, question_set_dict, replace_question
+from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite, ReferenceOutputApply, ReviewWrite
 from ..judge_queue import enqueue, result as judge_result
+from ..job_control import cancel_active_job, progress_payload
 from ..models import (
     ExerciseAnswer,
     ExerciseSession,
@@ -26,10 +28,12 @@ from ..models import (
     Question,
     QuestionAsset,
     QuestionImportJob,
+    QuestionRecognitionJob,
     QuestionSet,
     WrongQuestion,
 )
 from ..question_imports import import_llm_configured
+from ..question_recognition import apply_job as apply_recognition_job, job_dict as recognition_job_dict, target_fingerprint
 from ..security import Principal, current_principal, require_admin
 
 
@@ -45,9 +49,27 @@ def _import_diagnostics(item: QuestionImportJob) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _loads_recognition_diagnostics(item: QuestionRecognitionJob) -> dict:
+    try:
+        value = json.loads(item.diagnostics_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
 def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
     diagnostics = _import_diagnostics(item)
     counts = diagnostics.get("counts", {})
+    progress = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else None
+    if progress is None:
+        fallback = {
+            "pending": ("queued", "等待识别", 0),
+            "processing": ("processing", "正在识别", 1),
+            "ready": ("completed", "识别完成", 100),
+            "cancelled": ("cancelled", "已终止", 0),
+            "failed": ("failed", "识别失败", 0),
+        }.get(item.status, (item.status, item.status, 0))
+        progress = progress_payload(*fallback)
     return {
         "id": item.id,
         "status": item.status,
@@ -60,6 +82,9 @@ def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
         "counts": counts,
         "question_count": sum(value for value in counts.values() if isinstance(value, int)),
         "retried_pages": diagnostics.get("retried_pages", []),
+        "invalid_count": diagnostics.get("invalid_count", 0),
+        "invalid_questions": diagnostics.get("invalid_questions", []),
+        "progress": progress,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -68,6 +93,7 @@ def _import_dict(item: QuestionImportJob, source: QuestionAsset | None) -> dict:
 def _sets_query():
     return select(QuestionSet).options(
         selectinload(QuestionSet.questions).selectinload(Question.options),
+        selectinload(QuestionSet.questions).selectinload(Question.blanks),
         selectinload(QuestionSet.questions).selectinload(Question.programming).selectinload(ProgrammingSpec.cases),
     ).order_by(QuestionSet.sort_order, QuestionSet.id)
 
@@ -107,6 +133,7 @@ def import_llm_status(_principal: Principal = Depends(require_admin), settings: 
         "configured": import_llm_configured(settings),
         "base_url": settings.import_llm_base_url,
         "model": settings.import_llm_model,
+        "reasoning_effort": settings.import_llm_reasoning_effort.strip() or None,
         "batch_pages": settings.import_llm_batch_pages,
     }
 
@@ -188,11 +215,15 @@ async def create_import(
     asset = QuestionAsset(storage_key=key, original_name=(file.filename or "试卷.pdf")[:255], mime_type="application/pdf", kind="source_pdf", size_bytes=len(data))
     db.add(asset)
     db.flush()
-    job = QuestionImportJob(source_asset_id=asset.id, status="pending")
+    job = QuestionImportJob(
+        source_asset_id=asset.id,
+        status="pending",
+        diagnostics_json=json.dumps({"progress": progress_payload("queued", "等待识别", 0, detail="任务已进入识别队列")}, ensure_ascii=False),
+    )
     db.add(job)
     db.commit()
     db.refresh(job)
-    return {"id": job.id, "status": job.status, "created_at": job.created_at}
+    return _import_dict(job, asset)
 
 
 @router.get("/api/admin/question-imports")
@@ -217,15 +248,50 @@ def retry_import(job_id: int, _principal: Principal = Depends(require_admin), db
     item = db.get(QuestionImportJob, job_id)
     if not item:
         raise HTTPException(status_code=404, detail="导入任务不存在")
-    if item.status not in {"failed", "pending"}:
+    if item.status not in {"failed", "pending", "cancelled"}:
         raise HTTPException(status_code=409, detail="当前任务不能重试")
     item.status = "pending"
     item.attempts = 0
     item.error = ""
-    item.diagnostics_json = "{}"
+    item.diagnostics_json = json.dumps({"progress": progress_payload("queued", "等待识别", 0, detail="任务已重新进入识别队列")}, ensure_ascii=False)
     item.processing_started_at = None
     db.commit()
-    return {"ok": True, "status": item.status}
+    return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
+
+
+@router.post("/api/admin/question-imports/{job_id}/cancel")
+def cancel_import(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(QuestionImportJob, job_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+    if item.status == "cancelled":
+        return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
+    if item.status not in {"pending", "processing"}:
+        raise HTTPException(status_code=409, detail="只有等待中或识别中的任务可以终止")
+    diagnostics = _import_diagnostics(item)
+    previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+    diagnostics["progress"] = progress_payload(
+        "cancelled",
+        "已终止",
+        int(previous.get("percent") or 0),
+        detail="管理员手动终止",
+    )
+    changed = db.execute(update(QuestionImportJob).where(
+        QuestionImportJob.id == job_id,
+        QuestionImportJob.status.in_(["pending", "processing"]),
+    ).values(
+        status="cancelled",
+        error="管理员手动终止",
+        diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+        processing_started_at=None,
+    ).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务状态已变化，请刷新后重试")
+    db.commit()
+    cancel_active_job("import", job_id)
+    db.refresh(item)
+    return _import_dict(item, db.get(QuestionAsset, item.source_asset_id))
 
 
 @router.get("/api/admin/question-sets")
@@ -248,6 +314,150 @@ def reorder_sets(payload: QuestionSetOrder, _principal: Principal = Depends(requ
 @router.get("/api/admin/question-sets/{set_id}")
 def get_set(set_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     return question_set_dict(_get_set(db, set_id))
+
+
+def _enqueue_recognition(db: Session, settings: Settings, question_set: QuestionSet, question: Question | None = None) -> QuestionRecognitionJob:
+    if not import_llm_configured(settings):
+        raise HTTPException(status_code=409, detail="请先配置独立的 PDF 识别模型")
+    _editable(question_set)
+    active_query = select(QuestionRecognitionJob.id).where(
+        QuestionRecognitionJob.target_set_id == question_set.id,
+        QuestionRecognitionJob.status.in_(["pending", "processing"]),
+    )
+    if question:
+        active_query = active_query.where(or_(
+            QuestionRecognitionJob.target_question_id.is_(None),
+            QuestionRecognitionJob.target_question_id == question.id,
+        ))
+    active = db.scalar(active_query.limit(1))
+    if active:
+        raise HTTPException(status_code=409, detail="当前目标已有重新识别任务正在处理")
+    source_asset_id = question.source_asset_id if question and question.source_asset_id else question_set.source_pdf_asset_id
+    if not source_asset_id:
+        raise HTTPException(status_code=409, detail="当前目标没有可用于重新识别的原题图片或 PDF")
+    job = QuestionRecognitionJob(
+        scope="question" if question else "set",
+        status="pending",
+        target_set_id=question_set.id,
+        target_question_id=question.id if question else None,
+        source_asset_id=source_asset_id,
+        target_fingerprint=target_fingerprint(question_set, question),
+        model=settings.import_llm_model,
+        base_url=settings.import_llm_base_url,
+        reasoning_effort=settings.import_llm_reasoning_effort.strip(),
+        diagnostics_json=json.dumps({"progress": progress_payload("queued", "等待重新识别", 0, detail="任务已进入识别队列")}, ensure_ascii=False),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/api/admin/question-sets/{set_id}/re-recognition", status_code=202)
+def re_recognize_set(set_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    question_set = _get_set(db, set_id)
+    if not question_set.source_pdf_asset_id:
+        raise HTTPException(status_code=409, detail="当前题套没有保留原始 PDF")
+    return recognition_job_dict(db, _enqueue_recognition(db, settings, question_set))
+
+
+@router.post("/api/admin/questions/{question_id}/re-recognition", status_code=202)
+def re_recognize_question(question_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    question = db.get(Question, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    return recognition_job_dict(db, _enqueue_recognition(db, settings, _get_set(db, question.question_set_id), question))
+
+
+@router.get("/api/admin/question-recognition-jobs/{job_id}")
+def get_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    return recognition_job_dict(db, job)
+
+
+@router.get("/api/admin/question-recognition-jobs")
+def list_recognition_jobs(_principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    jobs = db.scalars(select(QuestionRecognitionJob).order_by(QuestionRecognitionJob.created_at.desc()).limit(50)).all()
+    return [recognition_job_dict(db, item, include_result=False) for item in jobs]
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/retry")
+def retry_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    if not import_llm_configured(settings):
+        raise HTTPException(status_code=409, detail="请先配置独立的 PDF 识别模型")
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    result = json.loads(job.result_json or "{}") if job.result_json else {}
+    changes = result.get("changes") if isinstance(result.get("changes"), list) else []
+    ready_invalid = job.status == "ready" and bool(changes) and all(
+        isinstance(item, dict) and item.get("status") == "invalid" for item in changes
+    )
+    if job.status not in {"failed", "cancelled"} and not ready_invalid:
+        raise HTTPException(status_code=409, detail="只有失败任务或无效的单题结果可以重试")
+    question_set = _get_set(db, job.target_set_id)
+    _editable(question_set)
+    question = db.get(Question, job.target_question_id) if job.target_question_id else None
+    job.target_fingerprint = target_fingerprint(question_set, question if job.scope == "question" else None)
+    job.status = "pending"
+    job.attempts = 0
+    job.error = ""
+    job.processing_started_at = None
+    job.result_json = "{}"
+    job.diagnostics_json = json.dumps({"progress": progress_payload("queued", "等待重新识别", 0, detail="任务已重新进入识别队列")}, ensure_ascii=False)
+    db.commit()
+    return recognition_job_dict(db, job)
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/cancel")
+def cancel_recognition_job(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    if job.status == "cancelled":
+        return recognition_job_dict(db, job)
+    if job.status not in {"pending", "processing"}:
+        raise HTTPException(status_code=409, detail="只有等待中或识别中的任务可以终止")
+    diagnostics = _loads_recognition_diagnostics(job)
+    previous = diagnostics.get("progress") if isinstance(diagnostics.get("progress"), dict) else {}
+    diagnostics["progress"] = progress_payload(
+        "cancelled",
+        "已终止",
+        int(previous.get("percent") or 0),
+        detail="管理员手动终止",
+    )
+    changed = db.execute(update(QuestionRecognitionJob).where(
+        QuestionRecognitionJob.id == job_id,
+        QuestionRecognitionJob.status.in_(["pending", "processing"]),
+    ).values(
+        status="cancelled",
+        error="管理员手动终止",
+        diagnostics_json=json.dumps(diagnostics, ensure_ascii=False),
+        processing_started_at=None,
+    ).execution_options(synchronize_session=False))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="任务状态已变化，请刷新后重试")
+    db.commit()
+    cancel_active_job("recognition", job_id)
+    db.refresh(job)
+    return recognition_job_dict(db, job)
+
+
+@router.post("/api/admin/question-recognition-jobs/{job_id}/apply")
+def apply_recognition(job_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    job = db.get(QuestionRecognitionJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="重新识别任务不存在")
+    try:
+        question_set = apply_recognition_job(db, job)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "job": recognition_job_dict(db, job), "question_set": question_set_dict(_get_set(db, question_set.id))}
 
 
 @router.post("/api/admin/question-sets", status_code=201)
@@ -368,9 +578,108 @@ def update_question(question_id: int, payload: QuestionWrite, _principal: Princi
     if not item:
         raise HTTPException(status_code=404, detail="题目不存在")
     _editable(db.get(QuestionSet, item.question_set_id))
-    replace_question(item, payload)
+    replace_question(item, payload.model_copy(update={"reviewed": False}))
     db.commit()
     return question_dict(db.get(Question, question_id))
+
+
+@router.patch("/api/admin/questions/{question_id}/review")
+def review_question(question_id: int, payload: ReviewWrite, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    if payload.reviewed:
+        errors = question_errors(item, require_reviewed=False)
+        if errors:
+            raise HTTPException(status_code=422, detail={"message": "题目尚不能标记为已复核", "errors": errors})
+    item.reviewed = payload.reviewed
+    db.commit()
+    return question_dict(item)
+
+
+async def _store_question_image(item: Question, file: UploadFile, settings: Settings, db: Session, *, purpose: str) -> QuestionAsset:
+    allowed = {"image/png", "image/jpeg", "image/webp", "application/octet-stream"}
+    suffix = Path(file.filename or "").suffix.lower()
+    if file.content_type not in allowed or suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=422, detail="仅支持 PNG、JPEG 或 WebP 图片")
+    limit = settings.question_image_max_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if not data or len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"题目图片不能超过 {settings.question_image_max_mb} MB")
+    try:
+        import pymupdf as fitz
+        pixmap = fitz.Pixmap(data)
+        if pixmap.width <= 0 or pixmap.height <= 0 or pixmap.width * pixmap.height > 40_000_000:
+            raise ValueError("图片尺寸无效或过大")
+        png = pixmap.tobytes("png")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="图片内容无效或无法解析") from exc
+    root = Path(settings.question_asset_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    key = f"question-{purpose}-{item.question_set_id}-{item.id}-{uuid4().hex}.png"
+    (root / key).write_bytes(png)
+    asset = QuestionAsset(
+        question_set_id=item.question_set_id,
+        storage_key=key,
+        original_name=(file.filename or "题目图片.png")[:255],
+        mime_type="image/png",
+        kind="question_stem" if purpose == "stem" else "question",
+        size_bytes=len(png),
+    )
+    db.add(asset)
+    db.flush()
+    return asset
+
+
+@router.put("/api/admin/questions/{question_id}/source-image")
+async def replace_source_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    asset = await _store_question_image(item, file, settings, db, purpose="source")
+    item.source_asset_id = asset.id
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
+
+
+@router.put("/api/admin/questions/{question_id}/stem-image")
+async def replace_stem_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    asset = await _store_question_image(item, file, settings, db, purpose="stem")
+    item.stem_image_asset_id = asset.id
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
+
+
+@router.delete("/api/admin/questions/{question_id}/stem-image")
+def remove_stem_image(question_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    item.stem_image_asset_id = None
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
 
 
 @router.delete("/api/admin/questions/{question_id}", status_code=204)
@@ -395,9 +704,12 @@ def generate_reference_outputs(question_id: int, _principal: Principal = Depends
     ]
     if not item.programming.reference_solution.strip() or not candidates:
         raise HTTPException(status_code=422, detail="请先填写参考程序和有效的测试输入")
+    fingerprint = _reference_fingerprint(item)
     job_id = enqueue(settings, {
         "kind": "reference",
         "question_id": item.id,
+        "fingerprint": fingerprint,
+        "repeat_count": 2,
         "code": item.programming.reference_solution,
         "time_limit_ms": item.programming.time_limit_ms,
         "memory_limit_mb": item.programming.memory_limit_mb,
@@ -416,14 +728,67 @@ def reference_output(job_id: str, _principal: Principal = Depends(require_admin)
     if not item or not item.programming:
         raise HTTPException(status_code=404, detail="对应编程题不存在")
     by_id = {case.id: case for case in item.programming.cases}
+    cases = []
     for case_result in payload.get("cases", []):
         case = by_id.get(int(case_result.get("id") or 0))
-        if case and case_result.get("status") == "AC":
-            case.expected_output = str(case_result.get("stdout", ""))
+        if not case:
+            continue
+        cases.append({
+            **case_result,
+            "current_output": case.expected_output,
+            "candidate_output": str(case_result.get("stdout", "")),
+        })
+    return {
+        "job_id": job_id,
+        "question_id": question_id,
+        "status": payload.get("status", "failed"),
+        "stale": payload.get("fingerprint") != _reference_fingerprint(item),
+        "cases": cases,
+    }
+
+
+def _reference_fingerprint(item: Question) -> str:
+    program = item.programming
+    if not program:
+        return ""
+    value = {
+        "reference_solution": program.reference_solution,
+        "cases": [{"id": case.id, "input": case.input_data} for case in program.cases if case.input_data.strip() or case.expected_output.strip()],
+    }
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+@router.post("/api/admin/reference-output/{job_id}/apply")
+def apply_reference_output(
+    job_id: str,
+    request: ReferenceOutputApply,
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    payload = judge_result(settings, job_id)
+    if payload is None or payload.get("status") != "complete":
+        raise HTTPException(status_code=409, detail="生成任务尚未完成或不存在")
+    item = db.get(Question, int(payload.get("question_id") or 0))
+    if not item or not item.programming:
+        raise HTTPException(status_code=404, detail="对应编程题不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    if payload.get("fingerprint") != _reference_fingerprint(item):
+        raise HTTPException(status_code=409, detail="参考程序或测试输入已修改，请重新生成输出")
+    results = {int(value.get("id") or 0): value for value in payload.get("cases", [])}
+    by_id = {case.id: case for case in item.programming.cases}
+    for case_id in request.case_ids:
+        result = results.get(case_id)
+        if case_id not in by_id or not result or result.get("status") != "AC" or not result.get("stable"):
+            raise HTTPException(status_code=422, detail=f"测试点 {case_id} 的候选输出不稳定或运行失败")
+    for case_id in request.case_ids:
+        case = by_id[case_id]
+        case.expected_output = str(results[case_id].get("stdout", ""))
+        if not case.is_sample:
             case.confirmed = False
     item.reviewed = False
     db.commit()
-    return {"job_id": job_id, "status": payload.get("status", "failed"), "cases": payload.get("cases", [])}
+    return {"ok": True, "question": question_dict(item)}
 
 
 @router.get("/api/question-assets/{asset_id}")
@@ -432,11 +797,19 @@ def question_asset(asset_id: int, principal: Principal = Depends(current_princip
     if not asset:
         raise HTTPException(status_code=404, detail="资源不存在")
     if principal.role == "child":
+        if asset.kind == "question_preview":
+            raise HTTPException(status_code=404, detail="资源不存在")
         published = asset.question_set_id and db.scalar(select(QuestionSet.id).where(QuestionSet.id == asset.question_set_id, QuestionSet.status == "published"))
         used_by_child = db.scalar(
             select(ExerciseSessionItem.id)
             .join(ExerciseSession, ExerciseSession.id == ExerciseSessionItem.session_id)
-            .where(ExerciseSession.child_id == principal.actor_id, ExerciseSessionItem.snapshot_json.like(f'%"source_asset_id": {asset.id}%'))
+            .where(
+                ExerciseSession.child_id == principal.actor_id,
+                or_(
+                    ExerciseSessionItem.snapshot_json.like(f'%"source_asset_id": {asset.id},%'),
+                    ExerciseSessionItem.snapshot_json.like(f'%"stem_image_asset_id": {asset.id},%'),
+                ),
+            )
             .limit(1)
         )
         if not published and not used_by_child:

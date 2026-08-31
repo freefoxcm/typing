@@ -14,6 +14,7 @@ TYPE_ALIASES = {
     "single_choice": "single_choice", "single": "single_choice", "单选": "single_choice", "单选题": "single_choice",
     "multiple_choice": "multiple_choice", "multiple": "multiple_choice", "多选": "multiple_choice", "多选题": "multiple_choice",
     "true_false": "true_false", "boolean": "true_false", "判断": "true_false", "判断题": "true_false",
+    "fill_blank": "fill_blank", "blank": "fill_blank", "填空": "fill_blank", "填空题": "fill_blank",
     "programming": "programming", "program": "programming", "编程": "programming", "编程题": "programming",
 }
 TRUE_VALUES = {"true", "1", "yes", "y", "对", "正确", "是"}
@@ -39,7 +40,7 @@ class ExerciseImportResult:
 
     @property
     def counts(self) -> dict[str, int]:
-        result = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "programming")}
+        result = {kind: 0 for kind in ("single_choice", "multiple_choice", "true_false", "fill_blank", "programming")}
         for question_set in self.question_sets:
             for question in question_set.questions:
                 result[question.type] += 1
@@ -69,6 +70,17 @@ def _answer_labels(value: Any) -> set[str]:
     return {str(item).strip().upper() for item in values if str(item).strip()}
 
 
+def _blank_values(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        value = json.loads(value or "[]")
+    if not isinstance(value, list):
+        raise ValueError("填空答案必须是二维数组")
+    return [
+        {"position": index, "accepted_answers": answers if isinstance(answers, list) else [answers]}
+        for index, answers in enumerate(value, start=1)
+    ]
+
+
 def _validation_message(prefix: str, exc: ValidationError) -> str:
     issue = exc.errors()[0]
     path = ".".join(str(item) for item in issue.get("loc", ()))
@@ -84,6 +96,7 @@ def _question_from_mapping(raw: dict[str, Any], prefix: str, result: ExerciseImp
     values["reviewed"] = False
     values["source_page"] = None
     values["source_asset_id"] = None
+    values["stem_image_asset_id"] = None
     values["show_source_crop"] = False
     try:
         return QuestionWrite.model_validate(values)
@@ -106,6 +119,7 @@ def _objective_question(raw: dict[str, Any], prefix: str, result: ExerciseImport
         "points": points,
         "sort_order": int(raw.get("sort_order") or 0),
         "options": [],
+        "blanks": [],
         "programming": None,
     }
     if kind in {"single_choice", "multiple_choice"}:
@@ -122,6 +136,12 @@ def _objective_question(raw: dict[str, Any], prefix: str, result: ExerciseImport
         } for index, item in enumerate(options) if isinstance(item, dict)]
     elif kind == "true_false":
         values["correct_bool"] = _bool_answer(raw.get("answer"))
+    elif kind == "fill_blank":
+        try:
+            values["blanks"] = _blank_values(raw.get("answers_json") or raw.get("answer"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            result.errors.append(f"{prefix}{exc}")
+            return None
     return _question_from_mapping(values, prefix, result, structured=False)
 
 
@@ -184,6 +204,7 @@ def _parse_csv(content: str, result: ExerciseImportResult) -> None:
             question = _objective_question({
                 "type": row.get("type"), "stem_markdown": row.get("stem_markdown"), "options": options,
                 "answer": row.get("answer"), "explanation_markdown": row.get("explanation_markdown"), "points": row.get("points"),
+                "answers_json": row.get("answers_json"),
                 "sort_order": len(target),
             }, f"CSV 第 {row_number} 行：", result)
             if question:
@@ -207,7 +228,7 @@ def _parse_txt_question(lines: list[tuple[int, str]], result: ExerciseImportResu
     fields: dict[str, str] = {}
     options: list[dict[str, str]] = []
     last: tuple[str, int | None] | None = None
-    aliases = {"类型": "type", "题目": "stem", "答案": "answer", "解析": "explanation", "分值": "points"}
+    aliases = {"类型": "type", "题目": "stem", "答案": "answer", "填空答案": "answers_json", "解析": "explanation", "分值": "points"}
     for line_number, line in lines:
         option = re.match(r"^\s*([A-Za-z])\s*[\.、:：]\s*(.*)$", line)
         pair = _txt_value(line)
@@ -227,6 +248,7 @@ def _parse_txt_question(lines: list[tuple[int, str]], result: ExerciseImportResu
             result.errors.append(f"TXT 第 {line_number} 行：无法识别字段")
     return _objective_question({
         "type": fields.get("type"), "stem": fields.get("stem"), "answer": fields.get("answer"),
+        "answers_json": fields.get("answers_json"),
         "explanation": fields.get("explanation"), "points": fields.get("points") or 1, "options": options,
     }, f"TXT 第 {lines[0][0]} 行题目：", result)
 

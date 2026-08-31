@@ -107,9 +107,9 @@ export function ExercisePage() {
   })
   const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>, showMessage = true) => {
     const next = { ...target.answer, ...patch }
-    updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || next.code.trim() ? 'answered' : 'unanswered' })
+    updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || (next.blank_answers || []).some((value) => value.trim()) || next.code.trim() ? 'answered' : 'unanswered' })
     try {
-      await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, code: next.code }) })
+      await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, blank_answers: next.blank_answers || [], code: next.code }) })
       if (showMessage) { setMessage('答案已保存'); window.setTimeout(() => setMessage(''), 1000) }
       return true
     } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败'); return false }
@@ -213,8 +213,9 @@ export function ExercisePage() {
     {editable && unanswered === 0 && <p className="exercise-ready-submit">全部题目均已作答，尚未提交。检查无误后请提交整套练习。</p>}
     <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => <button className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''}`} onClick={() => void goToIndex(itemIndex)} key={candidate.id}>{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>)}</aside>
       <main className="exercise-question-card card"><div className="question-heading"><span>{questionTypeLabel(item.question.type)}</span><strong>{item.points} 分</strong><small>{item.question.question_set_title}</small></div>
-        {item.question.show_source_crop && item.question.source_asset_id && <img className="exercise-source-image" src={`/api/question-assets/${item.question.source_asset_id}`} alt="原题题面" />}
-        <MarkdownText value={item.question.stem_markdown} />
+        {item.question.type === 'fill_blank' ? <FillBlankStem item={item} complete={complete} disabled={!editable} onChange={(blank_answers) => void save(item, { blank_answers })} /> : <MarkdownText value={item.question.stem_markdown} />}
+        {item.question.stem_image_asset_id && <img className="exercise-stem-image" src={`/api/question-assets/${item.question.stem_image_asset_id}`} alt="题目配图" />}
+        {item.question.show_source_crop && item.question.source_asset_id && <img className="exercise-source-image" src={`/api/question-assets/${item.question.source_asset_id}`} alt="完整原题截图" />}
         {item.question.type === 'single_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="radio" name={`question-${item.id}`} checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={() => void save(item, { selected_option_ids: [option.id!] })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'multiple_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="checkbox" checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={(e) => void save(item, { selected_option_ids: e.target.checked ? [...item.answer.selected_option_ids, option.id!] : item.answer.selected_option_ids.filter((id) => id !== option.id) })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'true_false' && <div className="judgment-options"><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === true ? 'selected' : ''} onClick={() => void save(item, { bool_answer: true })}><CheckCircle2 />正确</button><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === false ? 'selected' : ''} onClick={() => void save(item, { bool_answer: false })}><XCircle />错误</button></div>}
@@ -224,6 +225,26 @@ export function ExercisePage() {
       </main></div>
     {editable && index < session.items.length - 1 && <div className="exercise-submit-row"><span>{unanswered ? `还有 ${unanswered} 题未答` : '全部题目均已作答'}</span><button className="primary" disabled={submitting} onClick={() => void submit()}><Send />提交整套练习</button></div>}
   </div>
+}
+
+function FillBlankStem({ item, complete, disabled, onChange }: { item: ExerciseSessionItem; complete: boolean; disabled: boolean; onChange: (answers: string[]) => void }) {
+  const answers = [...(item.answer.blank_answers || [])]
+  while (answers.length < (item.question.blanks || []).length) answers.push('')
+  const parts = item.question.stem_markdown.split(/(\{\{\d+\}\})/g)
+  return <div className="fill-blank-answer">{parts.map((part, index) => {
+    const marker = part.match(/^\{\{(\d+)\}\}$/)
+    if (!marker) return <span key={index}>{part}</span>
+    const position = Number(marker[1])
+    const isCorrect = item.answer.details?.blank_correct?.[position - 1]
+    return <input
+      key={index}
+      aria-label={`第 ${position} 空`}
+      className={complete ? (isCorrect ? 'correct' : 'incorrect') : ''}
+      value={answers[position - 1] || ''}
+      disabled={disabled}
+      onChange={(event) => { const next = [...answers]; next[position - 1] = event.target.value; onChange(next) }}
+    />
+  })}</div>
 }
 
 function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, onCodeChange, onSave, onRun }: {
@@ -335,7 +356,7 @@ export function MarkdownText({ value }: { value?: string }) {
   }
   return <div className="markdown-text">{blocks}</div>
 }
-function questionTypeLabel(type: string) { return ({ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', programming: '编程题' } as Record<string, string>)[type] ?? type }
+function questionTypeLabel(type: string) { return ({ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', programming: '编程题' } as Record<string, string>)[type] ?? type }
 
 function SampleResults({ result }: { result?: SampleResult }) {
   if (!result || result.status === 'queued') return null
@@ -346,5 +367,5 @@ function SampleResults({ result }: { result?: SampleResult }) {
 
 function ResultPanel({ item }: { item: ExerciseSessionItem }) {
   const full = item.answer.awarded_points === item.points
-  return <section className={`exercise-result-panel ${full ? 'correct' : 'incorrect'}`}><header>{full ? <CheckCircle2 /> : <XCircle />}<strong>{full ? '回答正确' : '需要再想一想'}</strong><span>{item.answer.awarded_points ?? 0} / {item.points} 分</span></header>{item.question.type === 'true_false' && <p>正确答案：{item.question.correct_bool ? '正确' : '错误'}</p>}{item.question.type === 'programming' && <><p>隐藏测试点：通过 {item.answer.details?.passed ?? 0} / {item.answer.details?.total ?? 0}，状态 {item.answer.status}</p>{item.answer.status === 'Syntax Error' && <p className="code-hint">请检查括号、冒号和缩进；for、if、while 或 def 后的代码块必须缩进。</p>}</>}{item.question.explanation_markdown && <><h3>答案解析</h3><MarkdownText value={item.question.explanation_markdown} /></>}{item.question.programming?.reference_solution && <><h3>参考程序</h3><pre className="reference-code">{item.question.programming.reference_solution}</pre></>}</section>
+  return <section className={`exercise-result-panel ${full ? 'correct' : 'incorrect'}`}><header>{full ? <CheckCircle2 /> : <XCircle />}<strong>{full ? '回答正确' : '需要再想一想'}</strong><span>{item.answer.awarded_points ?? 0} / {item.points} 分</span></header>{item.question.type === 'true_false' && <p>正确答案：{item.question.correct_bool ? '正确' : '错误'}</p>}{item.question.type === 'fill_blank' && <ol>{(item.question.blanks || []).map((blank) => <li key={blank.position}>第 {blank.position} 空：{blank.accepted_answers?.join(' / ')}</li>)}</ol>}{item.question.type === 'programming' && <><p>隐藏测试点：通过 {item.answer.details?.passed ?? 0} / {item.answer.details?.total ?? 0}，状态 {item.answer.status}</p>{item.answer.status === 'Syntax Error' && <p className="code-hint">请检查括号、冒号和缩进；for、if、while 或 def 后的代码块必须缩进。</p>}</>}{item.question.explanation_markdown && <><h3>答案解析</h3><MarkdownText value={item.question.explanation_markdown} /></>}{item.question.programming?.reference_solution && <><h3>参考程序</h3><pre className="reference-code">{item.question.programming.reference_solution}</pre></>}</section>
 }
