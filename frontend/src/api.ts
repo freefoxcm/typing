@@ -40,3 +40,29 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const jsonBody = (value: unknown): RequestInit => ({ body: JSON.stringify(value) })
 
+export async function downloadApi(path: string, init: RequestInit = {}): Promise<{ blob: Blob; filename: string }> {
+  const headers = new Headers(init.headers)
+  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    const body = contentType.includes('json') ? await response.json() : await response.text()
+    const detail = typeof body === 'object' && body && 'detail' in body ? body.detail : body
+    throw new ApiError(errorMessage(detail) || '下载失败', response.status)
+  }
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const match = /filename="?([^";]+)"?/i.exec(disposition)
+  return { blob: await response.blob(), filename: match?.[1] || 'question-sets.zip' }
+}
+
+export function saveDownload({ blob, filename }: { blob: Blob; filename: string }) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+

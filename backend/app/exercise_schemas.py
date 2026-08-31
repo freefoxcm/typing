@@ -38,6 +38,17 @@ class QuestionOrder(BaseModel):
     question_ids: list[int] = Field(min_length=1, max_length=10000)
 
 
+class QuestionBundleExportRequest(BaseModel):
+    question_set_ids: list[int] = Field(min_length=1, max_length=50)
+
+    @field_validator("question_set_ids")
+    @classmethod
+    def unique_question_set_ids(cls, value: list[int]) -> list[int]:
+        if any(item <= 0 for item in value) or len(value) != len(set(value)):
+            raise ValueError("题套不能重复且必须为正整数")
+        return value
+
+
 class ReviewWrite(BaseModel):
     reviewed: bool
 

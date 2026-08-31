@@ -1,17 +1,22 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { api } from '../api'
+import { api, downloadApi, saveDownload } from '../api'
 import { QuestionLibraryPanel, reorderQuestionList, reorderQuestionSetList, saveQuestionOrder, saveQuestionSetOrder } from './QuestionLibraryPanel'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, api: vi.fn() }
+  return { ...actual, api: vi.fn(), downloadApi: vi.fn(), saveDownload: vi.fn() }
 })
 
 const mockedApi = vi.mocked(api)
+const mockedDownloadApi = vi.mocked(downloadApi)
+const mockedSaveDownload = vi.mocked(saveDownload)
 
 describe('QuestionLibraryPanel', () => {
   beforeEach(() => {
     mockedApi.mockReset()
+    mockedDownloadApi.mockReset()
+    mockedSaveDownload.mockReset()
+    mockedDownloadApi.mockResolvedValue({ blob: new Blob(['zip']), filename: 'one.zip' })
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/question-sets') return []
       if (path === '/api/admin/question-imports') return []
@@ -414,5 +419,30 @@ describe('QuestionLibraryPanel', () => {
     expect(answer).toBeRequired()
     fireEvent.change(answer, { target: { value: 'false' } })
     expect(answer).toHaveValue('false')
+  })
+
+  it('exports a set and only allows source PDF replacement for drafts', async () => {
+    const sets = [
+      { id: 21, title: '可迁移草稿', description: '', status: 'draft', source_pdf_asset_id: null, question_count: 0, total_points: 0, counts: {}, questions: [] },
+      { id: 22, title: '已发布迁移题套', description: '', status: 'published', source_pdf_asset_id: 8, question_count: 0, total_points: 0, counts: {}, questions: [] },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return sets
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/question-sets/21/source-pdf' && options?.method === 'PUT') return { ...sets[0], source_pdf_asset_id: 12 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    await screen.findByText('可迁移草稿')
+
+    const pdf = new File(['pdf'], 'paper.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText('上传题套 可迁移草稿 原始 PDF'), { target: { files: [pdf] } })
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-sets/21/source-pdf', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) })))
+    expect(screen.getByTitle('请先将题套撤回为草稿，再上传或替换原始 PDF')).toBeDisabled()
+
+    fireEvent.click(screen.getAllByRole('button', { name: '导出迁移包' })[0])
+    await waitFor(() => expect(mockedDownloadApi).toHaveBeenCalledWith('/api/admin/question-set-bundles/export', expect.objectContaining({ body: JSON.stringify({ question_set_ids: [21] }) })))
+    expect(mockedSaveDownload).toHaveBeenCalled()
   })
 })

@@ -12,9 +12,9 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { BarChart3, BookOpen, ChevronDown, Download, FileQuestion, FileUp, GripVertical, Languages, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
-import { api, jsonBody } from '../api'
-import type { Child, Course, Lesson, Prompt, QuestionSetSummary, WordSetSummary } from '../types'
+import { BarChart3, BookOpen, ChevronDown, Download, FileQuestion, FileUp, GripVertical, Languages, PackageOpen, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
+import { api, downloadApi, jsonBody, saveDownload } from '../api'
+import type { Child, Course, Lesson, Prompt, QuestionBundleAction, QuestionBundleImportResult, QuestionBundlePreview, QuestionSetSummary, WordSetSummary } from '../types'
 import { AdminReportsPanel } from './AdminReportsPanel'
 import { WordLibraryPanel } from './WordLibraryPanel'
 import { QuestionLibraryPanel } from './QuestionLibraryPanel'
@@ -196,6 +196,13 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
   const [wordFormat, setWordFormat] = useState('txt'); const [wordContent, setWordContent] = useState(''); const [wordMode, setWordMode] = useState('append'); const [wordPreview, setWordPreview] = useState<any>(null)
   const [questionSets, setQuestionSets] = useState<QuestionSetSummary[]>([])
   const [questionFormat, setQuestionFormat] = useState('txt'); const [questionContent, setQuestionContent] = useState(''); const [questionMode, setQuestionMode] = useState('create'); const [questionSetId, setQuestionSetId] = useState(''); const [questionPreview, setQuestionPreview] = useState<any>(null)
+  const [selectedBundleSetIds, setSelectedBundleSetIds] = useState<Set<number>>(() => new Set())
+  const [bundleFile, setBundleFile] = useState<File | null>(null)
+  const [bundlePreview, setBundlePreview] = useState<QuestionBundlePreview | null>(null)
+  const [bundleActions, setBundleActions] = useState<Record<string, QuestionBundleAction>>({})
+  const [bundleValidating, setBundleValidating] = useState(false)
+  const [bundleImporting, setBundleImporting] = useState(false)
+  const [bundleImportResult, setBundleImportResult] = useState<QuestionBundleImportResult | null>(null)
   const lessons = courses.flatMap((course) => course.lessons)
   const draftQuestionSets = questionSets.filter((item) => item.status === 'draft')
   const transferTabs: TransferTab[] = ['typing', 'words', 'questions']
@@ -231,6 +238,52 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
   const commitQuestionImport = () => void action(() => api('/api/admin/exercise-import', { method: 'POST', ...jsonBody(questionPayload) }), '习题导入完成').then((ok) => {
     if (ok) { setQuestionPreview(null); void loadQuestionSets() }
   })
+  const toggleBundleSet = (setId: number) => setSelectedBundleSetIds((current) => {
+    const next = new Set(current)
+    if (next.has(setId)) next.delete(setId); else next.add(setId)
+    return next
+  })
+  const exportBundle = () => void action(async () => {
+    const result = await downloadApi('/api/admin/question-set-bundles/export', {
+      method: 'POST', ...jsonBody({ question_set_ids: [...selectedBundleSetIds] }),
+    })
+    saveDownload(result)
+  }, '题套迁移包已导出')
+  const previewBundle = () => {
+    if (!bundleFile) return
+    setBundleValidating(true)
+    setBundleImportResult(null)
+    void action(async () => {
+      const form = new FormData(); form.append('file', bundleFile)
+      const result = await api<QuestionBundlePreview>('/api/admin/question-set-bundles/preview', { method: 'POST', body: form })
+      setBundlePreview(result)
+      setBundleActions(Object.fromEntries(result.question_sets.map((item) => [item.migration_key, item.default_action])))
+    }, '迁移包预览完成').finally(() => setBundleValidating(false))
+  }
+  const commitBundle = () => {
+    if (!bundleFile || !bundlePreview?.valid) return
+    const decisions = bundlePreview.question_sets.map((item) => ({
+      migration_key: item.migration_key,
+      action: bundleActions[item.migration_key] ?? item.default_action,
+      target_set_id: item.target?.id,
+      expected_target_fingerprint: item.target?.fingerprint,
+    }))
+    if (decisions.some((item) => item.action === 'overwrite') && !window.confirm('覆盖会完整替换同源草稿题套，并删除迁移包中已不存在的旧题。确认继续？')) return
+    let imported: QuestionBundleImportResult | null = null
+    setBundleImporting(true)
+    void action(async () => {
+      const form = new FormData()
+      form.append('file', bundleFile)
+      form.append('decisions', JSON.stringify(decisions))
+      imported = await api<QuestionBundleImportResult>('/api/admin/question-set-bundles/import', { method: 'POST', body: form })
+      await loadQuestionSets()
+    }, '题套迁移包已导入').then((ok) => {
+      if (ok && imported) {
+        setBundleImportResult(imported)
+        setBundleFile(null); setBundlePreview(null); setBundleActions({})
+      }
+    }).finally(() => setBundleImporting(false))
+  }
   const selectTransferTab = (next: TransferTab, focus = false) => {
     setTransferTab(next)
     if (focus) window.setTimeout(() => document.getElementById(`${next}-transfer-tab`)?.focus(), 0)
@@ -257,7 +310,25 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
       {!wordSetsLoading && !wordSetsError && wordSets.length === 0 && <div className="card transfer-empty"><strong>暂无可导入的单词集</strong><p>请先在单词词库创建单词集。</p></div>}
       {!wordSetsLoading && wordSets.length > 0 && <div className="card import-card"><div className="import-grid"><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{wordSets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>格式<select value={wordFormat} onChange={(e) => { setWordFormat(e.target.value); setWordPreview(null) }}><option value="txt">TXT</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={wordMode} onChange={(e) => setWordMode(e.target.value)}><option value="append">追加/更新</option><option value="replace">替换本集</option></select></label><label className="file-picker"><FileUp />选择文件<input aria-label="选择单词词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readWordFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="单词词库文件内容" rows={10} value={wordContent} onChange={(e) => { setWordContent(e.target.value); setWordPreview(null) }} placeholder={wordFormat === 'csv' ? 'word,phonetic,meaning_zh,technical_meaning_zh,active' : '粘贴内容，或选择文件…'} /></label><div className="button-row"><button className="ghost" onClick={previewWordImport} disabled={!wordContent}>预览单词词库</button><button className="primary" onClick={commitWordImport} disabled={!wordPreview?.valid}>导入单词词库</button></div>{wordPreview && <div className={wordPreview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{wordPreview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>共 {wordPreview.word_count} 词 · 新增 {wordPreview.created_count} · 更新 {wordPreview.updated_count} · 待补全 {wordPreview.queued_count}</p>{wordPreview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>}
     </section>}
-    {transferTab === 'questions' && <section className="transfer-panel" id="questions-transfer-panel" role="tabpanel" aria-labelledby="questions-transfer-tab"><header className="section-title"><div><p className="eyebrow">习题题库</p><h2>导入结构化习题</h2><p>导入内容始终进入草稿，复核后才能发布。</p></div></header>
+    {transferTab === 'questions' && <section className="transfer-panel" id="questions-transfer-panel" role="tabpanel" aria-labelledby="questions-transfer-tab"><header className="section-title"><div><p className="eyebrow">习题题库</p><h2>迁移或导入习题</h2><p>迁移包完整保留图片、PDF、复核状态和编程测试点。</p></div></header>
+      <div className="card import-card question-bundle-card"><header className="bundle-section-head"><div><h3><PackageOpen />导出题套迁移包</h3><p>可将多套题一次打包；学生成绩、错题和识别任务不会导出。</p></div><button className="primary" disabled={!selectedBundleSetIds.size} onClick={exportBundle}><Download />导出所选（{selectedBundleSetIds.size}）</button></header>
+        {questionSets.length ? <><div className="bundle-select-toolbar"><button className="ghost" onClick={() => setSelectedBundleSetIds(new Set(questionSets.map((item) => item.id)))}>全选</button><button className="ghost" disabled={!selectedBundleSetIds.size} onClick={() => setSelectedBundleSetIds(new Set())}>清空</button></div><div className="bundle-set-picker">{questionSets.map((item) => <label key={item.id}><input type="checkbox" checked={selectedBundleSetIds.has(item.id)} onChange={() => toggleBundleSet(item.id)} /><span><strong>{item.title}</strong><small>{item.question_count} 题 · {item.status === 'published' ? '已发布' : item.status === 'draft' ? '草稿' : '已归档'} · {item.source_pdf_asset_id ? '含原始 PDF' : '无原始 PDF'}</small></span></label>)}</div></> : <p className="muted">暂无可导出的题套。</p>}
+      </div>
+      <div className="card import-card question-bundle-card"><header className="bundle-section-head"><div><h3><FileUp />导入题套迁移包</h3><p>先校验并逐套选择处理规则；导入后统一为草稿，保留逐题复核状态。</p></div><label className="file-picker"><FileUp />选择 ZIP<input aria-label="选择题套迁移包" type="file" accept=".zip,application/zip" onChange={(event) => { const file = event.target.files?.[0] ?? null; setBundleFile(file); setBundlePreview(null); setBundleActions({}); setBundleImportResult(null) }} /></label></header>
+        {bundleFile && <p className="bundle-file-name">已选择：<strong>{bundleFile.name}</strong> · {(bundleFile.size / 1024 / 1024).toFixed(2)} MB</p>}
+        <div className="button-row"><button className="ghost" disabled={!bundleFile || bundleValidating || bundleImporting} onClick={previewBundle}>{bundleValidating ? '正在校验迁移包…' : '校验并预览'}</button><button className="primary" disabled={!bundlePreview?.valid || bundleValidating || bundleImporting} onClick={commitBundle}>{bundleImporting ? '正在导入…' : '确认导入迁移包'}</button></div>
+        {(bundleValidating || bundleImporting) && <div className="bundle-operation-progress" role="status"><i /><span>{bundleValidating ? '正在检查清单、题目结构、文件大小和 SHA-256…' : '正在写入题套与资源，完成前不会产生半套数据…'}</span></div>}
+        {bundleImportResult && <div className="bundle-import-result success-box"><strong>迁移包导入完成</strong><p>新建：{bundleImportResult.created.map((item) => `#${item.id} ${item.title}`).join('、') || '无'}</p><p>副本：{bundleImportResult.copied.map((item) => `#${item.id} ${item.title}`).join('、') || '无'}</p><p>覆盖：{bundleImportResult.overwritten.map((item) => `#${item.id} ${item.title}`).join('、') || '无'}</p><p>跳过：{bundleImportResult.skipped.map((item) => item.title).join('、') || '无'}</p></div>}
+        {bundlePreview && <div className={bundlePreview.valid ? 'bundle-preview success-box' : 'bundle-preview error-box'}>
+          <strong>{bundlePreview.valid ? `校验通过：${bundlePreview.question_set_count} 套 · ${bundlePreview.question_count} 题 · ${bundlePreview.asset_count} 个资源` : '迁移包校验失败'}</strong>
+          {bundlePreview.errors?.map((item) => <p key={item}>{item}</p>)}
+          {bundlePreview.question_sets.map((item) => {
+            const selectedAction = bundleActions[item.migration_key] ?? item.default_action
+            return <article className="bundle-preview-set" key={item.migration_key}><div><h4>{item.title}</h4><p>{item.question_count} 题 · {item.asset_count} 个资源 · {item.programming_case_count} 个编程测试点 · {item.has_source_pdf ? '含原始 PDF' : '无原始 PDF'}</p><small>{item.conflict === 'none' ? '目标服务器没有同源题套' : item.conflict === 'same_origin_unchanged' ? `与题套 #${item.target?.id} 完全相同` : `与题套 #${item.target?.id} 内容不同`}</small>{selectedAction === 'overwrite' && <em>覆盖将保留匹配题目的 ID，并删除迁移包中不存在的目标旧题；历史快照不受影响。</em>}{item.warnings.map((warning) => <em key={warning}>{warning}</em>)}</div><label>处理方式<select aria-label={`${item.title} 处理方式`} value={selectedAction} onChange={(event) => setBundleActions((current) => ({ ...current, [item.migration_key]: event.target.value as QuestionBundleAction }))}>{item.allowed_actions.map((value) => <option value={value} key={value}>{value === 'create' ? '新建题套' : value === 'skip' ? '跳过' : value === 'copy' ? '创建副本' : '覆盖同源草稿'}</option>)}</select></label></article>
+          })}
+        </div>}
+      </div>
+      <header className="section-title compact"><div><p className="eyebrow">文本导入</p><h3>导入结构化习题</h3><p>TXT、CSV 或 JSON 不包含题目图片和原始 PDF。</p></div></header>
       <div className="card import-card"><div className="import-grid"><label>格式<select value={questionFormat} onChange={(e) => { setQuestionFormat(e.target.value); setQuestionPreview(null) }}><option value="txt">TXT（客观题）</option><option value="csv">CSV（客观题）</option><option value="json">JSON（全部题型）</option></select></label><label>模式<select aria-label="习题导入模式" value={questionMode} onChange={(e) => { setQuestionMode(e.target.value); setQuestionPreview(null) }}><option value="create">新建草稿题套</option><option value="append">追加到草稿题套</option></select></label>{questionMode === 'append' && <label>目标题套<select aria-label="习题目标题套" value={questionSetId} onChange={(e) => { setQuestionSetId(e.target.value); setQuestionPreview(null) }}>{draftQuestionSets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>}<label className="file-picker"><FileUp />选择文件<input aria-label="选择习题题库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readQuestionFile(e.target.files?.[0])} /></label></div>
       {questionMode === 'append' && !draftQuestionSets.length && <p className="notice error">暂无可追加的草稿题套，请改用新建模式。</p>}
       <details className="import-guide"><summary>查看 {questionFormat.toUpperCase()} 格式示例</summary><pre>{questionFormat === 'txt' ? '题套：基础判断与选择\n说明：客观题示例\n类型：填空题\n题目：Python 使用 {{1}} 输出内容。\n填空答案：[["print"]]\n分值：2\n---\n类型：判断\n题目：列表是可变对象。\n答案：正确\n分值：2' : questionFormat === 'csv' ? 'set_title,set_description,type,stem_markdown,options_json,answer,answers_json,explanation_markdown,points\nPython 基础,客观题,填空题,Python 使用 {{1}} 输出内容。,[],,"[[""print""]]",print 用于输出,2' : '{\n  "version": 1,\n  "question_sets": [{\n    "title": "Python 基础",\n    "description": "结构化题套",\n    "questions": [{\n      "type": "fill_blank",\n      "stem_markdown": "Python 使用 {{1}} 输出内容。",\n      "blanks": [{"position": 1, "accepted_answers": ["print"]}],\n      "points": 2,\n      "sort_order": 0,\n      "options": []\n    }]\n  }]\n}'}</pre><p>TXT/CSV 支持单选、多选、判断和填空题；填空答案使用二维 JSON 数组。编程题请使用 JSON。</p></details>

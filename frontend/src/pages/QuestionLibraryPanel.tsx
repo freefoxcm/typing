@@ -5,8 +5,8 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleStop, Code2, Copy, FileUp, GripVertical, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
-import { api, jsonBody } from '../api'
+import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleStop, Code2, Copy, Download, FileUp, GripVertical, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { api, downloadApi, jsonBody, saveDownload } from '../api'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionBlank, QuestionOption, QuestionSetSummary } from '../types'
 
 type InvalidImportQuestion = { index: number; source_page: number; number?: string; errors: string[]; repair_attempted: boolean }
@@ -194,6 +194,22 @@ export function QuestionLibraryPanel() {
       await api('/api/admin/question-imports', { method: 'POST', body })
       await reload(); setMessage('PDF 已进入识别队列')
     } catch (e) { setError(e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
+  }
+
+  const exportSetBundle = (set: QuestionSetSummary) => void action(async () => {
+    const result = await downloadApi('/api/admin/question-set-bundles/export', {
+      method: 'POST', ...jsonBody({ question_set_ids: [set.id] }),
+    })
+    saveDownload(result)
+  }, `题套《${set.title}》迁移包已导出`)
+
+  const uploadSetSourcePdf = async (set: QuestionSetSummary, file?: File) => {
+    if (!file) return
+    const body = new FormData(); body.append('file', file)
+    await action(
+      () => api(`/api/admin/question-sets/${set.id}/source-pdf`, { method: 'PUT', body }),
+      `题套《${set.title}》原始 PDF 已更新，全部题目已恢复为待复核`,
+    )
   }
 
   const setReviewFilterForSet = (setId: number, filter: ReviewFilter) => {
@@ -418,7 +434,13 @@ export function QuestionLibraryPanel() {
       <header><button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
         {set.status === 'draft' && <div className="question-set-review-tools"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
           ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
-        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions">{set.source_pdf_asset_id && <button type="button" className="ghost" disabled={!!setRecognitionJob} onClick={() => void startRecognition(`/api/admin/question-sets/${set.id}/re-recognition`)}><RefreshCcw className={setRecognitionJob ? 'is-spinning' : ''} />{setRecognitionJob ? `整套识别 ${Math.round(setRecognitionJob.progress?.percent ?? 0)}%` : '整套重识别'}</button>}<button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></div></div>}
+        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions">
+          <label className="file-picker compact-set-file"><FileUp />{set.source_pdf_asset_id ? '替换原 PDF' : '上传原 PDF'}<input aria-label={`上传题套 ${set.title} 原始 PDF`} type="file" accept="application/pdf,.pdf" onChange={(event) => { const input = event.currentTarget; void uploadSetSourcePdf(set, input.files?.[0]).finally(() => { input.value = '' }) }} /></label>
+          {set.source_pdf_asset_id && <button type="button" className="ghost" disabled={!!setRecognitionJob} onClick={() => void startRecognition(`/api/admin/question-sets/${set.id}/re-recognition`)}><RefreshCcw className={setRecognitionJob ? 'is-spinning' : ''} />{setRecognitionJob ? `整套识别 ${Math.round(setRecognitionJob.progress?.percent ?? 0)}%` : '整套重识别'}</button>}
+          <button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button>
+        </div></div>}
+        <button type="button" className="ghost question-set-export" onClick={() => exportSetBundle(set)}><Download />导出迁移包</button>
+        {set.status !== 'draft' && <button type="button" className="ghost" disabled title="请先将题套撤回为草稿，再上传或替换原始 PDF"><FileUp />原始 PDF</button>}
         {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
         {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
         {set.status !== 'published' && <button className="danger-button" aria-label={`永久删除题套 ${set.title}`} onClick={() => window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。') && void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除')}><Trash2 /></button>}

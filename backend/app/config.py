@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     import_max_pages: int = Field(default=100, ge=1, le=500)
     question_asset_dir: str = "/data/question-assets"
     question_image_max_mb: int = Field(default=10, ge=1, le=50)
+    question_bundle_max_mb: int = Field(default=250, ge=10, le=2048)
     judge_queue_dir: str = "/judge-queue"
     judge_default_time_ms: int = Field(default=1000, ge=100, le=5000)
     judge_default_memory_mb: int = Field(default=128, ge=32, le=512)
