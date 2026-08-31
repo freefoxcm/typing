@@ -128,9 +128,9 @@ describe('QuestionLibraryPanel', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<QuestionLibraryPanel />)
     fireEvent.click(await screen.findByRole('button', { name: '展开习题集 进度题套' }))
-    expect(screen.getByRole('button', { name: /识别中 25%/ })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
     expect(screen.getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    expect(within(screen.getByRole('form', { name: '题目编辑器' })).getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
     expect(screen.getByRole('progressbar', { name: '正在重新识别本题' })).toHaveAttribute('aria-valuenow', '25')
     fireEvent.click(screen.getByRole('button', { name: /PDF 智能识别/ }))
     fireEvent.click(screen.getByRole('button', { name: /题目 #61/ }))
@@ -168,6 +168,24 @@ describe('QuestionLibraryPanel', () => {
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-recognition-jobs/12/retry', expect.objectContaining({ method: 'POST' })))
   })
 
+  it('shows active whole-set recognition progress on the more menu', async () => {
+    const setJob = { id: 44, scope: 'set', status: 'processing', target_set_id: 14, target_question_id: null, model: 'vision', attempts: 1, stale: false, created_at: '2026-08-30', progress: { phase: 'batch_recognition', label: '正在批量识别', percent: 42, current: 2, total: 5, unit: 'batch', detail: '', updated_at: new Date().toISOString() } }
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{ id: 14, title: '整套进度', description: '', status: 'draft', source_pdf_asset_id: 7, question_count: 0, total_points: 0, counts: {}, questions: [] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/question-recognition-jobs') return [setJob]
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    const more = await screen.findByRole('button', { name: '更多操作，整套识别 42%' })
+    expect(more.querySelector('.is-spinning')).not.toBeNull()
+    fireEvent.click(more)
+    const recognize = screen.getByRole('menuitem', { name: /整套重新识别识别中 42%/ })
+    expect(recognize).toBeDisabled()
+    expect(recognize).toHaveTextContent('42%')
+  })
+
   it('starts set re-recognition and previews image and field differences before applying', async () => {
     const current = { id: 51, question_set_id: 5, type: 'true_false' as const, stem_markdown: '旧题面', explanation_markdown: '', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 10, show_source_crop: false, options: [], blanks: [], programming: null }
     const candidate = { ...current, id: undefined, question_set_id: undefined, stem_markdown: '新题面', reviewed: false, source_asset_id: 11 }
@@ -182,7 +200,8 @@ describe('QuestionLibraryPanel', () => {
       return { id: 1 }
     })
     render(<QuestionLibraryPanel />)
-    fireEvent.click(await screen.findByRole('button', { name: /整套重识别/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '更多操作 重识别题套' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /整套重新识别/ }))
     const dialog = await screen.findByRole('dialog', { name: '重新识别预览' })
     expect(within(dialog).getByText(/思考级别：high/)).toBeInTheDocument()
     expect(within(dialog).getByAltText('当前原题截图')).toHaveAttribute('src', '/api/question-assets/10')
@@ -233,7 +252,12 @@ describe('QuestionLibraryPanel', () => {
       return { id: 1 }
     })
     render(<QuestionLibraryPanel />)
-    const firstFilter = await screen.findByRole('group', { name: '题套甲复核状态过滤' })
+    await screen.findByText('题套甲')
+    expect(screen.queryByRole('group', { name: '题套甲复核状态过滤' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '题套乙复核状态过滤' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开习题集 题套甲' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开习题集 题套乙' }))
+    const firstFilter = screen.getByRole('group', { name: '题套甲复核状态过滤' })
     const secondFilter = screen.getByRole('group', { name: '题套乙复核状态过滤' })
     expect(screen.queryByRole('group', { name: '已发布题套复核状态过滤' })).not.toBeInTheDocument()
 
@@ -248,6 +272,8 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(within(secondFilter).getByRole('button', { name: '已复核 0' }))
     expect(screen.getByText('当前题套没有已复核题目')).toBeInTheDocument()
     expect(within(firstFilter).getByRole('button', { name: '已复核 1' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '收起习题集 题套乙' }))
+    expect(screen.queryByRole('group', { name: '题套乙复核状态过滤' })).not.toBeInTheDocument()
   })
 
   it('navigates only inside the active set and keeps the editor open after saving a draft', async () => {
@@ -414,5 +440,103 @@ describe('QuestionLibraryPanel', () => {
     expect(answer).toBeRequired()
     fireEvent.change(answer, { target: { value: 'false' } })
     expect(answer).toHaveValue('false')
+  })
+
+  it('keeps bundle export out of the library and manages source PDFs from the more menu', async () => {
+    const sets = [
+      { id: 21, title: '可迁移草稿', description: '', status: 'draft', source_pdf_asset_id: null, question_count: 0, total_points: 0, counts: {}, questions: [] },
+      { id: 22, title: '已发布迁移题套', description: '', status: 'published', source_pdf_asset_id: 8, question_count: 0, total_points: 0, counts: {}, questions: [] },
+    ]
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return sets
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/question-sets/21/source-pdf' && options?.method === 'PUT') return { ...sets[0], source_pdf_asset_id: 12 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    await screen.findByText('可迁移草稿')
+    expect(screen.queryByRole('button', { name: '导出迁移包' })).not.toBeInTheDocument()
+
+    const draftMore = screen.getByRole('button', { name: '更多操作 可迁移草稿' })
+    fireEvent.keyDown(draftMore, { key: 'ArrowDown' })
+    const draftMenu = screen.getByRole('menu', { name: '可迁移草稿操作菜单' })
+    expect(within(draftMenu).getByRole('menuitem', { name: /上传原始 PDF/ })).toHaveFocus()
+    fireEvent.keyDown(draftMenu, { key: 'ArrowDown' })
+    expect(within(draftMenu).getByRole('menuitem', { name: '归档题套' })).toHaveFocus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: '可迁移草稿操作菜单' })).not.toBeInTheDocument()
+    await waitFor(() => expect(draftMore).toHaveFocus())
+
+    fireEvent.click(draftMore)
+    const pdf = new File(['pdf'], 'paper.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText('上传题套 可迁移草稿 原始 PDF'), { target: { files: [pdf] } })
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-sets/21/source-pdf', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) })))
+
+    const publishedMore = screen.getByRole('button', { name: '更多操作 已发布迁移题套' })
+    fireEvent.click(publishedMore)
+    const publishedMenu = screen.getByRole('menu', { name: '已发布迁移题套操作菜单' })
+    expect(within(publishedMenu).getByRole('menuitem', { name: /替换原始 PDF/ })).toBeDisabled()
+    expect(within(publishedMenu).getByRole('menuitem', { name: /替换原始 PDF/ })).toHaveAttribute('title', '请先将题套撤回为草稿')
+    expect(within(publishedMenu).queryByRole('menuitem', { name: /永久删除/ })).not.toBeInTheDocument()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu', { name: '已发布迁移题套操作菜单' })).not.toBeInTheDocument()
+  })
+
+  it('shows status-specific primary actions and keeps row actions in the requested order', async () => {
+    const programming = {
+      id: 301, question_set_id: 31, type: 'programming', stem_markdown: '编程题', explanation_markdown: '', points: 10,
+      sort_order: 0, reviewed: false, source_asset_id: 12, show_source_crop: false, options: [], blanks: [],
+      programming: { input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: '', reference_solution: '', time_limit_ms: 1000, memory_limit_mb: 128, cases: [] },
+    }
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [
+        { id: 31, title: '草稿操作题套', description: '', status: 'draft', source_pdf_asset_id: 10, question_count: 1, total_points: 10, counts: { programming: 1 }, questions: [programming] },
+        { id: 32, title: '发布操作题套', description: '', status: 'published', source_pdf_asset_id: 11, question_count: 0, total_points: 0, counts: {}, questions: [] },
+        { id: 33, title: '归档操作题套', description: '', status: 'archived', source_pdf_asset_id: 13, question_count: 0, total_points: 0, counts: {}, questions: [] },
+      ]
+      if (path === '/api/admin/question-imports' || path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+
+    const draftCard = (await screen.findByText('草稿操作题套')).closest('article') as HTMLElement
+    const publishedCard = screen.getByText('发布操作题套').closest('article') as HTMLElement
+    const archivedCard = screen.getByText('归档操作题套').closest('article') as HTMLElement
+    expect(within(draftCard).getByRole('button', { name: '题目' })).toBeInTheDocument()
+    expect(within(draftCard).getByRole('button', { name: '发布' })).toBeInTheDocument()
+    const draftMainRow = draftCard.querySelector('.question-set-main-row') as HTMLElement
+    expect(within(draftMainRow).getByRole('button', { name: '展开习题集 草稿操作题套' })).toBeInTheDocument()
+    expect(within(draftMainRow).getByRole('button', { name: '题目' })).toBeInTheDocument()
+    expect(within(draftMainRow).getByRole('button', { name: '发布' })).toBeInTheDocument()
+    expect(within(draftCard).queryByRole('group', { name: '草稿操作题套复核状态过滤' })).not.toBeInTheDocument()
+    expect(within(publishedCard).getByRole('button', { name: '撤回' })).toBeInTheDocument()
+    expect(within(publishedCard).queryByRole('group', { name: /复核状态过滤/ })).not.toBeInTheDocument()
+    expect(within(archivedCard).queryByRole('button', { name: '题目' })).not.toBeInTheDocument()
+    expect(within(archivedCard).queryByRole('button', { name: '撤回' })).not.toBeInTheDocument()
+    expect(within(archivedCard).getByRole('button', { name: '更多操作 归档操作题套' })).toBeInTheDocument()
+
+    fireEvent.click(within(draftCard).getByRole('button', { name: '更多操作 草稿操作题套' }))
+    const menu = within(draftCard).getByRole('menu', { name: '草稿操作题套操作菜单' })
+    expect(within(menu).getByRole('menuitem', { name: /替换原始 PDF/ })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /整套重新识别/ })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '归档题套' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '永久删除题套' })).toBeInTheDocument()
+    expect(within(menu).queryByText('导出迁移包')).not.toBeInTheDocument()
+    fireEvent.pointerDown(document.body)
+
+    fireEvent.click(within(draftCard).getByRole('button', { name: '展开习题集 草稿操作题套' }))
+    expect(within(draftCard).getByRole('group', { name: '草稿操作题套复核状态过滤' })).toBeInTheDocument()
+    const row = within(draftCard).getByText('编程题', { selector: 'p' }).closest('.sortable-question-row') as HTMLElement
+    const generate = within(row).getByRole('button', { name: /生成输出/ })
+    const edit = within(row).getByRole('button', { name: /编辑/ })
+    const recognize = within(row).getByRole('button', { name: '重新识别' })
+    const remove = within(row).getByRole('button', { name: '删除题目 1' })
+    const buttons: HTMLElement[] = [...row.querySelectorAll('button')]
+    expect(buttons.indexOf(generate)).toBeLessThan(buttons.indexOf(edit))
+    expect(buttons.indexOf(edit)).toBeLessThan(buttons.indexOf(recognize))
+    expect(buttons.indexOf(recognize)).toBeLessThan(buttons.indexOf(remove))
+    expect(recognize).toHaveTextContent('')
   })
 })

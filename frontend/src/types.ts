@@ -146,6 +146,41 @@ export type QuestionSetSummary = {
   source_pdf_asset_id?: number | null
   questions?: ExerciseQuestion[]
 }
+
+export type QuestionBundleAction = 'create' | 'skip' | 'copy' | 'overwrite'
+export type QuestionBundlePreviewSet = {
+  migration_key: string
+  title: string
+  source_status: string
+  fingerprint: string
+  question_count: number
+  counts: Record<ExerciseQuestionType, number>
+  asset_count: number
+  programming_case_count: number
+  has_source_pdf: boolean
+  conflict: 'none' | 'same_origin_unchanged' | 'same_origin_changed'
+  default_action: QuestionBundleAction
+  allowed_actions: QuestionBundleAction[]
+  target?: { id: number; title: string; status: string; fingerprint: string } | null
+  warnings: string[]
+}
+export type QuestionBundlePreview = {
+  valid: boolean
+  version?: number
+  bundle_id?: string
+  question_set_count?: number
+  question_count?: number
+  asset_count?: number
+  question_sets: QuestionBundlePreviewSet[]
+  errors: string[]
+}
+export type QuestionBundleImportResult = {
+  ok: boolean
+  created: { id: number; title: string }[]
+  copied: { id: number; title: string }[]
+  overwritten: { id: number; title: string }[]
+  skipped: { migration_key: string; title: string }[]
+}
 export type ExerciseSessionItem = {
   id: number
   sort_order: number

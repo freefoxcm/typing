@@ -5,7 +5,7 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleStop, Code2, Copy, FileUp, GripVertical, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
+import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleStop, Code2, Copy, FileUp, GripVertical, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import { api, jsonBody } from '../api'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionBlank, QuestionOption, QuestionSetSummary } from '../types'
 
@@ -112,6 +112,72 @@ function JobProgressView({ progress, status, compact = false }: { progress?: Job
   </div>
 }
 
+function QuestionSetActionsMenu({ item, recognitionJob, onUploadPdf, onRecognize, onArchive, onDelete }: {
+  item: QuestionSetSummary
+  recognitionJob?: RecognitionJob
+  onUploadPdf: (file?: File) => Promise<void>
+  onRecognize: () => void
+  onArchive: () => void
+  onDelete: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const recognitionActive = !!recognitionJob && activeJobStatuses.includes(recognitionJob.status)
+  const recognitionPercent = Math.round(recognitionJob?.progress?.percent ?? 0)
+  const draft = item.status === 'draft'
+  const recognitionAvailable = draft && !!item.source_pdf_asset_id
+  const draftOnlyReason = item.status === 'published' ? '请先将题套撤回为草稿' : '仅草稿题套可操作'
+  const recognitionDisabledReason = !draft ? draftOnlyReason : !item.source_pdf_asset_id ? '请先上传原始 PDF' : recognitionActive ? '整套重新识别正在运行' : ''
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false)
+    if (restoreFocus) window.setTimeout(() => triggerRef.current?.focus(), 0)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const first = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')
+    first?.focus()
+    const pointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) close()
+    }
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); close(true) }
+    }
+    document.addEventListener('pointerdown', pointerDown)
+    document.addEventListener('keydown', keyDown)
+    return () => {
+      document.removeEventListener('pointerdown', pointerDown)
+      document.removeEventListener('keydown', keyDown)
+    }
+  }, [close, open])
+
+  const run = (callback: () => void) => { close(true); callback() }
+  const navigateMenu = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])]
+    if (!items.length) return
+    event.preventDefault()
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+    items[next]?.focus()
+  }
+
+  return <div className="question-set-more" ref={rootRef}>
+    <button ref={triggerRef} type="button" className="ghost icon-button question-set-more-trigger" aria-label={recognitionActive ? `更多操作，整套识别 ${recognitionPercent}%` : `更多操作 ${item.title}`} title="更多操作" aria-haspopup="menu" aria-expanded={open} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true) } }} onClick={() => setOpen((current) => !current)}><MoreHorizontal />{recognitionActive && <RefreshCcw className="question-set-menu-activity is-spinning" />}</button>
+    {open && <div className="question-set-menu" role="menu" aria-label={`${item.title}操作菜单`} ref={menuRef} onKeyDown={navigateMenu}>
+      <button type="button" role="menuitem" disabled={!draft} title={draft ? '' : draftOnlyReason} onClick={() => fileRef.current?.click()}><FileUp /><span>{item.source_pdf_asset_id ? '替换原始 PDF' : '上传原始 PDF'}{!draft && <small>{draftOnlyReason}</small>}</span></button>
+      <input ref={fileRef} className="question-set-menu-file" aria-label={`上传题套 ${item.title} 原始 PDF`} type="file" accept="application/pdf,.pdf" disabled={!draft} onChange={(event) => { const input = event.currentTarget; const file = input.files?.[0]; close(); void onUploadPdf(file).finally(() => { input.value = '' }) }} />
+      <button type="button" role="menuitem" disabled={!recognitionAvailable || recognitionActive} title={recognitionDisabledReason} onClick={() => run(onRecognize)}><RefreshCcw className={recognitionActive ? 'is-spinning' : ''} /><span>整套重新识别{recognitionActive ? <small>识别中 {recognitionPercent}%</small> : !draft ? <small>{draftOnlyReason}</small> : !item.source_pdf_asset_id ? <small>需要原始 PDF</small> : null}</span></button>
+      {item.status !== 'archived' && <button type="button" role="menuitem" onClick={() => run(onArchive)}><Archive /><span>归档题套</span></button>}
+      {item.status !== 'published' && <><div className="question-set-menu-separator" role="separator" /><button type="button" role="menuitem" className="danger" onClick={() => run(onDelete)}><Trash2 /><span>永久删除题套</span></button></>}
+    </div>}
+  </div>
+}
+
 export function QuestionLibraryPanel() {
   const [sets, setSets] = useState<QuestionSetSummary[]>([])
   const [jobs, setJobs] = useState<ImportJob[]>([])
@@ -194,6 +260,15 @@ export function QuestionLibraryPanel() {
       await api('/api/admin/question-imports', { method: 'POST', body })
       await reload(); setMessage('PDF 已进入识别队列')
     } catch (e) { setError(e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
+  }
+
+  const uploadSetSourcePdf = async (set: QuestionSetSummary, file?: File) => {
+    if (!file) return
+    const body = new FormData(); body.append('file', file)
+    await action(
+      () => api(`/api/admin/question-sets/${set.id}/source-pdf`, { method: 'PUT', body }),
+      `题套《${set.title}》原始 PDF 已更新，全部题目已恢复为待复核`,
+    )
   }
 
   const setReviewFilterForSet = (setId: number, filter: ReviewFilter) => {
@@ -415,13 +490,25 @@ export function QuestionLibraryPanel() {
       const visibleQuestions = set.status !== 'draft' ? (set.questions || []) : (set.questions || []).filter((question) => questionMatchesFilter(question, reviewFilter))
       const setRecognitionJob = recognitionJobs.find((job) => job.target_set_id === set.id && job.target_question_id == null && activeJobStatuses.includes(job.status))
       return <SortableSetCard item={set} expanded={setOpen} disabled={reorderingSets || sets.length < 2} key={set.id}>
-      <header><button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
-        {set.status === 'draft' && <div className="question-set-review-tools"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
+      <header className="question-set-header">
+        <div className="question-set-main-row">
+          <button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
+          <div className="question-set-primary-actions">
+            {set.status === 'draft' && <><button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></>}
+            {set.status === 'published' && <button type="button" className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
+            <QuestionSetActionsMenu
+              item={set}
+              recognitionJob={setRecognitionJob}
+              onUploadPdf={(file) => uploadSetSourcePdf(set, file)}
+              onRecognize={() => void startRecognition(`/api/admin/question-sets/${set.id}/re-recognition`)}
+              onArchive={() => { if (window.confirm('归档后学生不能再开始该题套，确认继续？')) void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档') }}
+              onDelete={() => { if (window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。')) void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除') }}
+            />
+          </div>
+        </div>
+        {set.status === 'draft' && setOpen && <div className="question-set-review-row"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
           ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
-        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div><div className="question-set-actions">{set.source_pdf_asset_id && <button type="button" className="ghost" disabled={!!setRecognitionJob} onClick={() => void startRecognition(`/api/admin/question-sets/${set.id}/re-recognition`)}><RefreshCcw className={setRecognitionJob ? 'is-spinning' : ''} />{setRecognitionJob ? `整套识别 ${Math.round(setRecognitionJob.progress?.percent ?? 0)}%` : '整套重识别'}</button>}<button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></div></div>}
-        {set.status === 'published' && <button className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
-        {set.status !== 'archived' && <button className="ghost" aria-label="归档题套" onClick={() => window.confirm('归档后学生不能再开始该题套，确认继续？') && void action(() => api(`/api/admin/question-sets/${set.id}/archive`, { method: 'POST' }), '题套已归档')}><Archive /></button>}
-        {set.status !== 'published' && <button className="danger-button" aria-label={`永久删除题套 ${set.title}`} onClick={() => window.confirm('永久删除该题套？题目、测试点、错题记录、PDF、截图和对应导入记录都会删除；历史成绩仍会保留。') && void action(() => api(`/api/admin/question-sets/${set.id}`, { method: 'DELETE' }), '题套已永久删除')}><Trash2 /></button>}
+        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div></div>}
       </header>
       {setOpen && visibleQuestions.length > 0 && <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void finishQuestionReorder(set.id, event)}><SortableContext items={visibleQuestions.map((question) => question.id)} strategy={verticalListSortingStrategy}><div className="question-admin-list">{visibleQuestions.map((question) => {
         const recognitionAvailable = !!question.source_asset_id || !!set.source_pdf_asset_id
@@ -430,7 +517,7 @@ export function QuestionLibraryPanel() {
         return <SortableQuestionRow question={question} disabled={reviewFilter !== 'all' || set.status !== 'draft' || reorderingQuestionSetId != null} key={question.id}>
         <span className="question-number">{question.sort_order + 1}</span><div className="grow"><strong>{labels[question.type]} · {question.points} 分 {question.reviewed ? '· 已复核' : '· 待复核'}</strong><p>{question.stem_markdown.slice(0, 100)}</p>{!!question.recognition_warnings?.length && <small className="recognition-warning">识别提示：{question.recognition_warnings[0]}</small>}</div>
         {question.type === 'programming' && set.status === 'draft' && <button className="ghost" title="用参考程序生成候选输出" onClick={() => void generateOutputs(question.id)}><Play />生成输出</button>}
-        {set.status === 'draft' && <><button className="ghost question-recognition-trigger" title={recognitionAvailable ? '从当前原图或题套 PDF 重新识别本题' : '当前题目没有原图，题套也没有保留原始 PDF'} disabled={!recognitionAvailable || recognitionPending} onClick={() => void startRecognition(`/api/admin/questions/${question.id}/re-recognition`)}><RefreshCcw className={recognitionPending ? 'is-spinning' : ''} />{recognitionJob ? `识别中 ${Math.round(recognitionJob.progress?.percent ?? 0)}%` : '重新识别'}</button><button className="ghost" onClick={() => openQuestionEditor(set, question)}><Pencil />编辑</button><button className="danger-button" onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
+        {set.status === 'draft' && <><button className="ghost" onClick={() => openQuestionEditor(set, question)}><Pencil />编辑</button><button className="ghost icon-button question-recognition-trigger" aria-label={recognitionJob ? `重新识别 ${Math.round(recognitionJob.progress?.percent ?? 0)}%` : '重新识别'} title={recognitionAvailable ? (recognitionJob ? `正在重新识别本题：${Math.round(recognitionJob.progress?.percent ?? 0)}%` : '从当前原图或题套 PDF 重新识别本题') : '当前题目没有原图，题套也没有保留原始 PDF'} disabled={!recognitionAvailable || recognitionPending} onClick={() => void startRecognition(`/api/admin/questions/${question.id}/re-recognition`)}><RefreshCcw className={recognitionPending ? 'is-spinning' : ''} /></button><button className="danger-button" aria-label={`删除题目 ${question.sort_order + 1}`} onClick={() => window.confirm('删除这道题？') && void action(() => api(`/api/admin/questions/${question.id}`, { method: 'DELETE' }), '题目已删除')}><Trash2 /></button></>}
       </SortableQuestionRow>})}</div></SortableContext></DndContext>}
       {setOpen && visibleQuestions.length === 0 && <div className="question-filter-empty">{set.status === 'draft' ? `当前题套没有${reviewFilter === 'pending' ? '待复核' : reviewFilter === 'reviewed' ? '已复核' : ''}题目` : '当前题套暂无题目'}</div>}
     </SortableSetCard>})}</div>

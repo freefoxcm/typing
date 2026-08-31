@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -145,6 +146,7 @@ class AttemptError(Base):
 class QuestionSet(Base):
     __tablename__ = "question_sets"
     id: Mapped[int] = mapped_column(primary_key=True)
+    migration_key: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=lambda: uuid4().hex)
     title: Mapped[str] = mapped_column(String(180))
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
@@ -159,6 +161,7 @@ class QuestionSet(Base):
 class Question(Base):
     __tablename__ = "questions"
     id: Mapped[int] = mapped_column(primary_key=True)
+    migration_key: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=lambda: uuid4().hex)
     question_set_id: Mapped[int] = mapped_column(ForeignKey("question_sets.id", ondelete="CASCADE"), index=True)
     type: Mapped[str] = mapped_column(String(24), index=True)
     stem_markdown: Mapped[str] = mapped_column(Text)

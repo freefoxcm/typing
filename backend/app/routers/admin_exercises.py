@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
@@ -16,7 +16,7 @@ from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_imports import ExerciseImportResult, parse_exercise_import
 from ..exercise_library import publication_errors, question_dict, question_errors, question_set_dict, replace_question
-from ..exercise_schemas import ExerciseImportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite, ReferenceOutputApply, ReviewWrite
+from ..exercise_schemas import ExerciseImportRequest, QuestionBundleExportRequest, QuestionOrder, QuestionSetOrder, QuestionSetWrite, QuestionWrite, ReferenceOutputApply, ReviewWrite
 from ..judge_queue import enqueue, result as judge_result
 from ..job_control import cancel_active_job, progress_payload
 from ..models import (
@@ -33,6 +33,7 @@ from ..models import (
     WrongQuestion,
 )
 from ..question_imports import import_llm_configured
+from ..question_bundles import BundleConflictError, BundleValidationError, create_bundle_file, import_bundle, load_bundle, preview_bundle
 from ..question_recognition import apply_job as apply_recognition_job, job_dict as recognition_job_dict, target_fingerprint
 from ..security import Principal, current_principal, require_admin
 
@@ -125,6 +126,16 @@ def _editable(question_set: QuestionSet) -> None:
         raise HTTPException(status_code=409, detail="请先撤回已发布题套再编辑")
     if question_set.status == "archived":
         raise HTTPException(status_code=409, detail="归档题套不可编辑")
+
+
+async def _read_bundle_upload(file: UploadFile, settings: Settings) -> bytes:
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=422, detail="请选择 ZIP 格式的题套迁移包")
+    limit = settings.question_bundle_max_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if not data or len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"题套迁移包不能超过 {settings.question_bundle_max_mb} MB")
+    return data
 
 
 @router.get("/api/admin/import-llm/status")
@@ -458,6 +469,126 @@ def apply_recognition(job_id: int, _principal: Principal = Depends(require_admin
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True, "job": recognition_job_dict(db, job), "question_set": question_set_dict(_get_set(db, question_set.id))}
+
+
+@router.post("/api/admin/question-set-bundles/export")
+def export_question_set_bundle(
+    payload: QuestionBundleExportRequest,
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    by_id = {item.id: item for item in db.scalars(_sets_query().where(QuestionSet.id.in_(payload.question_set_ids))).unique().all()}
+    if set(by_id) != set(payload.question_set_ids):
+        raise HTTPException(status_code=404, detail="部分题套不存在，请刷新后重试")
+    try:
+        path, filename = create_bundle_file([by_id[item_id] for item_id in payload.question_set_ids], settings)
+    except BundleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def stream():
+        try:
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    yield chunk
+        finally:
+            path.unlink(missing_ok=True)
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/api/admin/question-set-bundles/preview")
+async def preview_question_set_bundle(
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    try:
+        bundle = load_bundle(await _read_bundle_upload(file, settings), settings)
+        return preview_bundle(db, settings, bundle)
+    except BundleValidationError as exc:
+        return {"valid": False, "question_sets": [], "errors": [str(exc)]}
+
+
+@router.post("/api/admin/question-set-bundles/import")
+async def import_question_set_bundle(
+    file: UploadFile = File(...),
+    decisions: str = Form(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    try:
+        raw_decisions = json.loads(decisions)
+        if not isinstance(raw_decisions, list):
+            raise BundleValidationError("导入处理规则必须是数组")
+        bundle = load_bundle(await _read_bundle_upload(file, settings), settings)
+        return import_bundle(db, settings, bundle, raw_decisions)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="导入处理规则不是有效 JSON") from exc
+    except BundleConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BundleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/api/admin/question-sets/{set_id}/source-pdf")
+async def replace_question_set_source_pdf(
+    set_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    question_set = _get_set(db, set_id)
+    _editable(question_set)
+    if file.content_type not in {"application/pdf", "application/octet-stream"} or not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=422, detail="仅支持 PDF 文件")
+    limit = settings.import_max_file_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if not data or len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"PDF 不能超过 {settings.import_max_file_mb} MB")
+    try:
+        import pymupdf as fitz
+
+        document = fitz.open(stream=data, filetype="pdf")
+        try:
+            if document.page_count <= 0 or document.page_count > settings.import_max_pages:
+                raise ValueError("PDF 页数无效或过多")
+        finally:
+            document.close()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="PDF 内容无效或无法读取") from exc
+    root = Path(settings.question_asset_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    storage_key = f"source-pdf-{question_set.id}-{uuid4().hex}.pdf"
+    path = root / storage_key
+    path.write_bytes(data)
+    try:
+        asset = QuestionAsset(
+            question_set_id=question_set.id,
+            storage_key=storage_key,
+            original_name=(file.filename or "原始试卷.pdf")[:255],
+            mime_type="application/pdf",
+            kind="source_pdf",
+            size_bytes=len(data),
+        )
+        db.add(asset)
+        db.flush()
+        question_set.source_pdf_asset_id = asset.id
+        for question in question_set.questions:
+            question.reviewed = False
+        db.commit()
+    except Exception:
+        db.rollback()
+        path.unlink(missing_ok=True)
+        raise
+    return question_set_dict(_get_set(db, set_id))
 
 
 @router.post("/api/admin/question-sets", status_code=201)

@@ -1,14 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { api } from '../api'
+import { api, downloadApi, saveDownload } from '../api'
 import type { Course, Report } from '../types'
 import { AdminPage, reorderCourseList, saveCourseOrder } from './AdminPage'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
-  return { ...actual, api: vi.fn() }
+  return { ...actual, api: vi.fn(), downloadApi: vi.fn(), saveDownload: vi.fn() }
 })
 
 const mockedApi = vi.mocked(api)
+const mockedDownloadApi = vi.mocked(downloadApi)
+const mockedSaveDownload = vi.mocked(saveDownload)
 const courses: Course[] = [
   {
     id: 1,
@@ -37,6 +39,9 @@ const report: Report = {
 describe('AdminPage', () => {
   beforeEach(() => {
     mockedApi.mockReset()
+    mockedDownloadApi.mockReset()
+    mockedSaveDownload.mockReset()
+    mockedDownloadApi.mockResolvedValue({ blob: new Blob(['zip']), filename: 'sets.zip' })
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/children') return [{ id: 1, name: '小宇', active: true }]
       if (path === '/api/admin/library') return courses
@@ -362,6 +367,53 @@ describe('AdminPage', () => {
     expect(await screen.findByText(/1 个题套 · 1 道题/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '导入习题题库' }))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/exercise-import', expect.objectContaining({ method: 'POST' })))
+  })
+
+  it('exports selected sets and previews per-set bundle import decisions', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const questionSets = [
+      { id: 9, title: '迁移题套甲', description: '', status: 'draft', source_pdf_asset_id: 3, question_count: 2, counts: { true_false: 2 }, total_points: 4 },
+      { id: 10, title: '迁移题套乙', description: '', status: 'published', source_pdf_asset_id: null, question_count: 1, counts: { fill_blank: 1 }, total_points: 2 },
+    ]
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/children') return []
+      if (path === '/api/admin/library') return courses
+      if (path === '/api/admin/word-sets') return []
+      if (path === '/api/admin/question-sets') return questionSets
+      if (path === '/api/admin/question-set-bundles/preview') return {
+        valid: true, version: 1, bundle_id: 'b'.repeat(32), question_set_count: 1, question_count: 2, asset_count: 2, errors: [],
+        question_sets: [{
+          migration_key: 'a'.repeat(32), title: '迁移题套甲', source_status: 'draft', fingerprint: 'f'.repeat(64),
+          question_count: 2, counts: { single_choice: 0, multiple_choice: 0, true_false: 2, fill_blank: 0, programming: 0 },
+          asset_count: 2, programming_case_count: 0, has_source_pdf: true, conflict: 'same_origin_changed', default_action: 'copy',
+          allowed_actions: ['skip', 'copy', 'overwrite'], target: { id: 9, title: '迁移题套甲', status: 'draft', fingerprint: 'e'.repeat(64) }, warnings: [],
+        }],
+      }
+      if (path === '/api/admin/question-set-bundles/import') return { ok: true, created: [], copied: [], overwritten: [{ id: 9, title: '迁移题套甲' }], skipped: [] }
+      return {}
+    })
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '导入导出' }))
+    fireEvent.click(screen.getByRole('tab', { name: '习题题库' }))
+    await screen.findByText('迁移题套甲')
+
+    fireEvent.click(screen.getByRole('button', { name: '全选' }))
+    expect(screen.getByRole('status')).toHaveTextContent('将生成 1 个 ZIP，内含已选择的 2 套题')
+    fireEvent.click(screen.getByRole('button', { name: '导出所选（2 套）' }))
+    await waitFor(() => expect(mockedDownloadApi).toHaveBeenCalledWith('/api/admin/question-set-bundles/export', expect.objectContaining({ body: JSON.stringify({ question_set_ids: [9, 10] }) })))
+    expect(mockedSaveDownload).toHaveBeenCalled()
+    expect(screen.getByText('题套迁移包已导出：2 套题合并为 1 个 ZIP')).toBeInTheDocument()
+
+    const file = new File(['bundle'], 'sets.zip', { type: 'application/zip' })
+    fireEvent.change(screen.getByLabelText('选择题套迁移包'), { target: { files: [file] } })
+    fireEvent.click(screen.getByRole('button', { name: '校验并预览' }))
+    expect(await screen.findByText(/校验通过：1 套 · 2 题 · 2 个资源/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('迁移题套甲 处理方式'), { target: { value: 'overwrite' } })
+    expect(screen.getByText(/覆盖将保留匹配题目的 ID/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确认导入迁移包' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-set-bundles/import', expect.objectContaining({ method: 'POST', body: expect.any(FormData) })))
+    expect(confirm).toHaveBeenCalled()
+    expect(await screen.findByText('覆盖：#9 迁移题套甲')).toBeInTheDocument()
   })
 
   it('shows an empty state when no word set can receive an import', async () => {
