@@ -252,7 +252,12 @@ describe('QuestionLibraryPanel', () => {
       return { id: 1 }
     })
     render(<QuestionLibraryPanel />)
-    const firstFilter = await screen.findByRole('group', { name: '题套甲复核状态过滤' })
+    await screen.findByText('题套甲')
+    expect(screen.queryByRole('group', { name: '题套甲复核状态过滤' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '题套乙复核状态过滤' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开习题集 题套甲' }))
+    fireEvent.click(screen.getByRole('button', { name: '展开习题集 题套乙' }))
+    const firstFilter = screen.getByRole('group', { name: '题套甲复核状态过滤' })
     const secondFilter = screen.getByRole('group', { name: '题套乙复核状态过滤' })
     expect(screen.queryByRole('group', { name: '已发布题套复核状态过滤' })).not.toBeInTheDocument()
 
@@ -267,6 +272,8 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(within(secondFilter).getByRole('button', { name: '已复核 0' }))
     expect(screen.getByText('当前题套没有已复核题目')).toBeInTheDocument()
     expect(within(firstFilter).getByRole('button', { name: '已复核 1' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '收起习题集 题套乙' }))
+    expect(screen.queryByRole('group', { name: '题套乙复核状态过滤' })).not.toBeInTheDocument()
   })
 
   it('navigates only inside the active set and keeps the editor open after saving a draft', async () => {
@@ -499,6 +506,11 @@ describe('QuestionLibraryPanel', () => {
     const archivedCard = screen.getByText('归档操作题套').closest('article') as HTMLElement
     expect(within(draftCard).getByRole('button', { name: '题目' })).toBeInTheDocument()
     expect(within(draftCard).getByRole('button', { name: '发布' })).toBeInTheDocument()
+    const draftMainRow = draftCard.querySelector('.question-set-main-row') as HTMLElement
+    expect(within(draftMainRow).getByRole('button', { name: '展开习题集 草稿操作题套' })).toBeInTheDocument()
+    expect(within(draftMainRow).getByRole('button', { name: '题目' })).toBeInTheDocument()
+    expect(within(draftMainRow).getByRole('button', { name: '发布' })).toBeInTheDocument()
+    expect(within(draftCard).queryByRole('group', { name: '草稿操作题套复核状态过滤' })).not.toBeInTheDocument()
     expect(within(publishedCard).getByRole('button', { name: '撤回' })).toBeInTheDocument()
     expect(within(publishedCard).queryByRole('group', { name: /复核状态过滤/ })).not.toBeInTheDocument()
     expect(within(archivedCard).queryByRole('button', { name: '题目' })).not.toBeInTheDocument()
@@ -515,6 +527,7 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.pointerDown(document.body)
 
     fireEvent.click(within(draftCard).getByRole('button', { name: '展开习题集 草稿操作题套' }))
+    expect(within(draftCard).getByRole('group', { name: '草稿操作题套复核状态过滤' })).toBeInTheDocument()
     const row = within(draftCard).getByText('编程题', { selector: 'p' }).closest('.sortable-question-row') as HTMLElement
     const generate = within(row).getByRole('button', { name: /生成输出/ })
     const edit = within(row).getByRole('button', { name: /编辑/ })

@@ -491,11 +491,8 @@ export function QuestionLibraryPanel() {
       const setRecognitionJob = recognitionJobs.find((job) => job.target_set_id === set.id && job.target_question_id == null && activeJobStatuses.includes(job.status))
       return <SortableSetCard item={set} expanded={setOpen} disabled={reorderingSets || sets.length < 2} key={set.id}>
       <header className="question-set-header">
-        <button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
-        <div className={`question-set-toolbar${set.status !== 'draft' ? ' status-only' : ''}`}>
-          {set.status === 'draft' && <div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
-            ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
-          ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div>}
+        <div className="question-set-main-row">
+          <button type="button" className="course-disclosure question-set-disclosure grow" aria-expanded={setOpen} aria-label={`${setOpen ? '收起' : '展开'}习题集 ${set.title}`} onClick={() => setExpandedSets((current) => { const next = new Set(current); if (next.has(set.id)) next.delete(set.id); else next.add(set.id); return next })}><ChevronDown className="disclosure-chevron" /><div><div className="question-set-title-row"><h3>{set.title}</h3><span className={`status-pill ${set.status}`}>{set.status === 'published' ? '已发布' : set.status === 'draft' ? '草稿' : '已归档'}</span></div><p>{set.description || '暂无说明'}</p><small>{set.question_count} 题 · {set.total_points} 分 · 单选 {set.counts.single_choice ?? 0} · 多选 {set.counts.multiple_choice ?? 0} · 判断 {set.counts.true_false ?? 0} · 填空 {set.counts.fill_blank ?? 0} · 编程 {set.counts.programming ?? 0}</small></div></button>
           <div className="question-set-primary-actions">
             {set.status === 'draft' && <><button type="button" className="ghost" onClick={() => openNewQuestion(set)}><Plus />题目</button><button type="button" className="primary" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/publish`, { method: 'POST' }), '题套已发布')}><CheckCircle2 />发布</button></>}
             {set.status === 'published' && <button type="button" className="ghost" onClick={() => void action(() => api(`/api/admin/question-sets/${set.id}/unpublish`, { method: 'POST' }), '题套已撤回为草稿')}>撤回</button>}
@@ -509,6 +506,9 @@ export function QuestionLibraryPanel() {
             />
           </div>
         </div>
+        {set.status === 'draft' && setOpen && <div className="question-set-review-row"><div className="review-filter" role="group" aria-label={`${set.title}复核状态过滤`}>{([
+          ['pending', `待复核 ${pendingCount}`], ['reviewed', `已复核 ${reviewedCount}`], ['all', `全部 ${pendingCount + reviewedCount}`],
+        ] as [ReviewFilter, string][]).map(([value, label]) => <button type="button" className={reviewFilter === value ? 'selected' : ''} aria-pressed={reviewFilter === value} onClick={() => setReviewFilterForSet(set.id, value)} key={value}>{label}</button>)}</div></div>}
       </header>
       {setOpen && visibleQuestions.length > 0 && <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void finishQuestionReorder(set.id, event)}><SortableContext items={visibleQuestions.map((question) => question.id)} strategy={verticalListSortingStrategy}><div className="question-admin-list">{visibleQuestions.map((question) => {
         const recognitionAvailable = !!question.source_asset_id || !!set.source_pdf_asset_id
