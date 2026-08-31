@@ -96,6 +96,7 @@ def _question_from_mapping(raw: dict[str, Any], prefix: str, result: ExerciseImp
     values["reviewed"] = False
     values["source_page"] = None
     values["source_asset_id"] = None
+    values["stem_image_asset_id"] = None
     values["show_source_crop"] = False
     try:
         return QuestionWrite.model_validate(values)

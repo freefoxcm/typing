@@ -65,6 +65,7 @@ def question_dict(question: Question, include_answers: bool = True) -> dict[str,
         "recognition_confidence": question.recognition_confidence,
         "recognition_warnings": loads_json(question.recognition_warnings_json, []),
         "source_asset_id": question.source_asset_id,
+        "stem_image_asset_id": question.stem_image_asset_id,
         "show_source_crop": question.show_source_crop,
         "options": [option_dict(item, include_answers) for item in question.options],
         "blanks": [blank_dict(item, include_answers) for item in question.blanks],
@@ -126,6 +127,7 @@ def replace_question(question: Question, payload: QuestionWrite) -> None:
     question.recognition_confidence = payload.recognition_confidence
     question.recognition_warnings_json = json.dumps(payload.recognition_warnings, ensure_ascii=False)
     question.source_asset_id = payload.source_asset_id
+    question.stem_image_asset_id = payload.stem_image_asset_id
     question.show_source_crop = payload.show_source_crop
     question.options = [QuestionOption(**item.model_dump()) for item in payload.options] if payload.type in {"single_choice", "multiple_choice"} else []
     if payload.type == "fill_blank":

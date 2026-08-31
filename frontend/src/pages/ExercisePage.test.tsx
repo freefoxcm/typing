@@ -56,6 +56,18 @@ describe('ExercisePage', () => {
     ))
   })
 
+  it('renders a stem illustration independently from the complete source screenshot', async () => {
+    const illustrated: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
+    illustrated.items[0].question.stem_image_asset_id = 88
+    illustrated.items[0].question.source_asset_id = 77
+    illustrated.items[0].question.show_source_crop = false
+    mockedApi.mockResolvedValue(illustrated)
+    renderPage()
+    const image = await screen.findByAltText('题目配图')
+    expect(image).toHaveAttribute('src', '/api/question-assets/88')
+    expect(screen.queryByAltText('完整原题截图')).not.toBeInTheDocument()
+  })
+
   it('renders multiple fill blanks and saves answers by position', async () => {
     const fillSession: ExerciseSession = {
       id: 7, title: '填空题', mode: 'set', status: 'in_progress', score: null, max_score: 4,

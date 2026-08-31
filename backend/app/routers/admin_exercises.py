@@ -598,18 +598,7 @@ def review_question(question_id: int, payload: ReviewWrite, _principal: Principa
     return question_dict(item)
 
 
-@router.put("/api/admin/questions/{question_id}/source-image")
-async def replace_source_image(
-    question_id: int,
-    file: UploadFile = File(...),
-    _principal: Principal = Depends(require_admin),
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    item = db.get(Question, question_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="题目不存在")
-    _editable(db.get(QuestionSet, item.question_set_id))
+async def _store_question_image(item: Question, file: UploadFile, settings: Settings, db: Session, *, purpose: str) -> QuestionAsset:
     allowed = {"image/png", "image/jpeg", "image/webp", "application/octet-stream"}
     suffix = Path(file.filename or "").suffix.lower()
     if file.content_type not in allowed or suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -628,19 +617,66 @@ async def replace_source_image(
         raise HTTPException(status_code=422, detail="图片内容无效或无法解析") from exc
     root = Path(settings.question_asset_dir)
     root.mkdir(parents=True, exist_ok=True)
-    key = f"question-upload-{item.question_set_id}-{item.id}-{uuid4().hex}.png"
+    key = f"question-{purpose}-{item.question_set_id}-{item.id}-{uuid4().hex}.png"
     (root / key).write_bytes(png)
     asset = QuestionAsset(
         question_set_id=item.question_set_id,
         storage_key=key,
         original_name=(file.filename or "题目图片.png")[:255],
         mime_type="image/png",
-        kind="question",
+        kind="question_stem" if purpose == "stem" else "question",
         size_bytes=len(png),
     )
     db.add(asset)
     db.flush()
+    return asset
+
+
+@router.put("/api/admin/questions/{question_id}/source-image")
+async def replace_source_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    asset = await _store_question_image(item, file, settings, db, purpose="source")
     item.source_asset_id = asset.id
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
+
+
+@router.put("/api/admin/questions/{question_id}/stem-image")
+async def replace_stem_image(
+    question_id: int,
+    file: UploadFile = File(...),
+    _principal: Principal = Depends(require_admin),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    asset = await _store_question_image(item, file, settings, db, purpose="stem")
+    item.stem_image_asset_id = asset.id
+    item.reviewed = False
+    db.commit()
+    return question_dict(item)
+
+
+@router.delete("/api/admin/questions/{question_id}/stem-image")
+def remove_stem_image(question_id: int, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+    item = db.get(Question, question_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    _editable(db.get(QuestionSet, item.question_set_id))
+    item.stem_image_asset_id = None
     item.reviewed = False
     db.commit()
     return question_dict(item)
@@ -767,7 +803,13 @@ def question_asset(asset_id: int, principal: Principal = Depends(current_princip
         used_by_child = db.scalar(
             select(ExerciseSessionItem.id)
             .join(ExerciseSession, ExerciseSession.id == ExerciseSessionItem.session_id)
-            .where(ExerciseSession.child_id == principal.actor_id, ExerciseSessionItem.snapshot_json.like(f'%"source_asset_id": {asset.id}%'))
+            .where(
+                ExerciseSession.child_id == principal.actor_id,
+                or_(
+                    ExerciseSessionItem.snapshot_json.like(f'%"source_asset_id": {asset.id},%'),
+                    ExerciseSessionItem.snapshot_json.like(f'%"stem_image_asset_id": {asset.id},%'),
+                ),
+            )
             .limit(1)
         )
         if not published and not used_by_child:

@@ -174,6 +174,7 @@ class Question(Base):
     recognition_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     recognition_warnings_json: Mapped[str] = mapped_column(Text, default="[]")
     source_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_assets.id", ondelete="SET NULL"), nullable=True)
+    stem_image_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("question_assets.id", ondelete="SET NULL"), nullable=True)
     show_source_crop: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

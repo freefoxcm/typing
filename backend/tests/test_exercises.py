@@ -353,13 +353,22 @@ def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
         png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
         image = client.put(f"/api/admin/questions/{question_id}/source-image", files={"file": ("replacement.png", png, "image/png")})
         assert image.status_code == 200, image.text
-        assert image.json()["source_asset_id"] and image.json()["reviewed"] is False
+        source_asset_id = image.json()["source_asset_id"]
+        assert source_asset_id and image.json()["reviewed"] is False
+        stem_image = client.put(f"/api/admin/questions/{question_id}/stem-image", files={"file": ("diagram.png", png, "image/png")})
+        assert stem_image.status_code == 200, stem_image.text
+        stem_asset_id = stem_image.json()["stem_image_asset_id"]
+        assert stem_asset_id and stem_asset_id != source_asset_id
+        assert stem_image.json()["source_asset_id"] == source_asset_id
+        assert stem_image.json()["reviewed"] is False
         assert client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True}).status_code == 200
         assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
 
         child_login(client)
         session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [question_set["id"]], "counts": {}}).json()
         item = session["items"][0]
+        assert item["question"]["stem_image_asset_id"] == stem_asset_id
+        assert client.get(f"/api/question-assets/{stem_asset_id}").status_code == 200
         assert "accepted_answers" not in item["question"]["blanks"][0]
         saved = client.post(f"/api/exercises/sessions/{session['id']}/answers/{item['id']}", json={
             "selected_option_ids": [], "bool_answer": None, "blank_answers": [" Python ", "print"], "code": "",
@@ -370,6 +379,15 @@ def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
         assert result["score"] == 4
         assert result["items"][0]["answer"]["details"]["blank_correct"] == [True, True]
         assert result["items"][0]["question"]["blanks"][0]["accepted_answers"] == ["Python", "python"]
+
+        client.post("/api/auth/logout")
+        admin_login(client)
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/unpublish").status_code == 200
+        removed = client.delete(f"/api/admin/questions/{question_id}/stem-image")
+        assert removed.status_code == 200 and removed.json()["stem_image_asset_id"] is None
+        assert removed.json()["source_asset_id"] == source_asset_id
+        child_login(client)
+        assert client.get(f"/api/question-assets/{stem_asset_id}").status_code == 200
 
 
 def test_reference_output_requires_stable_preview_and_explicit_apply(tmp_path):

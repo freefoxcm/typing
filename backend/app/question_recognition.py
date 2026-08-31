@@ -131,6 +131,7 @@ def _candidate_preview(raw: dict[str, Any], sort_order: int, asset_id: int | Non
         "recognition_confidence": _confidence_value(raw),
         "recognition_warnings": list(dict.fromkeys(str(item) for item in raw.get("_recognition_warnings") or [] if str(item).strip()))[:100],
         "source_asset_id": asset_id,
+        "stem_image_asset_id": None,
         "show_source_crop": False,
         "options": [],
         "blanks": [],
@@ -567,6 +568,7 @@ def apply_job(db: Session, job: QuestionRecognitionJob) -> QuestionSet:
             db.add(item)
         else:
             candidate["show_source_crop"] = item.show_source_crop
+            candidate["stem_image_asset_id"] = item.stem_image_asset_id
             if not candidate.get("source_asset_id"):
                 candidate["source_asset_id"] = item.source_asset_id
         candidate["sort_order"] = next_order if job.scope == "set" else item.sort_order

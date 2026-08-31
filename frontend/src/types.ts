@@ -125,6 +125,7 @@ export type ExerciseQuestion = {
   recognition_confidence?: number | null
   recognition_warnings?: string[]
   source_asset_id?: number | null
+  stem_image_asset_id?: number | null
   show_source_crop?: boolean
   options: QuestionOption[]
   blanks?: QuestionBlank[]

@@ -114,6 +114,7 @@ class QuestionWrite(BaseModel):
     recognition_confidence: float | None = Field(default=None, ge=0, le=1)
     recognition_warnings: list[str] = Field(default_factory=list, max_length=100)
     source_asset_id: int | None = Field(default=None, gt=0)
+    stem_image_asset_id: int | None = Field(default=None, gt=0)
     show_source_crop: bool = False
     options: list[OptionWrite] = Field(default_factory=list, max_length=20)
     blanks: list[BlankWrite] = Field(default_factory=list, max_length=100)

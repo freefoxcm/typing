@@ -270,7 +270,7 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
     expect(screen.getByRole('heading', { level: 2, name: '当前题套' })).toBeInTheDocument()
     expect(screen.getByText('第 1 / 2 题')).toBeInTheDocument()
-    const sourceSwitch = screen.getByLabelText('向学生显示原题截图')
+    const sourceSwitch = screen.getByLabelText('向学生显示完整原题截图')
     expect(sourceSwitch.closest('.question-source-heading')).not.toBeNull()
     fireEvent.click(sourceSwitch)
     expect(sourceSwitch).toBeChecked()
@@ -311,6 +311,31 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(confirm).toHaveBeenCalledWith('有尚未保存的修改，确认关闭？')
     expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('uploads and removes a student-facing stem illustration without replacing the source screenshot', async () => {
+    const question = { id: 95, question_set_id: 9, type: 'true_false' as const, stem_markdown: '带图判断题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 4, stem_image_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '题干配图测试', description: '', status: 'draft', question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [question] }]
+      if (path === '/api/admin/question-imports') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/95/stem-image' && options?.method === 'PUT') return { ...question, stem_image_asset_id: 44 }
+      if (path === '/api/admin/questions/95/stem-image' && options?.method === 'DELETE') return { ...question, stem_image_asset_id: null }
+      return { id: 1 }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 题干配图测试' }))
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    const file = new File(['image'], 'diagram.png', { type: 'image/png' })
+    fireEvent.change(screen.getByLabelText('上传题干配图'), { target: { files: [file] } })
+    expect(await screen.findByAltText('题干配图预览')).toHaveAttribute('src', '/api/question-assets/44')
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) }))
+    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    await waitFor(() => expect(screen.queryByAltText('题干配图预览')).not.toBeInTheDocument())
+    expect(screen.getByText('当前没有题干配图')).toBeInTheDocument()
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'DELETE' }))
     confirm.mockRestore()
   })
 
