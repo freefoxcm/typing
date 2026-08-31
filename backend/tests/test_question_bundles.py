@@ -111,6 +111,30 @@ def build_source_bundle(client: TestClient) -> tuple[int, bytes]:
     return question_set["id"], response.content
 
 
+def test_bundle_export_includes_every_selected_set(tmp_path):
+    with make_client(tmp_path / "multi") as client:
+        login(client)
+        first = client.post("/api/admin/question-sets", json={"title": "批量迁移甲", "description": "第一套"}).json()
+        second = client.post("/api/admin/question-sets", json={"title": "批量迁移乙", "description": "第二套"}).json()
+
+        response = client.post(
+            "/api/admin/question-set-bundles/export",
+            json={"question_set_ids": [first["id"], second["id"]]},
+        )
+        assert response.status_code == 200, response.text
+        assert "question-sets-2sets-" in response.headers["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+        assert [item["title"] for item in manifest["question_sets"]] == ["批量迁移甲", "批量迁移乙"]
+
+        preview = client.post(
+            "/api/admin/question-set-bundles/preview",
+            files={"file": ("multi.zip", response.content, "application/zip")},
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["question_set_count"] == 2
+
+
 def test_bundle_round_trip_copy_and_overwrite_preserve_content_and_ids(tmp_path):
     with make_client(tmp_path / "source") as source:
         login(source)

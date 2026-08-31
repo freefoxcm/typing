@@ -225,7 +225,7 @@ def create_bundle_file(question_sets: list[QuestionSet], settings: Settings) -> 
                 archive.writestr(metadata["path"], asset_bytes[ref])
         if path.stat().st_size > settings.question_bundle_max_mb * 1024 * 1024:
             raise BundleValidationError(f"生成的迁移包超过 {settings.question_bundle_max_mb} MB")
-        filename = f"question-sets-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+        filename = f"question-sets-{len(serialized)}sets-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
         return path, filename
     except Exception:
         path.unlink(missing_ok=True)

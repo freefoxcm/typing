@@ -398,9 +398,11 @@ describe('AdminPage', () => {
     await screen.findByText('迁移题套甲')
 
     fireEvent.click(screen.getByRole('button', { name: '全选' }))
-    fireEvent.click(screen.getByRole('button', { name: '导出所选（2）' }))
+    expect(screen.getByRole('status')).toHaveTextContent('将生成 1 个 ZIP，内含已选择的 2 套题')
+    fireEvent.click(screen.getByRole('button', { name: '导出所选（2 套）' }))
     await waitFor(() => expect(mockedDownloadApi).toHaveBeenCalledWith('/api/admin/question-set-bundles/export', expect.objectContaining({ body: JSON.stringify({ question_set_ids: [9, 10] }) })))
     expect(mockedSaveDownload).toHaveBeenCalled()
+    expect(screen.getByText('题套迁移包已导出：2 套题合并为 1 个 ZIP')).toBeInTheDocument()
 
     const file = new File(['bundle'], 'sets.zip', { type: 'application/zip' })
     fireEvent.change(screen.getByLabelText('选择题套迁移包'), { target: { files: [file] } })

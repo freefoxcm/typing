@@ -243,12 +243,16 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
     if (next.has(setId)) next.delete(setId); else next.add(setId)
     return next
   })
-  const exportBundle = () => void action(async () => {
-    const result = await downloadApi('/api/admin/question-set-bundles/export', {
-      method: 'POST', ...jsonBody({ question_set_ids: [...selectedBundleSetIds] }),
-    })
-    saveDownload(result)
-  }, '题套迁移包已导出')
+  const exportBundle = () => {
+    const selectedIds = [...selectedBundleSetIds]
+    if (!selectedIds.length) return
+    void action(async () => {
+      const result = await downloadApi('/api/admin/question-set-bundles/export', {
+        method: 'POST', ...jsonBody({ question_set_ids: selectedIds }),
+      })
+      saveDownload(result)
+    }, `题套迁移包已导出：${selectedIds.length} 套题合并为 1 个 ZIP`)
+  }
   const previewBundle = () => {
     if (!bundleFile) return
     setBundleValidating(true)
@@ -311,8 +315,8 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
       {!wordSetsLoading && wordSets.length > 0 && <div className="card import-card"><div className="import-grid"><label>目标单词集<select value={wordSetId} onChange={(e) => setWordSetId(e.target.value)}>{wordSets.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label>格式<select value={wordFormat} onChange={(e) => { setWordFormat(e.target.value); setWordPreview(null) }}><option value="txt">TXT</option><option value="csv">CSV</option><option value="json">JSON</option></select></label><label>模式<select value={wordMode} onChange={(e) => setWordMode(e.target.value)}><option value="append">追加/更新</option><option value="replace">替换本集</option></select></label><label className="file-picker"><FileUp />选择文件<input aria-label="选择单词词库文件" type="file" accept=".txt,.csv,.json" onChange={(e) => void readWordFile(e.target.files?.[0])} /></label></div><label>文件内容<textarea aria-label="单词词库文件内容" rows={10} value={wordContent} onChange={(e) => { setWordContent(e.target.value); setWordPreview(null) }} placeholder={wordFormat === 'csv' ? 'word,phonetic,meaning_zh,technical_meaning_zh,active' : '粘贴内容，或选择文件…'} /></label><div className="button-row"><button className="ghost" onClick={previewWordImport} disabled={!wordContent}>预览单词词库</button><button className="primary" onClick={commitWordImport} disabled={!wordPreview?.valid}>导入单词词库</button></div>{wordPreview && <div className={wordPreview.valid ? 'import-preview success-box' : 'import-preview error-box'}><strong>{wordPreview.valid ? '内容检查通过' : '内容需要修改'}</strong><p>共 {wordPreview.word_count} 词 · 新增 {wordPreview.created_count} · 更新 {wordPreview.updated_count} · 待补全 {wordPreview.queued_count}</p>{wordPreview.errors?.map((item: string) => <div key={item}>{item}</div>)}</div>}</div>}
     </section>}
     {transferTab === 'questions' && <section className="transfer-panel" id="questions-transfer-panel" role="tabpanel" aria-labelledby="questions-transfer-tab"><header className="section-title"><div><p className="eyebrow">习题题库</p><h2>迁移或导入习题</h2><p>迁移包完整保留图片、PDF、复核状态和编程测试点。</p></div></header>
-      <div className="card import-card question-bundle-card"><header className="bundle-section-head"><div><h3><PackageOpen />导出题套迁移包</h3><p>可将多套题一次打包；学生成绩、错题和识别任务不会导出。</p></div><button className="primary" disabled={!selectedBundleSetIds.size} onClick={exportBundle}><Download />导出所选（{selectedBundleSetIds.size}）</button></header>
-        {questionSets.length ? <><div className="bundle-select-toolbar"><button className="ghost" onClick={() => setSelectedBundleSetIds(new Set(questionSets.map((item) => item.id)))}>全选</button><button className="ghost" disabled={!selectedBundleSetIds.size} onClick={() => setSelectedBundleSetIds(new Set())}>清空</button></div><div className="bundle-set-picker">{questionSets.map((item) => <label key={item.id}><input type="checkbox" checked={selectedBundleSetIds.has(item.id)} onChange={() => toggleBundleSet(item.id)} /><span><strong>{item.title}</strong><small>{item.question_count} 题 · {item.status === 'published' ? '已发布' : item.status === 'draft' ? '草稿' : '已归档'} · {item.source_pdf_asset_id ? '含原始 PDF' : '无原始 PDF'}</small></span></label>)}</div></> : <p className="muted">暂无可导出的题套。</p>}
+      <div className="card import-card question-bundle-card"><header className="bundle-section-head"><div><h3><PackageOpen />导出题套迁移包</h3><p>可将多套题一次打包；学生成绩、错题和识别任务不会导出。</p></div><button className="primary" disabled={!selectedBundleSetIds.size} onClick={exportBundle}><Download />导出所选（{selectedBundleSetIds.size} 套）</button></header>
+        {questionSets.length ? <><div className="bundle-select-toolbar"><button className="ghost" onClick={() => setSelectedBundleSetIds(new Set(questionSets.map((item) => item.id)))}>全选</button><button className="ghost" disabled={!selectedBundleSetIds.size} onClick={() => setSelectedBundleSetIds(new Set())}>清空</button></div>{selectedBundleSetIds.size > 0 && <p className="bundle-selection-summary" role="status">将生成 1 个 ZIP，内含已选择的 <strong>{selectedBundleSetIds.size}</strong> 套题；导入时仍可逐套选择处理方式。</p>}<div className="bundle-set-picker">{questionSets.map((item) => <label key={item.id}><input type="checkbox" checked={selectedBundleSetIds.has(item.id)} onChange={() => toggleBundleSet(item.id)} /><span><strong>{item.title}</strong><small>{item.question_count} 题 · {item.status === 'published' ? '已发布' : item.status === 'draft' ? '草稿' : '已归档'} · {item.source_pdf_asset_id ? '含原始 PDF' : '无原始 PDF'}</small></span></label>)}</div></> : <p className="muted">暂无可导出的题套。</p>}
       </div>
       <div className="card import-card question-bundle-card"><header className="bundle-section-head"><div><h3><FileUp />导入题套迁移包</h3><p>先校验并逐套选择处理规则；导入后统一为草稿，保留逐题复核状态。</p></div><label className="file-picker"><FileUp />选择 ZIP<input aria-label="选择题套迁移包" type="file" accept=".zip,application/zip" onChange={(event) => { const file = event.target.files?.[0] ?? null; setBundleFile(file); setBundlePreview(null); setBundleActions({}); setBundleImportResult(null) }} /></label></header>
         {bundleFile && <p className="bundle-file-name">已选择：<strong>{bundleFile.name}</strong> · {(bundleFile.size / 1024 / 1024).toFixed(2)} MB</p>}
