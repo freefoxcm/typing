@@ -30,7 +30,7 @@ vi.mock('../components/PythonCodeEditor', () => ({
   }) => <div>
     <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={() => onBlur(value)} />
     {onRun && <button disabled={runDisabled} onClick={onRun}>{runLabel}</button>}
-    {onAutoSyntaxChange && <button aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}>自动语法</button>}
+    {onAutoSyntaxChange && <button aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}>自动语法检查</button>}
     {onSyntaxCheck && <button aria-label="立即检查语法" disabled={syntaxCheckDisabled} onClick={onSyntaxCheck}>检查语法</button>}
     {onAutoFormatChange && <button aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}>自动格式化</button>}
     {onFormat && <button aria-label="立即格式化代码" onClick={onFormat}>格式化</button>}
@@ -320,12 +320,12 @@ describe('ExercisePage', () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
     renderPage()
-    expect(await screen.findByRole('button', { name: '自动语法' })).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByRole('button', { name: '自动语法检查' })).toHaveAttribute('aria-pressed', 'true')
     const autoFormat = screen.getByRole('button', { name: '自动格式化' })
     expect(autoFormat).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(autoFormat)
     await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: true, autoFormat: true }))
-    fireEvent.click(screen.getByRole('button', { name: '自动语法' }))
+    fireEvent.click(screen.getByRole('button', { name: '自动语法检查' }))
     await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: false, autoFormat: true }))
   })
 
@@ -333,7 +333,7 @@ describe('ExercisePage', () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: '自动语法' }))
+    fireEvent.click(await screen.findByRole('button', { name: '自动语法检查' }))
     await new Promise((resolve) => window.setTimeout(resolve, 800))
     expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/syntax-check')).toHaveLength(0)
     expect(screen.queryByText(/自动检查语法|正在检查语法|未发现语法错误/)).not.toBeInTheDocument()
@@ -350,7 +350,7 @@ describe('ExercisePage', () => {
       return { ok: true }
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: '自动语法' }))
+    fireEvent.click(await screen.findByRole('button', { name: '自动语法检查' }))
     const editor = screen.getByLabelText('Python 3.13 代码')
     fireEvent.change(editor, { target: { value: 'if True' } })
     fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))
