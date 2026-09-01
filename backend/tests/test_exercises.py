@@ -753,6 +753,23 @@ def test_python_syntax_check_parses_without_executing_and_returns_diagnostics(tm
         assert "闭合" in unclosed["message"]
         assert client.post(path, json={"session_item_id": item_id, "code": "x" * 100001}).status_code == 422
 
+        format_path = f"/api/exercises/sessions/{session['id']}/format-code"
+        format_marker = tmp_path / "format-code-must-not-run"
+        unformatted = f'名字={{"值":1}}\nopen(r"{format_marker}","w").write("不会执行")'
+        formatted = client.post(format_path, json={"session_item_id": item_id, "code": unformatted})
+        assert formatted.status_code == 200
+        assert formatted.json()["valid"] is True
+        assert formatted.json()["changed"] is True
+        assert formatted.json()["formatted_code"].startswith('名字 = {"值": 1}\n')
+        assert not format_marker.exists()
+        unchanged = client.post(format_path, json={"session_item_id": item_id, "code": formatted.json()["formatted_code"]}).json()
+        assert unchanged["valid"] is True and unchanged["changed"] is False
+        invalid_format = client.post(format_path, json={"session_item_id": item_id, "code": "if True\n print(1)"}).json()
+        assert invalid_format["valid"] is False
+        assert invalid_format["formatted_code"] == "if True\n print(1)"
+        assert invalid_format["diagnostics"][0]["code"] == "SyntaxError"
+        assert client.post(format_path, json={"session_item_id": item_id, "code": "x" * 100001}).status_code == 422
+
 
 def test_python_syntax_check_enforces_session_ownership_status_and_question_type(tmp_path):
     with make_client(tmp_path) as client:
@@ -786,18 +803,24 @@ def test_python_syntax_check_enforces_session_ownership_status_and_question_type
             "session_item_id": objective_item["id"], "code": "print(1)",
         })
         assert wrong_type.status_code == 404
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json={
+            "session_item_id": objective_item["id"], "code": "print(1)",
+        }).status_code == 404
 
         client.post("/api/auth/logout")
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 401
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 401
         admin_login(client)
         assert client.post("/api/admin/children", json={"name": "小明", "pin": "5678", "active": True}).status_code == 201
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小明", "pin": "5678"}).status_code == 200
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 404
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 404
 
         client.post("/api/auth/logout"); child_login(client)
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/abandon").status_code == 200
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 409
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 409
 
 
 def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path):

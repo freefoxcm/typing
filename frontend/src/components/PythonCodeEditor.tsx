@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FocusEvent } from 'react'
+import { Braces, LoaderCircle, Play, Search } from 'lucide-react'
 import {
   acceptCompletion,
   autocompletion,
@@ -94,6 +95,9 @@ function documentationNode(documentation: PythonDocumentation): HTMLElement {
   }
   return wrapper
 }
+
+export type PythonFormatStatus = 'idle' | 'formatting' | 'formatted' | 'unchanged' | 'error'
+export type PythonSyntaxStatus = 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable'
 
 function documentedCompletion(documentation: PythonDocumentation) {
   return () => documentationNode(documentation)
@@ -241,7 +245,7 @@ export function semanticDocumentationNode(
   localized?: PythonDocumentation,
 ): HTMLElement {
   const wrapper = document.createElement('div')
-  wrapper.className = 'python-documentation semantic'
+  wrapper.className = `python-documentation semantic ${localized ? 'localized' : 'original'}`
   if (localized) {
     const localizedNode = documentationNode(localized)
     while (localizedNode.firstChild) wrapper.append(localizedNode.firstChild)
@@ -434,7 +438,7 @@ const editorTheme = EditorView.theme({
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { background: '#3b73ad !important' },
   '.cm-content ::selection': { backgroundColor: 'rgba(82,139,255,.62) !important' },
   '.cm-tooltip': { color: '#abb2bf', backgroundColor: '#21252b', border: '1px solid #3c414c' },
-  '.cm-tooltip.cm-completionInfo': { maxWidth: 'min(480px, calc(100vw - 32px))', maxHeight: 'min(420px, 70vh)', overflow: 'auto', overscrollBehavior: 'contain' },
+  '.cm-tooltip.cm-completionInfo': { maxWidth: 'min(480px, calc(100vw - 32px))', overflow: 'visible' },
   '.cm-tooltip-autocomplete ul li[aria-selected]': { color: '#fff', backgroundColor: '#3e4451' },
   '.cm-completionDetail': { color: '#7f848e' },
   '.cm-diagnostic-error': { borderLeftColor: '#e06c75' },
@@ -501,14 +505,50 @@ function editorDiagnostics(state: EditorState, diagnostics: PythonSyntaxDiagnost
   })
 }
 
-export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sessionItemId, onChange, onBlur }: {
+export function PythonCodeEditor({
+  value,
+  disabled,
+  diagnostics,
+  sessionId,
+  sessionItemId,
+  onChange,
+  onBlur,
+  onRun,
+  runDisabled = false,
+  runDisabledReason,
+  runLabel = '运行公开样例',
+  autoSyntaxEnabled = true,
+  onAutoSyntaxChange,
+  onSyntaxCheck,
+  syntaxCheckDisabled = false,
+  syntaxStatus = 'idle',
+  autoFormatEnabled = false,
+  onAutoFormatChange,
+  onFormat,
+  formatDisabled = false,
+  formatStatus = 'idle',
+}: {
   value: string
   disabled: boolean
   diagnostics: PythonSyntaxDiagnostic[]
   sessionId?: number
   sessionItemId?: number
   onChange: (value: string) => void
-  onBlur: () => void
+  onBlur: (value: string) => void
+  onRun?: () => void
+  runDisabled?: boolean
+  runDisabledReason?: string
+  runLabel?: string
+  autoSyntaxEnabled?: boolean
+  onAutoSyntaxChange?: (enabled: boolean) => void
+  onSyntaxCheck?: () => void
+  syntaxCheckDisabled?: boolean
+  syntaxStatus?: PythonSyntaxStatus
+  autoFormatEnabled?: boolean
+  onAutoFormatChange?: (enabled: boolean) => void
+  onFormat?: () => void
+  formatDisabled?: boolean
+  formatStatus?: PythonFormatStatus
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -518,10 +558,12 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
   const editableCompartmentRef = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
+  const onFormatRef = useRef(onFormat)
   const sessionIdRef = useRef(sessionId)
   const sessionItemIdRef = useRef(sessionItemId)
   onChangeRef.current = onChange
   onBlurRef.current = onBlur
+  onFormatRef.current = onFormat
   sessionIdRef.current = sessionId
   sessionItemIdRef.current = sessionItemId
 
@@ -553,6 +595,11 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
         syntaxHighlighting(softDarkHighlightStyle, { fallback: true }),
         indentUnit.of('    '),
         pythonEditorKeymap,
+        Prec.highest(keymap.of([{ key: 'Shift-Alt-f', run: () => {
+          if (!onFormatRef.current) return false
+          onFormatRef.current()
+          return true
+        } }])),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         editable.of([EditorView.editable.of(!disabled), EditorState.readOnly.of(disabled)]),
         EditorView.contentAttributes.of({ 'aria-label': 'Python 3.13 代码', spellcheck: 'false', autocapitalize: 'off' }),
@@ -560,7 +607,6 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
           if (update.docChanged && !syncingRef.current) onChangeRef.current(update.state.doc.toString())
           if (update.selectionSet || update.docChanged) setCursorPosition(pythonCursorPosition(update.state))
         }),
-        EditorView.domEventHandlers({ blur: () => { onBlurRef.current(); return false } }),
         editorTheme,
       ],
     })
@@ -573,10 +619,17 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
     const view = viewRef.current
     if (!view || view.state.doc.toString() === value) return
     syncingRef.current = true
-    const selection = view.state.selection.main
+    const current = view.state.doc.toString()
+    let from = 0
+    while (from < current.length && from < value.length && current[from] === value[from]) from += 1
+    let currentTo = current.length
+    let valueTo = value.length
+    while (currentTo > from && valueTo > from && current[currentTo - 1] === value[valueTo - 1]) {
+      currentTo -= 1
+      valueTo -= 1
+    }
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-      selection: { anchor: Math.min(selection.anchor, value.length), head: Math.min(selection.head, value.length) },
+      changes: { from, to: currentTo, insert: value.slice(from, valueTo) },
     })
     syncingRef.current = false
   }, [value])
@@ -593,8 +646,28 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
     view.dispatch(setDiagnostics(view.state, editorDiagnostics(view.state, diagnostics)))
   }, [diagnostics])
 
-  return <div className="python-ide-shell" data-theme="soft-dark">
-    <header className="python-ide-tabbar"><div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div><span className="python-ide-runtime">Python 3.13</span></header>
+  const showTools = !disabled && Boolean(onRun || onSyntaxCheck || onFormat || onAutoSyntaxChange || onAutoFormatChange)
+  const handleShellBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const shell = event.currentTarget
+    const next = event.relatedTarget as Node | null
+    if (next && shell.contains(next)) return
+    window.setTimeout(() => {
+      if (!shell.contains(document.activeElement)) onBlurRef.current(viewRef.current?.state.doc.toString() ?? value)
+    }, 0)
+  }
+
+  return <div className="python-ide-shell" data-theme="soft-dark" onBlurCapture={handleShellBlur}>
+    <header className="python-ide-tabbar">
+      <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
+      {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
+        {onRun && <button type="button" className="python-toolbar-run" disabled={runDisabled} onClick={onRun} title={runDisabled ? runDisabledReason || '当前不能运行公开样例' : runLabel}><Play />{runLabel}</button>}
+        {onAutoSyntaxChange && <label className="python-toolbar-toggle" title="停止输入后自动检查 Python 语法"><input type="checkbox" checked={autoSyntaxEnabled} onChange={(event) => onAutoSyntaxChange(event.target.checked)} /><span aria-hidden="true" /><b>自动语法</b></label>}
+        {onSyntaxCheck && <button type="button" className="python-toolbar-icon" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法" title="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button>}
+        {onAutoFormatChange && <label className="python-toolbar-toggle" title="离开编辑器或运行样例前自动格式化"><input type="checkbox" checked={autoFormatEnabled} onChange={(event) => onAutoFormatChange(event.target.checked)} /><span aria-hidden="true" /><b>自动格式化</b></label>}
+        {onFormat && <button type="button" className="python-toolbar-icon" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码" title="立即格式化代码（Shift+Alt+F）">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button>}
+        {formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}
+      </div> : <span className="python-ide-runtime">Python 3.13</span>}
+    </header>
     <div ref={hostRef} className="python-code-editor" />
     <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
   </div>

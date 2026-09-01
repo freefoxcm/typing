@@ -200,6 +200,11 @@ class SyntaxCheckCreate(BaseModel):
     code: str = Field(default="", max_length=100000)
 
 
+class PythonFormatCreate(BaseModel):
+    session_item_id: int = Field(gt=0)
+    code: str = Field(default="", max_length=100000)
+
+
 class PythonCompletionPosition(BaseModel):
     line: int = Field(ge=0)
     character: int = Field(ge=0)

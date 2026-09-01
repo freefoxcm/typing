@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api'
 import type { ExerciseSession } from '../types'
-import { ExercisePage, MarkdownText, pythonIndentEdit } from './ExercisePage'
+import { ExercisePage, MarkdownText, pythonIndentEdit, readPythonEditorPreferences } from './ExercisePage'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -10,13 +10,32 @@ vi.mock('../api', async (importOriginal) => {
 })
 
 vi.mock('../components/PythonCodeEditor', () => ({
-  PythonCodeEditor: ({ value, disabled, diagnostics, onChange, onBlur }: {
+  PythonCodeEditor: ({ value, disabled, diagnostics, onChange, onBlur, onRun, runDisabled, runLabel, autoSyntaxEnabled, onAutoSyntaxChange, onSyntaxCheck, syntaxCheckDisabled, autoFormatEnabled, onAutoFormatChange, onFormat, formatStatus }: {
     value: string
     disabled: boolean
     diagnostics: unknown[]
     onChange: (value: string) => void
-    onBlur: () => void
-  }) => <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />,
+    onBlur: (value: string) => void
+    onRun?: () => void
+    runDisabled?: boolean
+    runLabel?: string
+    autoSyntaxEnabled?: boolean
+    onAutoSyntaxChange?: (enabled: boolean) => void
+    onSyntaxCheck?: () => void
+    syntaxCheckDisabled?: boolean
+    autoFormatEnabled?: boolean
+    onAutoFormatChange?: (enabled: boolean) => void
+    onFormat?: () => void
+    formatStatus?: string
+  }) => <div>
+    <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={() => onBlur(value)} />
+    {onRun && <button disabled={runDisabled} onClick={onRun}>{runLabel}</button>}
+    {onAutoSyntaxChange && <label>自动语法<input aria-label="自动语法" type="checkbox" checked={autoSyntaxEnabled} onChange={(event) => onAutoSyntaxChange(event.target.checked)} /></label>}
+    {onSyntaxCheck && <button aria-label="立即检查语法" disabled={syntaxCheckDisabled} onClick={onSyntaxCheck}>检查语法</button>}
+    {onAutoFormatChange && <label>自动格式化<input aria-label="自动格式化" type="checkbox" checked={autoFormatEnabled} onChange={(event) => onAutoFormatChange(event.target.checked)} /></label>}
+    {onFormat && <button aria-label="立即格式化代码" onClick={onFormat}>格式化</button>}
+    {formatStatus && <span>{formatStatus}</span>}
+  </div>,
 }))
 
 const mockedApi = vi.mocked(api)
@@ -53,7 +72,7 @@ function makeProgrammingSession(): ExerciseSession {
 }
 
 describe('ExercisePage', () => {
-  beforeEach(() => mockedApi.mockReset())
+  beforeEach(() => { mockedApi.mockReset(); window.localStorage.clear() })
 
   it('renders objective questions and autosaves the selected answer', async () => {
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? activeSession : { ok: true })
@@ -246,6 +265,115 @@ describe('ExercisePage', () => {
     ))
     fireEvent.change(editor, { target: { value: '' } })
     expect(editor).toHaveValue('')
+  })
+
+  it('defaults to automatic syntax checking with formatting off and remembers both preferences', async () => {
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
+    renderPage()
+    expect(await screen.findByRole('checkbox', { name: '自动语法' })).toBeChecked()
+    const autoFormat = screen.getByRole('checkbox', { name: '自动格式化' })
+    expect(autoFormat).not.toBeChecked()
+    fireEvent.click(autoFormat)
+    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: true, autoFormat: true }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '自动语法' }))
+    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: false, autoFormat: true }))
+  })
+
+  it('stops pending syntax checks when automatic syntax is disabled', async () => {
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('checkbox', { name: '自动语法' }))
+    await new Promise((resolve) => window.setTimeout(resolve, 800))
+    expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/syntax-check')).toHaveLength(0)
+    expect(screen.queryByText(/自动检查语法|正在检查语法|未发现语法错误/)).not.toBeInTheDocument()
+  })
+
+  it('allows an immediate syntax check while automatic checking is disabled', async () => {
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/syntax-check') return {
+        valid: false,
+        diagnostics: [{ severity: 'error', code: 'SyntaxError', message: '此处缺少冒号（:）', python_message: "expected ':'", line: 1, column: 8, end_line: 1, end_column: 9 }],
+      }
+      return { ok: true }
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('checkbox', { name: '自动语法' }))
+    const editor = screen.getByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'if True' } })
+    fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      '/api/exercises/sessions/7/syntax-check',
+      expect.objectContaining({ body: JSON.stringify({ session_item_id: 72, code: 'if True' }) }),
+    ))
+    expect(await screen.findByText(/第 1 行，第 8 列：此处缺少冒号/)).toBeInTheDocument()
+    expect(editor).toHaveAttribute('data-diagnostic-count', '1')
+  })
+
+  it('formats code on demand and saves the formatted draft', async () => {
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/format-code') return { valid: true, formatted_code: 'print("ok")\n', changed: true, diagnostics: [] }
+      if (path === '/api/exercises/sessions/7/syntax-check') return { valid: true, diagnostics: [] }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'print(  "ok" )' } })
+    fireEvent.click(screen.getByRole('button', { name: '立即格式化代码' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      '/api/exercises/sessions/7/format-code',
+      expect.objectContaining({ body: JSON.stringify({ session_item_id: 72, code: 'print(  "ok" )' }) }),
+    ))
+    await waitFor(() => expect(editor).toHaveValue('print("ok")\n'))
+    expect(mockedApi).toHaveBeenCalledWith(
+      '/api/exercises/sessions/7/answers/72',
+      expect.objectContaining({ body: JSON.stringify({ selected_option_ids: [], bool_answer: null, blank_answers: [], code: 'print("ok")\n' }) }),
+    )
+  })
+
+  it('formats before running a public sample when automatic formatting is enabled', async () => {
+    window.localStorage.setItem('kidtype-python-editor-preferences-v1', JSON.stringify({ autoSyntax: true, autoFormat: true }))
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/format-code') return { valid: true, formatted_code: 'print(1)\n', changed: true, diagnostics: [] }
+      if (path === '/api/exercises/sessions/7/sample-runs') return { job_id: 'formatted-sample' }
+      if (path === '/api/exercises/sample-runs/formatted-sample') return { status: 'complete', cases: [] }
+      if (path === '/api/exercises/sessions/7/syntax-check') return { valid: true, diagnostics: [] }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'print( 1 )' } })
+    fireEvent.click(screen.getByRole('button', { name: '运行公开样例' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/sample-runs', expect.objectContaining({
+      body: JSON.stringify({ session_item_id: 72, code: 'print(1)\n' }),
+    })), { timeout: 2500 })
+    const paths = mockedApi.mock.calls.map(([path]) => path)
+    expect(paths.indexOf('/api/exercises/sessions/7/format-code')).toBeLessThan(paths.indexOf('/api/exercises/sessions/7/sample-runs'))
+  })
+
+  it('formats and saves when focus leaves the editor if automatic formatting is enabled', async () => {
+    window.localStorage.setItem('kidtype-python-editor-preferences-v1', JSON.stringify({ autoSyntax: true, autoFormat: true }))
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/format-code') return { valid: true, formatted_code: 'value = 1\n', changed: true, diagnostics: [] }
+      if (path === '/api/exercises/sessions/7/syntax-check') return { valid: true, diagnostics: [] }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'value=1' } })
+    fireEvent.blur(editor)
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/answers/72', expect.objectContaining({
+      body: JSON.stringify({ selected_option_ids: [], bool_answer: null, blank_answers: [], code: 'value = 1\n' }),
+    })))
   })
 
   it('debounces Python syntax checks and shows the latest diagnostic', async () => {

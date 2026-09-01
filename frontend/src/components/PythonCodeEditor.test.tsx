@@ -33,7 +33,7 @@ describe('PythonCodeEditor', () => {
     expect(editor).toHaveAttribute('contenteditable', 'true')
     expect(editor).toHaveTextContent('print(1)')
     fireEvent.blur(editor)
-    expect(onBlur).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onBlur).toHaveBeenCalledWith('print(1)'))
 
     view.rerender(<PythonCodeEditor value="if True" disabled diagnostics={[syntaxError]} onChange={onChange} onBlur={onBlur} />)
     await waitFor(() => expect(editor).toHaveTextContent('if True'))
@@ -94,6 +94,53 @@ describe('PythonCodeEditor', () => {
     expect(pythonEditorKeyBindings.find((binding) => binding.key === 'Enter')?.run).toBe(acceptCompletion)
   })
 
+  it('renders run and formatting controls in the tab bar without treating toolbar focus as editor blur', async () => {
+    const onBlur = vi.fn()
+    const onRun = vi.fn()
+    const onFormat = vi.fn()
+    const onSyntaxCheck = vi.fn()
+    const onAutoSyntaxChange = vi.fn()
+    const onAutoFormatChange = vi.fn()
+    const view = render(<PythonCodeEditor
+      value="print(1)"
+      disabled={false}
+      diagnostics={[]}
+      onChange={vi.fn()}
+      onBlur={onBlur}
+      onRun={onRun}
+      onFormat={onFormat}
+      onSyntaxCheck={onSyntaxCheck}
+      autoSyntaxEnabled
+      onAutoSyntaxChange={onAutoSyntaxChange}
+      autoFormatEnabled={false}
+      onAutoFormatChange={onAutoFormatChange}
+    />)
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    const run = screen.getByRole('button', { name: '运行公开样例' })
+    expect(run.closest('.python-ide-tabbar')).not.toBeNull()
+    expect(screen.getByRole('checkbox', { name: '自动语法' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '自动格式化' })).not.toBeChecked()
+    fireEvent.blur(editor, { relatedTarget: run })
+    fireEvent.focus(run)
+    fireEvent.click(run)
+    expect(onRun).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+    expect(onBlur).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('checkbox', { name: '自动语法' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '自动格式化' }))
+    expect(onAutoSyntaxChange).toHaveBeenCalledWith(false)
+    expect(onAutoFormatChange).toHaveBeenCalledWith(true)
+    fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))
+    expect(onSyntaxCheck).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: '立即格式化代码' }))
+    expect(onFormat).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(editor, { key: 'f', code: 'KeyF', shiftKey: true, altKey: true })
+    expect(onFormat).toHaveBeenCalledTimes(2)
+
+    view.rerender(<PythonCodeEditor value="print(1)" disabled diagnostics={[]} onChange={vi.fn()} onBlur={onBlur} />)
+    expect(screen.queryByLabelText('代码编辑工具栏')).not.toBeInTheDocument()
+  })
+
   it('maps Pyright member completions and resolves documentation lazily', async () => {
     const availability = vi.fn()
     const request = vi.fn()
@@ -128,6 +175,7 @@ describe('PythonCodeEditor', () => {
     })
     const info = typeof append?.info === 'function' ? await append.info(append) : null
     expect(info).toBeInstanceOf(HTMLElement)
+    expect(info).toHaveClass('localized')
     expect((info as HTMLElement).textContent).toContain('在列表末尾添加一个元素')
     expect((info as HTMLElement).querySelector('details')).not.toHaveAttribute('open')
     expect((info as HTMLElement).textContent).toContain('查看详细类型')
@@ -223,6 +271,7 @@ describe('PythonCodeEditor', () => {
   it('labels untranslated documentation as Pyright original text', () => {
     const node = semanticDocumentationNode('custom(value: int)', '*Custom* documentation.', 'markdown')
     expect(node).toHaveTextContent('Pyright 原文')
+    expect(node).toHaveClass('original')
     expect(node.querySelector('em')).toHaveTextContent('Custom')
   })
 

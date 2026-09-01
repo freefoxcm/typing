@@ -4,6 +4,7 @@ import random
 from datetime import datetime
 from typing import Any
 
+import black
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_library import loads_json, question_set_dict, question_snapshot
-from ..exercise_schemas import AnswerWrite, PythonCompletionCreate, PythonCompletionResolve, SampleRunCreate, SessionCreate, SyntaxCheckCreate
+from ..exercise_schemas import AnswerWrite, PythonCompletionCreate, PythonCompletionResolve, PythonFormatCreate, SampleRunCreate, SessionCreate, SyntaxCheckCreate
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -50,6 +51,30 @@ def _syntax_error_message(message: str) -> str:
     if "cannot assign to" in lowered:
         return "等号左侧不是可以赋值的目标"
     return "这里的 Python 语法不正确"
+
+
+def _syntax_diagnostics(code: str) -> list[dict[str, Any]]:
+    try:
+        compile(code, "<student-answer>", "exec", flags=ast.PyCF_ONLY_AST, dont_inherit=True)
+    except SyntaxError as exc:
+        line = max(1, int(exc.lineno or 1))
+        column = max(1, int(exc.offset or 1))
+        end_line = max(line, int(exc.end_lineno or line))
+        end_column = max(column + 1, int(exc.end_offset or column + 1))
+        error_type = type(exc).__name__
+        if error_type not in {"SyntaxError", "IndentationError", "TabError"}:
+            error_type = "SyntaxError"
+        return [{
+            "severity": "error",
+            "code": error_type,
+            "message": _syntax_error_message(exc.msg),
+            "python_message": exc.msg,
+            "line": line,
+            "column": column,
+            "end_line": end_line,
+            "end_column": end_column,
+        }]
+    return []
 
 
 def _published_sets_query():
@@ -350,30 +375,54 @@ def syntax_check(session_id: int, payload: SyntaxCheckCreate, principal: Princip
     snapshot = loads_json(item.snapshot_json, {}) if item else {}
     if not item or snapshot.get("type") != "programming" or not snapshot.get("programming"):
         raise HTTPException(status_code=404, detail="编程题不存在")
-    try:
-        compile(payload.code, "<student-answer>", "exec", flags=ast.PyCF_ONLY_AST, dont_inherit=True)
-    except SyntaxError as exc:
-        line = max(1, int(exc.lineno or 1))
-        column = max(1, int(exc.offset or 1))
-        end_line = max(line, int(exc.end_lineno or line))
-        end_column = max(column + 1, int(exc.end_offset or column + 1))
-        error_type = type(exc).__name__
-        if error_type not in {"SyntaxError", "IndentationError", "TabError"}:
-            error_type = "SyntaxError"
+    diagnostics = _syntax_diagnostics(payload.code)
+    return {"valid": not diagnostics, "diagnostics": diagnostics}
+
+
+@router.post("/sessions/{session_id}/format-code")
+def format_code(session_id: int, payload: PythonFormatCreate, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="已提交或已放弃的练习不能格式化代码")
+    item = next((candidate for candidate in session.items if candidate.id == payload.session_item_id), None)
+    snapshot = loads_json(item.snapshot_json, {}) if item else {}
+    if not item or snapshot.get("type") != "programming" or not snapshot.get("programming"):
+        raise HTTPException(status_code=404, detail="编程题不存在")
+    diagnostics = _syntax_diagnostics(payload.code)
+    if diagnostics:
         return {
             "valid": False,
+            "formatted_code": payload.code,
+            "changed": False,
+            "diagnostics": diagnostics,
+        }
+    try:
+        formatted = black.format_str(
+            payload.code,
+            mode=black.Mode(line_length=88, target_versions={black.TargetVersion.PY313}),
+        ) if payload.code else ""
+    except black.InvalidInput as exc:
+        return {
+            "valid": False,
+            "formatted_code": payload.code,
+            "changed": False,
             "diagnostics": [{
                 "severity": "error",
-                "code": error_type,
-                "message": _syntax_error_message(exc.msg),
-                "python_message": exc.msg,
-                "line": line,
-                "column": column,
-                "end_line": end_line,
-                "end_column": end_column,
+                "code": "FormatError",
+                "message": "暂时无法格式化这段代码",
+                "python_message": str(exc),
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 2,
             }],
         }
-    return {"valid": True, "diagnostics": []}
+    return {
+        "valid": True,
+        "formatted_code": formatted,
+        "changed": formatted != payload.code,
+        "diagnostics": [],
+    }
 
 
 def _require_programming_item(session: ExerciseSession, session_item_id: int) -> ExerciseSessionItem:
