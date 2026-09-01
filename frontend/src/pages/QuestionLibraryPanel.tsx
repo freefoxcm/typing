@@ -7,6 +7,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from '@dnd-kit/utilities'
 import { Archive, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleStop, Code2, Copy, Eye, FileUp, GripVertical, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Play, Plus, RefreshCcw, Trash2, X } from 'lucide-react'
 import { api, jsonBody } from '../api'
+import type { AdminNotifier } from '../components/AdminToast'
 import type { ExerciseQuestion, ExerciseQuestionType, ProgrammingCase, QuestionBlank, QuestionOption, QuestionSetSummary } from '../types'
 
 type InvalidImportQuestion = { index: number; source_page: number; number?: string; errors: string[]; repair_attempted: boolean }
@@ -25,6 +26,7 @@ type RecognitionJob = { id: number; scope: 'set' | 'question'; status: JobStatus
 const labels: Record<ExerciseQuestionType, string> = {
   single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', programming: '编程题',
 }
+const ignoreNotification: AdminNotifier = () => {}
 
 const blankQuestion = (sortOrder = 0): EditableQuestion => ({
   type: 'single_choice', stem_markdown: '', explanation_markdown: '', points: 2, sort_order: sortOrder,
@@ -178,12 +180,11 @@ function QuestionSetActionsMenu({ item, recognitionJob, onUploadPdf, onRecognize
   </div>
 }
 
-export function QuestionLibraryPanel() {
+export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?: AdminNotifier }) {
   const [sets, setSets] = useState<QuestionSetSummary[]>([])
   const [jobs, setJobs] = useState<ImportJob[]>([])
   const [llm, setLlm] = useState<LlmStatus | null>(null)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -225,7 +226,7 @@ export function QuestionLibraryPanel() {
     })
   }, [])
 
-  useEffect(() => { void reload().catch((e) => setError(e.message)) }, [reload])
+  useEffect(() => { void reload().then(() => setLoadError('')).catch((e) => setLoadError(e.message)) }, [reload])
   const activeJobs = useMemo(() => jobs.some((job) => activeJobStatuses.includes(job.status)) || recognitionJobs.some((job) => activeJobStatuses.includes(job.status)), [jobs, recognitionJobs])
   useEffect(() => {
     if (!activeJobs) return
@@ -237,12 +238,11 @@ export function QuestionLibraryPanel() {
     const summary = recognitionJobs.find((item) => item.id === recognitionPreviewId)
     if (!summary) return
     if (recognitionDetail?.id === summary.id && recognitionDetail.status === summary.status && (summary.status !== 'ready' || recognitionDetail.result)) return
-    void api<RecognitionJob>(`/api/admin/question-recognition-jobs/${summary.id}`).then(setRecognitionDetail).catch((e) => setError(e instanceof Error ? e.message : '读取重新识别结果失败'))
-  }, [recognitionDetail?.id, recognitionDetail?.result, recognitionDetail?.status, recognitionJobs, recognitionPreviewId])
+    void api<RecognitionJob>(`/api/admin/question-recognition-jobs/${summary.id}`).then(setRecognitionDetail).catch((e) => notify('error', e instanceof Error ? e.message : '读取重新识别结果失败'))
+  }, [notify, recognitionDetail?.id, recognitionDetail?.result, recognitionDetail?.status, recognitionJobs, recognitionPreviewId])
 
   const action = async (work: () => Promise<unknown>, success: string) => {
-    setError(''); setMessage('')
-    try { await work(); await reload(); setMessage(success); return true } catch (e) { setError(e instanceof Error ? e.message : '操作失败'); return false }
+    try { await work(); await reload(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
   }
 
   const createSet = (event: React.FormEvent) => {
@@ -254,12 +254,12 @@ export function QuestionLibraryPanel() {
 
   const uploadPdf = async (file?: File) => {
     if (!file) return
-    setUploading(true); setError(''); setMessage('')
+    setUploading(true)
     try {
       const body = new FormData(); body.append('file', file)
       await api('/api/admin/question-imports', { method: 'POST', body })
-      await reload(); setMessage('PDF 已进入识别队列')
-    } catch (e) { setError(e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
+      await reload(); notify('success', 'PDF 已进入识别队列')
+    } catch (e) { notify('error', e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
   }
 
   const uploadSetSourcePdf = async (set: QuestionSetSummary, file?: File) => {
@@ -302,7 +302,6 @@ export function QuestionLibraryPanel() {
   const saveQuestion = async (question: EditableQuestion, review = false, advance = false) => {
     if (!editor) return
     const path = question.id ? `/api/admin/questions/${question.id}` : `/api/admin/question-sets/${editor.setId}/questions`
-    setError(''); setMessage('')
     try {
       let saved = await api<ExerciseQuestion>(path, { method: question.id ? 'PUT' : 'POST', ...jsonBody(question) })
       if (review) saved = await api<ExerciseQuestion>(`/api/admin/questions/${saved.id}/review`, { method: 'PATCH', ...jsonBody({ reviewed: true }) })
@@ -318,8 +317,8 @@ export function QuestionLibraryPanel() {
       } else {
         setEditor(null)
       }
-      setMessage(review ? (next ? '已复核，已进入当前题套的下一题' : '当前过滤队列已复核完成') : (question.id ? '题目草稿已保存' : '题目已添加'))
-    } catch (e) { setError(e instanceof Error ? e.message : '题目保存失败') }
+      notify('success', review ? (next ? '已复核，已进入当前题套的下一题' : '当前过滤队列已复核完成') : (question.id ? '题目草稿已保存' : '题目已添加'))
+    } catch (e) { notify('error', e instanceof Error ? e.message : '题目保存失败') }
   }
 
   const navigateEditor = (offset: number) => {
@@ -335,7 +334,7 @@ export function QuestionLibraryPanel() {
     const body = new FormData(); body.append('file', file)
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/source-image`, { method: 'PUT', body })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); setMessage('原题图片已替换，题目已恢复为待复核')
+    await reload(); notify('success', '原题图片已替换，题目已恢复为待复核')
     return updated
   }
 
@@ -343,26 +342,26 @@ export function QuestionLibraryPanel() {
     const body = new FormData(); body.append('file', file)
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/stem-image`, { method: 'PUT', body })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); setMessage('题干配图已更新，题目已恢复为待复核')
+    await reload(); notify('success', '题干配图已更新，题目已恢复为待复核')
     return updated
   }
 
   const removeStemImage = async (questionId: number) => {
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/stem-image`, { method: 'DELETE' })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); setMessage('题干配图已移除，题目已恢复为待复核')
+    await reload(); notify('success', '题干配图已移除，题目已恢复为待复核')
     return updated
   }
 
   const startRecognition = async (path: string) => {
-    setError(''); setMessage('正在创建重新识别任务…')
+    notify('info', '正在创建重新识别任务…')
     try {
       const job = await api<RecognitionJob>(path, { method: 'POST' })
       setRecognitionPreviewId(job.id)
       setRecognitionDetail(job)
       await reload()
-      setMessage(job.scope === 'set' ? '整套题目已进入重新识别队列' : '当前题目已进入重新识别队列')
-    } catch (e) { setError(e instanceof Error ? e.message : '创建重新识别任务失败') }
+      notify('success', job.scope === 'set' ? '整套题目已进入重新识别队列' : '当前题目已进入重新识别队列')
+    } catch (e) { notify('error', e instanceof Error ? e.message : '创建重新识别任务失败') }
   }
 
   const retryRecognition = async (jobId: number) => {
@@ -382,11 +381,11 @@ export function QuestionLibraryPanel() {
   const openRecognitionPreview = async (jobId: number) => {
     setRecognitionPreviewId(jobId)
     try { setRecognitionDetail(await api<RecognitionJob>(`/api/admin/question-recognition-jobs/${jobId}`)) }
-    catch (e) { setError(e instanceof Error ? e.message : '读取重新识别结果失败') }
+    catch (e) { notify('error', e instanceof Error ? e.message : '读取重新识别结果失败') }
   }
 
   const generateOutputs = async (questionId: number) => {
-    setError(''); setMessage('正在提交参考程序…')
+    notify('info', '正在提交参考程序…')
     try {
       const queued = await api<{ job_id: string }>(`/api/admin/questions/${questionId}/reference-output`, { method: 'POST' })
       for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -395,13 +394,13 @@ export function QuestionLibraryPanel() {
         if (status.status !== 'queued') {
           setReferencePreview(status)
           const failed = status.cases.filter((item) => item.status !== 'AC' || !item.stable).length
-          if (failed) setError(`${failed} 个测试点运行失败或两次输出不一致，不能应用这些输出`)
-          else setMessage('候选输出已生成，请预览差异后确认')
+          if (failed) notify('error', `${failed} 个测试点运行失败或两次输出不一致，不能应用这些输出`)
+          else notify('success', '候选输出已生成，请预览差异后确认')
           return
         }
       }
-      setMessage('生成仍在进行，可稍后刷新查看')
-    } catch (e) { setError(e instanceof Error ? e.message : '生成失败') }
+      notify('info', '生成仍在进行，可稍后刷新查看')
+    } catch (e) { notify('error', e instanceof Error ? e.message : '生成失败') }
   }
 
   const applyReferenceOutputs = async () => {
@@ -418,12 +417,12 @@ export function QuestionLibraryPanel() {
     const previous = sets
     const next = reorderQuestionSetList(previous, Number(active.id), Number(over.id))
     if (next === previous) return
-    setSets(next); setReorderingSets(true); setError(''); setMessage('')
+    setSets(next); setReorderingSets(true)
     try {
       await saveQuestionSetOrder(next)
-      setMessage('题套顺序已保存')
+      notify('success', '题套顺序已保存')
     } catch (e) {
-      setSets(previous); setError(e instanceof Error ? e.message : '题套顺序保存失败')
+      setSets(previous); notify('error', e instanceof Error ? e.message : '题套顺序保存失败')
       try { await reload() } catch { /* 保留原始错误 */ }
     } finally { setReorderingSets(false) }
   }
@@ -436,12 +435,12 @@ export function QuestionLibraryPanel() {
     const nextQuestions = reorderQuestionList(currentSet.questions, Number(active.id), Number(over.id))
     if (nextQuestions === currentSet.questions) return
     const next = previous.map((item) => item.id === setId ? { ...item, questions: nextQuestions } : item)
-    setSets(next); setReorderingQuestionSetId(setId); setError(''); setMessage('')
+    setSets(next); setReorderingQuestionSetId(setId)
     try {
       await saveQuestionOrder(setId, nextQuestions)
-      setMessage('题目顺序已保存')
+      notify('success', '题目顺序已保存')
     } catch (e) {
-      setSets(previous); setError(e instanceof Error ? e.message : '题目顺序保存失败')
+      setSets(previous); notify('error', e instanceof Error ? e.message : '题目顺序保存失败')
       try { await reload() } catch { /* 保留原始错误 */ }
     } finally { setReorderingQuestionSetId(null) }
   }
@@ -457,7 +456,7 @@ export function QuestionLibraryPanel() {
 
   return <>
     <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div></header>
-    {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
+    {loadError && <p className="notice error" role="alert">{loadError}</p>}
     <section className={`card pdf-import-card library-disclosure-card${importPanelOpen ? ' expanded' : ' collapsed'}`}>
       <header className="pdf-import-heading"><button type="button" className="course-disclosure pdf-import-disclosure" aria-expanded={importPanelOpen} aria-label={`${importPanelOpen ? '收起' : '展开'} PDF 智能识别`} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown className="disclosure-chevron" /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页 · 思考级别：${llm.reasoning_effort || '模型默认'}` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
       {importPanelOpen && <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>}
@@ -474,7 +473,7 @@ export function QuestionLibraryPanel() {
             {!!job.invalid_count && <section className="import-invalid-panel"><h4>已导入但需人工补全（{job.invalid_count}）</h4><p>这些题目已保留在草稿中，补齐答案或结构后才能复核发布。</p><ol>{job.invalid_questions?.map((item) => <li key={`${item.index}-${item.source_page}`}><strong>第 {item.source_page} 页{item.number ? ` · 题号 ${item.number}` : ` · 第 ${item.index} 个候选`}</strong><span>{item.errors.join('；')}{item.repair_attempted ? '（已尝试高清修复）' : ''}</span></li>)}</ol></section>}
             {!!job.warnings?.length && <section className="import-warning-panel"><h4>需要核对（{job.warnings.length}）</h4><ol>{job.warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ol></section>}
             {job.status === 'cancelled' && <p className="notice warning">{job.error || '管理员手动终止'}</p>}
-            {job.error && job.status !== 'cancelled' && <section className="import-error-panel"><div><h4>错误详情</h4><button type="button" className="ghost" onClick={() => void navigator.clipboard?.writeText(job.error || '').then(() => setMessage('错误信息已复制')).catch(() => setError('无法复制错误信息'))}><Copy />复制错误</button></div><pre>{job.error}</pre></section>}
+            {job.error && job.status !== 'cancelled' && <section className="import-error-panel"><div><h4>错误详情</h4><button type="button" className="ghost" onClick={() => void navigator.clipboard?.writeText(job.error || '').then(() => notify('success', '错误信息已复制')).catch(() => notify('error', '无法复制错误信息'))}><Copy />复制错误</button></div><pre>{job.error}</pre></section>}
           </div>}
         </article>
       })}{jobs.length > 10 && <button type="button" className="ghost import-show-all" onClick={() => setShowAllJobs((current) => !current)}>{showAllJobs ? '收起历史任务' : `显示全部 ${jobs.length} 项`}</button>}</div>}

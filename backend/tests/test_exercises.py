@@ -800,6 +800,79 @@ def test_python_syntax_check_enforces_session_ownership_status_and_question_type
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 409
 
 
+def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path):
+    class FakePyright:
+        def __init__(self):
+            self.complete_calls = []
+            self.resolve_calls = []
+
+        async def complete(self, **kwargs):
+            self.complete_calls.append(kwargs)
+            return {"available": True, "items": [{
+                "id": "completion-token", "label": "append", "type": "method", "detail": "append(object: T)",
+                "documentation": "", "insert_text": "append", "insert_text_format": 1,
+                "filter_text": "append", "sort_text": "append", "replace": None,
+            }]}
+
+        async def resolve(self, **kwargs):
+            self.resolve_calls.append(kwargs)
+            return {"available": True, "detail": "append(object: T)", "documentation": "在列表末尾添加一个元素。"}
+
+        async def close(self):
+            return None
+
+    with make_client(tmp_path) as client:
+        admin_login(client); create_child(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "补全练习", "description": ""}).json()
+        question = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "编写程序。", "explanation_markdown": "", "points": 10,
+            "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [],
+            "programming": {
+                "input_markdown": "无", "output_markdown": "无", "constraints_markdown": "", "starter_code": "", "reference_solution": "print(1)",
+                "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [
+                    {"input_data": "", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": False, "note": ""},
+                    {"input_data": "", "expected_output": "1\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""},
+                ],
+            },
+        })
+        assert question.status_code == 201
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [question_set["id"]], "counts": {}}).json()
+        item_id = session["items"][0]["id"]
+        fake = FakePyright()
+        client.app.state.pyright_service = fake
+        path = f"/api/exercises/sessions/{session['id']}/python-completions"
+
+        completion = client.post(path, json={
+            "session_item_id": item_id,
+            "code": "vals = []\nvals.",
+            "position": {"line": 1, "character": 5},
+            "trigger_character": ".",
+        })
+        assert completion.status_code == 200
+        assert completion.json()["items"][0]["label"] == "append"
+        assert fake.complete_calls[0]["child_id"] > 0
+        assert fake.complete_calls[0]["session_item_id"] == item_id
+        assert fake.complete_calls[0]["trigger_character"] == "."
+
+        resolved = client.post(f"{path}/resolve", json={"session_item_id": item_id, "completion_id": "completion-token"})
+        assert resolved.status_code == 200
+        assert "列表末尾" in resolved.json()["documentation"]
+        assert fake.resolve_calls[0]["session_id"] == session["id"]
+
+        assert client.post(path, json={
+            "session_item_id": item_id, "code": "x" * 100001,
+            "position": {"line": 0, "character": 1}, "trigger_character": None,
+        }).status_code == 422
+        client.post("/api/auth/logout")
+        assert client.post(path, json={
+            "session_item_id": item_id, "code": "vals.",
+            "position": {"line": 0, "character": 5}, "trigger_character": ".",
+        }).status_code == 401
+
+
 def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
     with make_client(tmp_path) as client:
         admin_login(client); create_child(client)

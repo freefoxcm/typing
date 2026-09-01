@@ -16,8 +16,10 @@ import { ChevronDown, GripVertical, Pencil, Plus, Power, RefreshCcw, Trash2 } fr
 import { api, jsonBody } from '../api'
 import type { LlmStatus, WordEntry, WordSetSummary } from '../types'
 import { AdminItemActionsMenu } from '../components/AdminItemActionsMenu'
+import type { AdminNotifier } from '../components/AdminToast'
 
 const statusLabels: Record<string, string> = { ready: '就绪', pending: '等待', processing: '生成中', failed: '失败' }
+const ignoreNotification: AdminNotifier = () => {}
 
 type EnrichmentCounts = {
   ready: number
@@ -121,11 +123,10 @@ function SortableWordSetCard({ item, expanded, disabled, children }: { item: Wor
   </article>
 }
 
-export function WordLibraryPanel() {
+export function WordLibraryPanel({ notify = ignoreNotification }: { notify?: AdminNotifier }) {
   const [sets, setSets] = useState<WordSetSummary[]>([])
   const [llm, setLlm] = useState<LlmStatus | null>(null)
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set())
-  const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -155,8 +156,8 @@ export function WordLibraryPanel() {
   }
 
   const action = async (work: () => Promise<unknown>, success: string) => {
-    setError(''); setMessage('')
-    try { await work(); await load(); setMessage(success); return true } catch (e) { setError(e instanceof Error ? e.message : '操作失败'); return false }
+    setError('')
+    try { await work(); await load(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
   }
   const createSet = (event: React.FormEvent) => {
     event.preventDefault()
@@ -184,7 +185,7 @@ export function WordLibraryPanel() {
   const submitWordForm = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!wordForm || wordFormSubmitting) return
-    setWordFormSubmitting(true); setWordFormError(''); setError(''); setMessage('')
+    setWordFormSubmitting(true); setWordFormError(''); setError('')
     const payload = {
       word_set_id: wordForm.wordSetId, spelling: wordForm.spelling, phonetic: wordForm.phonetic,
       meaning_zh: wordForm.meaning, technical_meaning_zh: wordForm.technicalMeaning, active: wordForm.active,
@@ -194,7 +195,7 @@ export function WordLibraryPanel() {
         method: wordForm.mode === 'create' ? 'POST' : 'PUT', ...jsonBody(payload),
       })
       setExpanded((current) => new Set(current).add(wordForm.wordSetId))
-      setMessage(wordForm.mode === 'create' ? '单词已添加' : '单词已更新')
+      notify('success', wordForm.mode === 'create' ? '单词已添加' : '单词已更新')
       finishWordForm()
       void load().catch((e) => setError(e instanceof Error ? e.message : '刷新失败'))
     } catch (e) {
@@ -218,7 +219,7 @@ export function WordLibraryPanel() {
   }
 
   return <>
-    {message && <p className="notice success">{message}</p>}{error && <p className="notice error">{error}</p>}
+    {error && <p className="notice error" role="alert">{error}</p>}
     <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div></header>
     <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><div className="llm-status-copy"><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url} · 思考级别：${llm.reasoning_effort || '模型默认'}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div><button className="ghost" onClick={() => void refreshStatus()} disabled={refreshing} aria-busy={refreshing}><RefreshCcw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在刷新…' : '刷新补全状态'}</button></div>
     <form className="inline-form card" onSubmit={createSet}><label>单词集名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建单词集</button></form>

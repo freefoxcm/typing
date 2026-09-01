@@ -14,12 +14,14 @@ from .routers import admin, admin_exercises, admin_words, auth, exercises, libra
 from .seed import bootstrap
 from .question_imports import question_import_worker
 from .question_recognition import question_recognition_worker
+from .pyright_service import PyrightLanguageService
 from .word_enrichment import enrichment_worker
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     engine, session_factory = create_db(settings.database_url)
+    pyright_service = PyrightLanguageService(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -27,6 +29,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             Base.metadata.create_all(engine)
         with session_factory() as db:
             bootstrap(db, settings)
+        await pyright_service.start()
         workers = [
             asyncio.create_task(enrichment_worker(session_factory, settings)),
             asyncio.create_task(question_import_worker(session_factory, settings)),
@@ -35,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await pyright_service.close()
             for worker in workers:
                 worker.cancel()
             for worker in workers:
@@ -45,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.pyright_service = pyright_service
     app.dependency_overrides[get_settings] = lambda: settings
     if settings.hosts and settings.hosts != ["*"]:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.hosts)

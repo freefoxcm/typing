@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  acceptCompletion,
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
   completionKeymap,
+  snippet,
   snippetCompletion,
   type Completion,
   type CompletionContext,
   type CompletionResult,
 } from '@codemirror/autocomplete'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from '@codemirror/commands'
+import { bracketMatching, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language'
 import { python } from '@codemirror/lang-python'
 import { lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { tags } from '@lezer/highlight'
 import {
   drawSelection,
@@ -24,8 +26,10 @@ import {
   hoverTooltip,
   keymap,
   lineNumbers,
+  type KeyBinding,
   type Tooltip,
 } from '@codemirror/view'
+import { api, jsonBody } from '../api'
 
 export type PythonSyntaxDiagnostic = {
   severity: 'error'
@@ -39,6 +43,24 @@ export type PythonSyntaxDiagnostic = {
 }
 
 type PythonDocumentation = { signature: string; description: string; parameters?: string }
+
+type PyrightCompletionItem = {
+  id: string
+  label: string
+  type: string
+  detail: string
+  documentation: string
+  insert_text: string
+  insert_text_format: number
+  filter_text: string
+  sort_text: string
+  replace?: { start: { line: number; character: number }; end: { line: number; character: number } } | null
+}
+
+type PyrightCompletionResponse = { available: boolean; items: PyrightCompletionItem[] }
+type PyrightResolveResponse = { available: boolean; detail: string; documentation: string }
+type CompletionAvailability = 'ready' | 'checking' | 'unavailable'
+type ApiRequester = <T>(path: string, init?: RequestInit) => Promise<T>
 
 const builtinDocumentation: Record<string, PythonDocumentation> = {
   abs: { signature: 'abs(x)', description: '返回数字的绝对值。', parameters: 'x：整数、浮点数或实现了绝对值运算的对象。' },
@@ -128,6 +150,111 @@ export function pythonCompletionSource(context: CompletionContext): CompletionRe
   return { from: word.from, options: [...snippets, ...keywordCompletions, ...builtinCompletions], validFor: /^[A-Za-z_]\w*$/ }
 }
 
+function semanticDocumentationNode(detail: string, documentation: string): HTMLElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'python-documentation semantic'
+  if (detail) {
+    const signature = document.createElement('code')
+    signature.textContent = detail
+    wrapper.append(signature)
+  }
+  const description = document.createElement('p')
+  description.textContent = documentation || 'Pyright 未提供更多说明。'
+  wrapper.append(description)
+  return wrapper
+}
+
+function documentPosition(state: EditorState, position: { line: number; character: number }): number | null {
+  if (position.line < 0 || position.line >= state.doc.lines) return null
+  const line = state.doc.line(position.line + 1)
+  return line.from + Math.max(0, Math.min(line.length, position.character))
+}
+
+export function createPyrightCompletionSource({
+  sessionId,
+  sessionItemId,
+  onAvailability,
+  request = api as ApiRequester,
+}: {
+  sessionId: () => number | undefined
+  sessionItemId: () => number | undefined
+  onAvailability: (state: CompletionAvailability) => void
+  request?: ApiRequester
+}) {
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const currentSessionId = sessionId()
+    const currentItemId = sessionItemId()
+    if (!currentSessionId || !currentItemId) return null
+    const word = context.matchBefore(/[A-Za-z_]\w*/)
+    const previousCharacter = context.pos > 0 ? context.state.sliceDoc(context.pos - 1, context.pos) : ''
+    const triggerCharacter = previousCharacter === '.' ? '.' : undefined
+    if (!context.explicit && !triggerCharacter && (!word || word.from === word.to)) return null
+
+    const abortController = new AbortController()
+    context.addEventListener('abort', () => abortController.abort())
+    if (!context.explicit && !triggerCharacter) {
+      await new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, 120)
+        context.addEventListener('abort', () => { window.clearTimeout(timer); resolve() })
+      })
+    }
+    if (context.aborted) return null
+
+    const line = context.state.doc.lineAt(context.pos)
+    onAvailability('checking')
+    try {
+      const response = await request<PyrightCompletionResponse>(`/api/exercises/sessions/${currentSessionId}/python-completions`, {
+        method: 'POST',
+        signal: abortController.signal,
+        ...jsonBody({
+          session_item_id: currentItemId,
+          code: context.state.doc.toString(),
+          position: { line: line.number - 1, character: context.pos - line.from },
+          trigger_character: triggerCharacter,
+        }),
+      })
+      if (context.aborted) return null
+      onAvailability(response.available ? 'ready' : 'unavailable')
+      if (!response.available || !response.items.length) return null
+      const replacementFrom = documentPosition(context.state, response.items[0].replace?.start ?? { line: line.number - 1, character: (word?.from ?? context.pos) - line.from })
+      const from = replacementFrom == null || replacementFrom > context.pos ? word?.from ?? context.pos : replacementFrom
+      const options: Completion[] = response.items.map((item) => {
+        const apply = item.insert_text_format === 2 ? snippet(item.insert_text) : item.insert_text
+        return {
+          label: item.label,
+          type: item.type,
+          detail: item.detail,
+          filterText: item.filter_text,
+          sortText: item.sort_text,
+          apply,
+          info: async () => {
+            if (item.documentation) return semanticDocumentationNode(item.detail, item.documentation)
+            try {
+              const resolved = await request<PyrightResolveResponse>(`/api/exercises/sessions/${currentSessionId}/python-completions/resolve`, {
+                method: 'POST',
+                ...jsonBody({ session_item_id: currentItemId, completion_id: item.id }),
+              })
+              return semanticDocumentationNode(resolved.detail || item.detail, resolved.documentation)
+            } catch {
+              return semanticDocumentationNode(item.detail, '')
+            }
+          },
+        }
+      })
+      return { from, options, validFor: /^[A-Za-z_]\w*$/ }
+    } catch (error) {
+      if (!abortController.signal.aborted) onAvailability('unavailable')
+      return null
+    }
+  }
+}
+
+export const pythonEditorKeyBindings: readonly KeyBinding[] = [
+  { key: 'Tab', run: indentMore, shift: indentLess },
+  { key: 'Enter', run: acceptCompletion },
+]
+export const pythonEditorKeymap = Prec.highest(keymap.of(pythonEditorKeyBindings))
+
 const editorTheme = EditorView.theme({
   '&': {
     minHeight: '360px',
@@ -186,7 +313,7 @@ export function pythonDocumentationTooltip(view: EditorView, pos: number): Toolt
   }
 }
 
-function documentPosition(state: EditorState, line: number, column: number): number {
+function diagnosticPosition(state: EditorState, line: number, column: number): number {
   const safeLine = Math.max(1, Math.min(state.doc.lines, line || 1))
   const lineInfo = state.doc.line(safeLine)
   return lineInfo.from + Math.max(0, Math.min(lineInfo.length, (column || 1) - 1))
@@ -200,8 +327,8 @@ export function pythonCursorPosition(state: EditorState) {
 
 function editorDiagnostics(state: EditorState, diagnostics: PythonSyntaxDiagnostic[]): Diagnostic[] {
   return diagnostics.map((item) => {
-    const from = documentPosition(state, item.line, item.column)
-    const to = Math.max(from, documentPosition(state, item.end_line, item.end_column))
+    const from = diagnosticPosition(state, item.line, item.column)
+    const to = Math.max(from, diagnosticPosition(state, item.end_line, item.end_column))
     return {
       from,
       to,
@@ -212,22 +339,29 @@ function editorDiagnostics(state: EditorState, diagnostics: PythonSyntaxDiagnost
   })
 }
 
-export function PythonCodeEditor({ value, disabled, diagnostics, onChange, onBlur }: {
+export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sessionItemId, onChange, onBlur }: {
   value: string
   disabled: boolean
   diagnostics: PythonSyntaxDiagnostic[]
+  sessionId?: number
+  sessionItemId?: number
   onChange: (value: string) => void
   onBlur: () => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 })
+  const [completionAvailability, setCompletionAvailability] = useState<CompletionAvailability>('ready')
   const syncingRef = useRef(false)
   const editableCompartmentRef = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
+  const sessionIdRef = useRef(sessionId)
+  const sessionItemIdRef = useRef(sessionItemId)
   onChangeRef.current = onChange
   onBlurRef.current = onBlur
+  sessionIdRef.current = sessionId
+  sessionItemIdRef.current = sessionItemId
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -245,11 +379,20 @@ export function PythonCodeEditor({ value, disabled, diagnostics, onChange, onBlu
         indentOnInput(),
         bracketMatching(),
         closeBrackets(),
-        autocompletion({ override: [pythonCompletionSource], activateOnTyping: true }),
+        autocompletion({ override: [
+          createPyrightCompletionSource({
+            sessionId: () => sessionIdRef.current,
+            sessionItemId: () => sessionItemIdRef.current,
+            onAvailability: setCompletionAvailability,
+          }),
+          pythonCompletionSource,
+        ], activateOnTyping: true }),
         hoverTooltip(pythonDocumentationTooltip, { hoverTime: 250, hideOnChange: true }),
         python(),
         syntaxHighlighting(softDarkHighlightStyle, { fallback: true }),
-        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+        indentUnit.of('    '),
+        pythonEditorKeymap,
+        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         editable.of([EditorView.editable.of(!disabled), EditorState.readOnly.of(disabled)]),
         EditorView.contentAttributes.of({ 'aria-label': 'Python 3.13 代码', spellcheck: 'false', autocapitalize: 'off' }),
         EditorView.updateListener.of((update) => {
@@ -292,6 +435,6 @@ export function PythonCodeEditor({ value, disabled, diagnostics, onChange, onBlu
   return <div className="python-ide-shell" data-theme="soft-dark">
     <header className="python-ide-tabbar"><div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div><span className="python-ide-runtime">Python 3.13</span></header>
     <div ref={hostRef} className="python-code-editor" />
-    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}<span>Python 3.13</span></footer>
+    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
   </div>
 }

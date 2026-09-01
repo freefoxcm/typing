@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   closestCenter,
   DndContext,
@@ -12,10 +12,11 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { BarChart3, BookOpen, ChevronDown, Download, FileQuestion, FileUp, GripVertical, Languages, PackageOpen, Pencil, Plus, RefreshCcw, Trash2, Users } from 'lucide-react'
+import { BarChart3, BookOpen, ChevronDown, Download, Eye, EyeOff, FileQuestion, FileUp, GripVertical, Languages, PackageOpen, Pencil, Plus, RefreshCcw, Trash2, Users, X } from 'lucide-react'
 import { api, downloadApi, jsonBody, saveDownload } from '../api'
 import type { Child, Course, Lesson, Prompt, QuestionBundleAction, QuestionBundleImportResult, QuestionBundlePreview, QuestionSetSummary, WordSetSummary } from '../types'
 import { AdminItemActionsMenu } from '../components/AdminItemActionsMenu'
+import { AdminToastViewport, type AdminNotifier, useAdminToasts } from '../components/AdminToast'
 import { AdminReportsPanel } from './AdminReportsPanel'
 import { WordLibraryPanel } from './WordLibraryPanel'
 import { QuestionLibraryPanel } from './QuestionLibraryPanel'
@@ -25,19 +26,22 @@ type TransferTab = 'typing' | 'words' | 'questions'
 type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
 export function AdminPage() {
+  const toast = useAdminToasts()
+  return <><AdminPageContent notify={toast.notify} /><AdminToastViewport notifications={toast.notifications} onDismiss={toast.dismiss} /></>
+}
+
+function AdminPageContent({ notify }: { notify: AdminNotifier }) {
   const [tab, setTab] = useState<Tab>('children')
   const [children, setChildren] = useState<Child[]>([])
   const [courses, setCourses] = useState<Course[]>([])
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
 
   const loadChildren = useCallback(() => api<Child[]>('/api/admin/children').then(setChildren), [])
   const loadLibrary = useCallback(() => api<Course[]>('/api/admin/library').then(setCourses), [])
-  useEffect(() => { Promise.all([loadChildren(), loadLibrary()]).catch((e) => setError(e.message)) }, [loadChildren, loadLibrary])
+  useEffect(() => { Promise.all([loadChildren(), loadLibrary()]).catch((e) => setLoadError(e.message)) }, [loadChildren, loadLibrary])
 
   const action = async (work: () => Promise<unknown>, success: string, reload: () => Promise<unknown> = async () => {}) => {
-    setError(''); setMessage('')
-    try { await work(); await reload(); setMessage(success); return true } catch (e) { setError(e instanceof Error ? e.message : '操作失败'); return false }
+    try { await work(); await reload(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
   }
 
   return (
@@ -54,14 +58,13 @@ export function AdminPage() {
         </nav>
       </aside>
       <section className="admin-content">
-        {message && <p className="notice success">{message}</p>}
-        {error && <p className="notice error">{error}</p>}
+        {loadError && <p className="notice error" role="alert">{loadError}</p>}
         {tab === 'children' && <ChildrenPanel children={children} action={action} reload={loadChildren} />}
         {tab === 'library' && <LibraryPanel courses={courses} action={action} reload={loadLibrary} />}
-        {tab === 'words' && <WordLibraryPanel />}
-        {tab === 'questions' && <QuestionLibraryPanel />}
+        {tab === 'words' && <WordLibraryPanel notify={notify} />}
+        {tab === 'questions' && <QuestionLibraryPanel notify={notify} />}
         {tab === 'import' && <ImportPanel courses={courses} reload={loadLibrary} action={action} />}
-        {tab === 'reports' && <AdminReportsPanel children={children} />}
+        {tab === 'reports' && <AdminReportsPanel children={children} notify={notify} />}
       </section>
     </div>
   )
@@ -69,11 +72,62 @@ export function AdminPage() {
 
 function ChildrenPanel({ children, action, reload }: { children: Child[]; action: AdminAction; reload: () => Promise<unknown> }) {
   const [name, setName] = useState(''); const [pin, setPin] = useState('')
+  const [pinEditor, setPinEditor] = useState<Child | null>(null)
+  const [nextPin, setNextPin] = useState('')
+  const [pinVisible, setPinVisible] = useState(false)
+  const [pinSaving, setPinSaving] = useState(false)
+  const pinTriggerRef = useRef<HTMLButtonElement | null>(null)
   const submit = (e: React.FormEvent) => { e.preventDefault(); void action(() => api('/api/admin/children', { method: 'POST', ...jsonBody({ name, pin, active: true }) }), '学生档案已创建', reload); setName(''); setPin('') }
+  const closePinEditor = () => {
+    if (pinSaving) return
+    setPinEditor(null); setNextPin(''); setPinVisible(false)
+    window.setTimeout(() => pinTriggerRef.current?.focus(), 0)
+  }
+  const savePin = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!pinEditor || pinSaving || !/^\d{4,6}$/.test(nextPin)) return
+    setPinSaving(true)
+    const saved = await action(() => api(`/api/admin/children/${pinEditor.id}`, { method: 'PATCH', ...jsonBody({ pin: nextPin }) }), 'PIN 已修改', reload)
+    setPinSaving(false)
+    if (saved) {
+      setPinEditor(null); setNextPin(''); setPinVisible(false)
+      window.setTimeout(() => pinTriggerRef.current?.focus(), 0)
+    }
+  }
   return <><header className="section-title"><div><p className="eyebrow">学生档案</p><h2>谁在练习？</h2><p>每个学生都有独立的 PIN 和学习记录。</p></div></header>
     <form className="inline-form card" onSubmit={submit}><label>昵称<input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：小宇" required /></label><label>PIN<input value={pin} inputMode="numeric" pattern="\d{4,6}" onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="4–6 位数字" required /></label><button className="primary"><Plus />添加学生</button></form>
-    <div className="data-list">{children.map((child) => <article className="data-row" key={child.id}><div className="avatar">{child.name.slice(0, 1)}</div><div className="grow"><h3>{child.name}</h3><p>{child.attempts ?? 0} 条练习记录 · {child.active ? '可以登录' : '已停用'}</p></div><button className="ghost" onClick={() => { const next = window.prompt(`为 ${child.name} 设置新的 4–6 位 PIN`); if (next) void action(() => api(`/api/admin/children/${child.id}`, { method: 'PATCH', ...jsonBody({ pin: next }) }), 'PIN 已重置', reload) }}><RefreshCcw />重置 PIN</button><button className="ghost" onClick={() => void action(() => api(`/api/admin/children/${child.id}`, { method: 'PATCH', ...jsonBody({ active: !child.active }) }), child.active ? '档案已停用' : '档案已启用', reload)}>{child.active ? '停用' : '启用'}</button><button className="danger-button" onClick={() => window.confirm(`删除 ${child.name} 及全部成绩？此操作不可恢复。`) && void action(() => api(`/api/admin/children/${child.id}`, { method: 'DELETE' }), '档案已删除', reload)}><Trash2 /></button></article>)}</div>
+    <div className="data-list">{children.map((child) => <article className="data-row" key={child.id}><div className="avatar">{child.name.slice(0, 1)}</div><div className="grow"><h3>{child.name}</h3><p>{child.attempts ?? 0} 条练习记录 · {child.active ? '可以登录' : '已停用'}</p></div><button className="ghost" onClick={(event) => { pinTriggerRef.current = event.currentTarget; setNextPin(''); setPinVisible(false); setPinEditor(child) }}><RefreshCcw />修改 PIN</button><button className="ghost" onClick={() => void action(() => api(`/api/admin/children/${child.id}`, { method: 'PATCH', ...jsonBody({ active: !child.active }) }), child.active ? '档案已停用' : '档案已启用', reload)}>{child.active ? '停用' : '启用'}</button><button className="danger-button" onClick={() => window.confirm(`删除 ${child.name} 及全部成绩？此操作不可恢复。`) && void action(() => api(`/api/admin/children/${child.id}`, { method: 'DELETE' }), '档案已删除', reload)}><Trash2 /></button></article>)}</div>
+    {pinEditor && <PinEditorModal child={pinEditor} pin={nextPin} visible={pinVisible} saving={pinSaving} onPinChange={setNextPin} onToggleVisibility={() => setPinVisible((current) => !current)} onClose={closePinEditor} onSubmit={savePin} />}
   </>
+}
+
+function PinEditorModal({ child, pin, visible, saving, onPinChange, onToggleVisibility, onClose, onSubmit }: {
+  child: Child
+  pin: string
+  visible: boolean
+  saving: boolean
+  onPinChange: (value: string) => void
+  onToggleVisibility: () => void
+  onClose: () => void
+  onSubmit: (event: React.FormEvent) => void
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving) onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, saving])
+  const valid = /^\d{4,6}$/.test(pin)
+  return <div className="modal-backdrop pin-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="pin-editor-modal card" role="dialog" aria-modal="true" aria-labelledby="pin-editor-title" aria-describedby="pin-editor-description">
+      <header><div><p className="eyebrow">学生档案</p><h2 id="pin-editor-title">修改 {child.name} 的 PIN</h2></div><button type="button" className="ghost icon-button" aria-label="关闭 PIN 修改窗口" disabled={saving} onClick={onClose}><X /></button></header>
+      <form onSubmit={onSubmit}>
+        <p id="pin-editor-description" className="muted">设置新的 4–6 位数字 PIN。保存后，该学生当前登录会话将失效。</p>
+        <label>新 PIN<div className="input-icon"><input autoFocus type={visible ? 'text' : 'password'} value={pin} inputMode="numeric" autoComplete="new-password" pattern="\d{4,6}" maxLength={6} disabled={saving} aria-describedby="pin-editor-help" onChange={(event) => onPinChange(event.target.value.replace(/\D/g, '').slice(0, 6))} required /><button type="button" className="pin-visibility-toggle" aria-label={visible ? '隐藏 PIN' : '显示 PIN'} aria-pressed={visible} disabled={saving} onClick={onToggleVisibility}>{visible ? <EyeOff /> : <Eye />}</button></div></label>
+        <small id="pin-editor-help" className={pin.length > 0 && !valid ? 'pin-editor-help invalid' : 'pin-editor-help'}>{pin.length > 0 && !valid ? '请输入 4–6 位数字' : 'PIN 只能包含数字'}</small>
+        <div className="button-row"><button type="button" className="ghost" disabled={saving} onClick={onClose}>取消</button><button className="primary" disabled={saving || !valid}>{saving ? '正在保存…' : '保存新 PIN'}</button></div>
+      </form>
+    </section>
+  </div>
 }
 
 export function reorderCourseList(courses: Course[], activeId: number, overId: number) {

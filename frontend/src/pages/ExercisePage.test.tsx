@@ -177,6 +177,25 @@ describe('ExercisePage', () => {
     expect(incorrectButton).not.toHaveClass('active')
   })
 
+  it('separates multi-digit question numbers from final result icons', async () => {
+    const completed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
+    completed.status = 'completed'; completed.score = 12; completed.max_score = 24
+    completed.items = Array.from({ length: 12 }, (_, index) => ({
+      ...completed.items[0],
+      id: 100 + index,
+      sort_order: index,
+      question: { ...completed.items[0].question, id: 200 + index, sort_order: index, stem_markdown: `第 ${index + 1} 题` },
+      answer: { ...completed.items[0].answer, status: index % 2 ? 'incorrect' : 'correct', awarded_points: index % 2 ? 0 : 2 },
+    }))
+    mockedApi.mockResolvedValue(completed)
+    renderPage()
+
+    const twelfth = await screen.findByRole('button', { name: '第 12 题：回答错误' })
+    expect(twelfth.querySelector('.question-nav-number')).toHaveTextContent('12')
+    expect(twelfth.querySelector('.question-nav-result')).not.toBeNull()
+    expect(twelfth.querySelector('.question-nav-number')?.contains(twelfth.querySelector('svg'))).toBe(false)
+  })
+
   it('resumes at the first unanswered question', async () => {
     const resumed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
     resumed.items = [

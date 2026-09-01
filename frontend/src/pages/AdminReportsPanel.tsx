@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, BookOpen, Download, FileQuestion, Languages, Trash2, X } from 'lucide-react'
 import { api, jsonBody } from '../api'
+import type { AdminNotifier } from '../components/AdminToast'
 import { errorLabel } from '../typing'
 import type { Child, ExerciseAdminReport, Report, ReportOverview, ReportOverviewRow } from '../types'
 
@@ -15,8 +16,9 @@ const emptyExercise: ExerciseAdminReport = {
   session_count: 0, total_session_count: 0, status_counts: { in_progress: 0, judging: 0, completed: 0, abandoned: 0 },
   completion_rate: 0, average_percent: 0, unresolved_wrong_count: 0, recent: [],
 }
+const ignoreNotification: AdminNotifier = () => {}
 
-export function AdminReportsPanel({ children }: { children: Child[] }) {
+export function AdminReportsPanel({ children, notify = ignoreNotification }: { children: Child[]; notify?: AdminNotifier }) {
   const [days, setDays] = useState('30')
   const [overview, setOverview] = useState<ReportOverview | null>(null)
   const [childId, setChildId] = useState('')
@@ -25,7 +27,6 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
   const [exerciseReport, setExerciseReport] = useState<ExerciseAdminReport>(emptyExercise)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
   const [resetOpen, setResetOpen] = useState(false)
   const [resetName, setResetName] = useState('')
   const [resetError, setResetError] = useState('')
@@ -69,7 +70,7 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
     window.setTimeout(() => resetTriggerRef.current?.focus())
   }
   const openReset = () => {
-    setMessage(''); setError(''); setResetName(''); setResetError(''); setResetOpen(true)
+    setError(''); setResetName(''); setResetError(''); setResetOpen(true)
   }
   useEffect(() => {
     if (!resetOpen) return
@@ -85,7 +86,7 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
   }, [childId])
   const resetLearningData = async () => {
     if (!selected || resetName.trim() !== selected.child_name) return
-    setResetting(true); setResetError(''); setMessage('')
+    setResetting(true); setResetError('')
     try {
       await api(`/api/admin/children/${selected.child_id}/reset-learning-data`, { method: 'POST', ...jsonBody({ confirm_name: resetName.trim() }) })
       const [overviewData, detailData] = await Promise.all([
@@ -98,7 +99,7 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
       if (detailTab === 'exercise') setExerciseReport(detailData as ExerciseAdminReport)
       else setReport(detailData as Report)
       setResetOpen(false); setResetName('')
-      setMessage(`${selected.child_name} 的学习数据已重置`)
+      notify('success', `${selected.child_name} 的学习数据已重置`)
       window.setTimeout(() => resetTriggerRef.current?.focus())
     } catch (e) { setResetError(e instanceof Error ? e.message : '学习数据重置失败') }
     finally { setResetting(false) }
@@ -106,7 +107,6 @@ export function AdminReportsPanel({ children }: { children: Child[] }) {
 
   return <>
     <header className="section-title"><div><p className="eyebrow">学习报告</p><h2>{selected ? `${selected.child_name} 的学习详情` : '每位学生的学习进展'}</h2><p>{selected ? '分别查看打字、单词与习题表现。' : '先总览所有学生，再进入个人详情。'}</p></div><div className="report-header-actions">{selected && <button ref={resetTriggerRef} className="danger-button report-reset-trigger" onClick={openReset}><Trash2 />重置学习数据</button>}<a className="ghost link-button" href={`/api/admin/reports/export.csv?${exportQuery}`}><Download />导出当前视图</a></div></header>
-    {message && <p className="notice success">{message}</p>}
     {error && <p className="notice error">{error}</p>}
     <div className="report-filters card">
       {childId && <button className="ghost report-back" onClick={() => setChildId('')}><ArrowLeft />学生总览</button>}
