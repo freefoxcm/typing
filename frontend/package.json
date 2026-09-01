@@ -23,6 +23,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@lezer/highlight": "^1.2.3",
     "@vitejs/plugin-react": "latest",
+    "katex": "0.18.5",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",

@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { AlertCircle, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, LoaderCircle, Save, Send, WifiOff, XCircle } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, jsonBody } from '../api'
+import { inlineMarkdown, MarkdownText } from '../components/MarkdownText'
 import type { PythonFormatStatus, PythonSyntaxDiagnostic } from '../components/PythonCodeEditor'
 import type { ExerciseSession, ExerciseSessionItem } from '../types'
 
@@ -493,7 +494,7 @@ function FillBlankStem({ item, complete, disabled, onChange }: { item: ExerciseS
   const parts = item.question.stem_markdown.split(/(\{\{\d+\}\})/g)
   return <div className="fill-blank-answer">{parts.map((part, index) => {
     const marker = part.match(/^\{\{(\d+)\}\}$/)
-    if (!marker) return <span key={index}>{part}</span>
+    if (!marker) return <span key={index}>{inlineMarkdown(part, `fill-${item.id}-${index}`)}</span>
     const position = Number(marker[1])
     const isCorrect = item.answer.details?.blank_correct?.[position - 1]
     return <input
@@ -563,89 +564,7 @@ function SyntaxCheckStatus({ state }: { state: SyntaxCheckState }) {
   return <div className="python-syntax-status idle" role="status"><Code2 />输入代码后自动检查语法</div>
 }
 
-function inlineMarkdown(text: string, prefix: string): React.ReactNode[] {
-  const pattern = /!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`/g
-  const nodes: React.ReactNode[] = []
-  let cursor = 0
-  for (const match of text.matchAll(pattern)) {
-    const index = match.index ?? 0
-    if (index > cursor) nodes.push(text.slice(cursor, index))
-    const key = `${prefix}-${index}`
-    if (match[1] !== undefined) nodes.push(<span className="markdown-image-placeholder" key={key}>[图片：{match[1] || '未命名'}]</span>)
-    else if (match[3] !== undefined) {
-      const href = match[4]
-      nodes.push(/^(https?:\/\/|\/)/.test(href) ? <a href={href} rel="noreferrer" target={href.startsWith('/') ? undefined : '_blank'} key={key}>{match[3]}</a> : <span key={key}>{match[3]}</span>)
-    } else if (match[5] !== undefined) nodes.push(<strong key={key}>{match[5]}</strong>)
-    else nodes.push(<code key={key}>{match[6]}</code>)
-    cursor = index + match[0].length
-  }
-  if (cursor < text.length) nodes.push(text.slice(cursor))
-  return nodes
-}
-
-function blockStart(line: string): boolean {
-  return /^\s*```/.test(line) || /^\s{0,3}#{1,4}\s+/.test(line) || /^\s*[-*+]\s+/.test(line) || /^\s*\d+\.\s+/.test(line) || /^\s*>\s+/.test(line)
-}
-
-export function MarkdownText({ value }: { value?: string }) {
-  const lines = (value || '—').replace(/\r\n?/g, '\n').split('\n')
-  const blocks: React.ReactNode[] = []
-  let index = 0
-  while (index < lines.length) {
-    const line = lines[index]
-    if (!line.trim()) { index += 1; continue }
-    const fence = line.match(/^\s*```\s*([a-z0-9_+-]*)/i)
-    if (fence) {
-      const code: string[] = []
-      index += 1
-      while (index < lines.length && !/^\s*```/.test(lines[index])) { code.push(lines[index]); index += 1 }
-      if (index < lines.length) index += 1
-      blocks.push(<pre key={`code-${index}`}><code data-language={fence[1] || undefined}>{code.join('\n').trimEnd()}</code></pre>)
-      continue
-    }
-    const heading = line.match(/^\s{0,3}(#{1,4})\s+(.+)$/)
-    if (heading) {
-      const content = inlineMarkdown(heading[2], `heading-${index}`)
-      const level = heading[1].length
-      blocks.push(level === 1 ? <h2 key={index}>{content}</h2> : level === 2 ? <h3 key={index}>{content}</h3> : <h4 key={index}>{content}</h4>)
-      index += 1
-      continue
-    }
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items: React.ReactNode[] = []
-      while (index < lines.length) {
-        const match = lines[index].match(/^\s*[-*+]\s+(.+)$/)
-        if (!match) break
-        items.push(<li key={index}>{inlineMarkdown(match[1], `ul-${index}`)}</li>)
-        index += 1
-      }
-      blocks.push(<ul key={`ul-${index}`}>{items}</ul>)
-      continue
-    }
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: React.ReactNode[] = []
-      while (index < lines.length) {
-        const match = lines[index].match(/^\s*\d+\.\s+(.+)$/)
-        if (!match) break
-        items.push(<li key={index}>{inlineMarkdown(match[1], `ol-${index}`)}</li>)
-        index += 1
-      }
-      blocks.push(<ol key={`ol-${index}`}>{items}</ol>)
-      continue
-    }
-    const quote = line.match(/^\s*>\s+(.+)$/)
-    if (quote) {
-      blocks.push(<blockquote key={index}>{inlineMarkdown(quote[1], `quote-${index}`)}</blockquote>)
-      index += 1
-      continue
-    }
-    const paragraph: string[] = [line]
-    index += 1
-    while (index < lines.length && lines[index].trim() && !blockStart(lines[index])) { paragraph.push(lines[index]); index += 1 }
-    blocks.push(<p key={`p-${index}`}>{paragraph.map((part, partIndex) => <span key={partIndex}>{inlineMarkdown(part, `p-${index}-${partIndex}`)}{partIndex < paragraph.length - 1 && <br />}</span>)}</p>)
-  }
-  return <div className="markdown-text">{blocks}</div>
-}
+export { MarkdownText }
 function questionTypeLabel(type: string) { return ({ single_choice: '单选题', multiple_choice: '多选题', true_false: '判断题', fill_blank: '填空题', programming: '编程题' } as Record<string, string>)[type] ?? type }
 
 function SampleResults({ result }: { result?: SampleResult }) {

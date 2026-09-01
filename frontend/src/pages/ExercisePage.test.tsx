@@ -156,13 +156,14 @@ describe('ExercisePage', () => {
       id: 7, title: '填空题', mode: 'set', status: 'in_progress', score: null, max_score: 4,
       items: [{
         id: 73, sort_order: 0, points: 4,
-        question: { id: 5, type: 'fill_blank', stem_markdown: '{{1}} 使用 {{2}} 输出。', points: 4, sort_order: 0, options: [], blanks: [{ id: 1, position: 1 }, { id: 2, position: 2 }] },
+        question: { id: 5, type: 'fill_blank', stem_markdown: '$x_1$ 的值是 {{1}}，使用 {{2}} 输出。', points: 4, sort_order: 0, options: [], blanks: [{ id: 1, position: 1 }, { id: 2, position: 2 }] },
         answer: { selected_option_ids: [], bool_answer: null, blank_answers: ['', ''], code: '', status: 'unanswered' },
       }],
     }
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? fillSession : { ok: true })
     renderPage()
     const first = await screen.findByLabelText('第 1 空')
+    expect(first.closest('.fill-blank-answer')?.querySelector('.katex')).not.toBeNull()
     fireEvent.change(first, { target: { value: 'Python' } })
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
       '/api/exercises/sessions/7/answers/73',
@@ -598,5 +599,23 @@ describe('ExercisePage', () => {
     expect(screen.getByText('input()').tagName).toBe('CODE')
     expect(screen.getByText('[图片：外部图]')).toBeInTheDocument()
     expect(view.container.querySelector('img')).toBeNull()
+  })
+
+  it('renders inline and block TeX math with accessible MathML', () => {
+    const view = render(<MarkdownText value={'身高为 $H_1$，且 $100 \\le H_i \\le 199$，也可写成 \\(x^2\\)。\n\n$$\\frac{x^2}{2}$$\n\n\\[\\sqrt{x}\\]'} />)
+    expect(view.container.querySelectorAll('.katex')).toHaveLength(5)
+    expect(view.container.querySelectorAll('.katex-mathml math')).toHaveLength(5)
+    expect(view.container.querySelectorAll('.math-display .katex-display')).toHaveLength(2)
+    expect(view.container.textContent).not.toContain('$H_1$')
+  })
+
+  it('keeps code, escaped dollars, unmatched delimiters, and invalid math safe', () => {
+    const view = render(<MarkdownText value={'`$H_1$`，价格为 \\$100，未闭合 $H_2，错误公式 $\\notacommand{x}$，危险公式 $\\href{javascript:alert(1)}{x}$'} />)
+    expect(screen.getByText('$H_1$').tagName).toBe('CODE')
+    expect(view.container).toHaveTextContent('价格为 $100')
+    expect(view.container).toHaveTextContent('未闭合 $H_2')
+    expect(view.container.querySelectorAll('.math-formula-error')).toHaveLength(1)
+    expect(view.container.querySelector('a')).toBeNull()
+    expect(view.container.querySelector('script')).toBeNull()
   })
 })
