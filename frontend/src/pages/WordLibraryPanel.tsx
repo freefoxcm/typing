@@ -19,6 +19,63 @@ import { AdminItemActionsMenu } from '../components/AdminItemActionsMenu'
 
 const statusLabels: Record<string, string> = { ready: '就绪', pending: '等待', processing: '生成中', failed: '失败' }
 
+type EnrichmentCounts = {
+  ready: number
+  pending: number
+  processing: number
+  failed: number
+}
+
+function normalizeEnrichmentCount(value: number | undefined) {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value ?? 0)) : 0
+}
+
+export function getWordSetEnrichmentSummary(wordSet: Pick<WordSetSummary, 'word_count' | 'status_counts'>) {
+  const counts: EnrichmentCounts = {
+    ready: normalizeEnrichmentCount(wordSet.status_counts?.ready),
+    pending: normalizeEnrichmentCount(wordSet.status_counts?.pending),
+    processing: normalizeEnrichmentCount(wordSet.status_counts?.processing),
+    failed: normalizeEnrichmentCount(wordSet.status_counts?.failed),
+  }
+  const countedTotal = counts.ready + counts.pending + counts.processing + counts.failed
+  const total = Math.max(normalizeEnrichmentCount(wordSet.word_count), countedTotal)
+  const percent = total > 0 ? Math.min(100, Math.round((counts.ready / total) * 100)) : 0
+  const state = counts.failed > 0 ? 'failed' : counts.processing > 0 ? 'processing' : counts.pending > 0 ? 'pending' : counts.ready >= total && total > 0 ? 'ready' : 'incomplete'
+  const stateLabel = state === 'failed' ? '存在失败项' : state === 'processing' ? '正在生成' : state === 'pending' ? '等待生成' : state === 'ready' ? '全部就绪' : '资料待补全'
+  return { counts, total, percent, state, stateLabel }
+}
+
+function WordSetEnrichmentSummary({ wordSet }: { wordSet: WordSetSummary }) {
+  const summary = getWordSetEnrichmentSummary(wordSet)
+  const accessibleLabel = summary.total === 0
+    ? '暂无单词；就绪 0，等待 0，生成中 0，失败 0'
+    : `资料补全状态：就绪 ${summary.counts.ready}，等待 ${summary.counts.pending}，生成中 ${summary.counts.processing}，失败 ${summary.counts.failed}，完成 ${summary.percent}%`
+
+  if (summary.total === 0) return <div className="word-set-enrichment empty" role="status" aria-label={accessibleLabel}>暂无单词</div>
+
+  return <div className={`word-set-enrichment state-${summary.state}`} role="group" aria-label={accessibleLabel}>
+    <div className="word-set-enrichment-head">
+      <strong>资料就绪 <b>{summary.counts.ready} / {summary.total}</b></strong>
+      <span className="word-set-enrichment-state">{summary.stateLabel}</span>
+      <span className="word-set-enrichment-percent">{summary.percent}%</span>
+    </div>
+    <div
+      className="word-set-enrichment-track"
+      role="progressbar"
+      aria-label="资料就绪进度"
+      aria-valuemin={0}
+      aria-valuemax={summary.total}
+      aria-valuenow={summary.counts.ready}
+      aria-valuetext={`${summary.percent}%`}
+    ><i style={{ width: `${summary.percent}%` }} /></div>
+    {(summary.counts.failed > 0 || summary.counts.processing > 0 || summary.counts.pending > 0) && <div className="word-set-enrichment-alerts" aria-hidden="true">
+      {summary.counts.failed > 0 && <span className="status-failed">失败 {summary.counts.failed}</span>}
+      {summary.counts.processing > 0 && <span className="status-processing is-active">生成中 {summary.counts.processing}</span>}
+      {summary.counts.pending > 0 && <span className="status-pending">等待 {summary.counts.pending}</span>}
+    </div>}
+  </div>
+}
+
 type WordFormState = {
   mode: 'create' | 'edit'
   wordSetId: number
@@ -177,8 +234,10 @@ export function WordLibraryPanel() {
     <div className={`word-set-admin-list${reordering ? ' is-reordering' : ''}`} aria-busy={reordering}>{sets.map((item, index) => {
       const open = expanded.has(item.id)
       return <SortableWordSetCard item={item} expanded={open} disabled={reordering || sets.length < 2} key={item.id}><header>
-        <button className="course-disclosure word-set-disclosure grow" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}单词集 ${item.title}`} onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}><ChevronDown className="disclosure-chevron" /><div><h3>{item.title} {!item.active && <em>已停用</em>}</h3><p>{item.description || '暂无说明'} · {item.word_count} 词</p></div></button>
-        <div className="word-status-counts">{Object.entries(item.status_counts ?? {}).map(([status, count]) => <span className={`status-${status}`} key={status}>{statusLabels[status] ?? status} {count}</span>)}</div>
+        <div className="word-set-heading grow">
+          <button className="course-disclosure word-set-disclosure" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}单词集 ${item.title}`} onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next })}><ChevronDown className="disclosure-chevron" /><div><h3>{item.title} {!item.active && <em>已停用</em>}</h3><p>{item.description || '暂无说明'} · {item.word_count} 词</p></div></button>
+          <WordSetEnrichmentSummary wordSet={item} />
+        </div>
         <div className="library-card-actions"><button className="ghost" aria-label={`向单词集 ${item.title} 添加单词`} title="添加单词" onClick={(event) => openCreateWord(item, event.currentTarget)}><Plus />单词</button><AdminItemActionsMenu label={`单词集 ${item.title}`} actions={[
           { key: 'edit', label: '编辑单词集', icon: <Pencil />, onSelect: () => { const value = window.prompt('单词集名称', item.title); if (value) void action(() => api(`/api/admin/word-sets/${item.id}`, { method: 'PUT', ...jsonBody({ title: value, description: item.description, sort_order: item.sort_order ?? index, active: item.active }) }), '单词集已更新') } },
           { key: 'toggle', label: item.active ? '停用单词集' : '启用单词集', icon: <Power />, onSelect: () => { void action(() => api(`/api/admin/word-sets/${item.id}`, { method: 'PUT', ...jsonBody({ title: item.title, description: item.description, sort_order: item.sort_order ?? index, active: !item.active }) }), item.active ? '单词集已停用' : '单词集已启用') } },
