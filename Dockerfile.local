@@ -11,13 +11,15 @@ FROM python:3.13-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATABASE_URL=sqlite:////data/typing.db \
-    FRONTEND_DIST=/app/frontend/dist
+    FRONTEND_DIST=/app/frontend/dist \
+    PYRIGHT_LANGSERVER_PATH=/opt/pyright/langserver.index.js
 WORKDIR /app
-RUN addgroup --system kidtype && adduser --system --ingroup kidtype kidtype && mkdir -p /data /app/frontend/dist && chown -R kidtype:kidtype /data /app
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* && addgroup --system kidtype && adduser --system --ingroup kidtype kidtype && mkdir -p /data /app/frontend/dist && chown -R kidtype:kidtype /data /app
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/ /app/backend/
 COPY --from=frontend-build /build/frontend/dist/ /app/frontend/dist/
+COPY --from=frontend-build /build/frontend/node_modules/pyright/ /opt/pyright/
 RUN chmod +x /app/backend/entrypoint.sh && chown -R kidtype:kidtype /app
 USER kidtype
 EXPOSE 8080

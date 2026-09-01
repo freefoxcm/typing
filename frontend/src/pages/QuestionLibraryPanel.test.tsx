@@ -84,6 +84,7 @@ describe('QuestionLibraryPanel', () => {
   })
 
   it('shows import progress with counters and cancels an active import after confirmation', async () => {
+    const notify = vi.fn()
     let job = { id: 18, status: 'processing', attempts: 1, created_at: '2026-08-27', source_filename: '进度试卷.pdf', progress: { phase: 'batch_recognition', label: '正在批量识别', percent: 32, current: 2, total: 5, unit: 'batch', detail: '正在等待模型返回第 2/5 批', updated_at: new Date().toISOString() } }
     mockedApi.mockImplementation(async (path, options) => {
       if (path === '/api/admin/question-sets') return []
@@ -97,7 +98,7 @@ describe('QuestionLibraryPanel', () => {
       return { id: 1 }
     })
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    render(<QuestionLibraryPanel />)
+    render(<QuestionLibraryPanel notify={notify} />)
     fireEvent.click(await screen.findByRole('button', { name: /PDF 智能识别/ }))
     const progress = await screen.findByRole('progressbar', { name: '正在批量识别' })
     expect(progress).toHaveAttribute('aria-valuenow', '32')
@@ -106,7 +107,7 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /终止任务/ }))
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('确认终止这个识别任务'))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/question-imports/18/cancel', expect.objectContaining({ method: 'POST' })))
-    expect(await screen.findByText('识别任务已终止，可稍后重新排队')).toBeInTheDocument()
+    await waitFor(() => expect(notify).toHaveBeenCalledWith('success', '识别任务已终止，可稍后重新排队'))
     confirm.mockRestore()
   })
 
@@ -448,6 +449,7 @@ describe('QuestionLibraryPanel', () => {
   })
 
   it('reviews forward with the keyboard and closes after the last item in the set queue', async () => {
+    const notify = vi.fn()
     const questions = [
       { id: 101, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核一', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
       { id: 102, question_set_id: 10, type: 'true_false' as const, stem_markdown: '复核二', explanation_markdown: '', points: 2, sort_order: 1, reviewed: false, correct_bool: true, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
@@ -460,7 +462,7 @@ describe('QuestionLibraryPanel', () => {
       if (/^\/api\/admin\/questions\/\d+\/review$/.test(path)) return { ...questions.find((item) => path.includes(`/${item.id}/`)), reviewed: true }
       return { id: 1 }
     })
-    render(<QuestionLibraryPanel />)
+    render(<QuestionLibraryPanel notify={notify} />)
     fireEvent.click(await screen.findByRole('button', { name: '展开习题集 快捷复核' }))
     fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
     fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
@@ -468,7 +470,7 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
     fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
     await waitFor(() => expect(screen.queryByRole('form', { name: '题目编辑器' })).not.toBeInTheDocument())
-    expect(screen.getByText('当前过滤队列已复核完成')).toBeInTheDocument()
+    expect(notify).toHaveBeenCalledWith('success', '当前过滤队列已复核完成')
     expect(mockedApi.mock.calls.filter(([path]) => /\/review$/.test(path))).toHaveLength(2)
   })
 

@@ -23,10 +23,20 @@ function errorMessage(detail: unknown): string {
   return detail == null ? '' : String(detail)
 }
 
+async function fetchApi(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init)
+  } catch (error) {
+    if (typeof error === 'object' && error && 'name' in error && error.name === 'AbortError') throw error
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+    throw new ApiError(offline ? '网络连接已断开，请检查网络后重试' : '无法连接服务器，请检查网络或稍后重试', 0)
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  const response = await fetchApi(path, { ...init, headers, credentials: 'same-origin' })
   if (response.status === 204) return undefined as T
   const contentType = response.headers.get('content-type') ?? ''
   const body = contentType.includes('json') ? await response.json() : await response.text()
@@ -43,7 +53,7 @@ export const jsonBody = (value: unknown): RequestInit => ({ body: JSON.stringify
 export async function downloadApi(path: string, init: RequestInit = {}): Promise<{ blob: Blob; filename: string }> {
   const headers = new Headers(init.headers)
   if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  const response = await fetchApi(path, { ...init, headers, credentials: 'same-origin' })
   if (!response.ok) {
     const contentType = response.headers.get('content-type') ?? ''
     const body = contentType.includes('json') ? await response.json() : await response.text()

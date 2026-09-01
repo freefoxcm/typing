@@ -92,6 +92,56 @@ describe('AdminPage', () => {
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
   })
 
+  it('edits a student PIN in an accessible modal and reports success without shifting content', async () => {
+    let finishPatch!: (value: unknown) => void
+    const pendingPatch = new Promise((resolve) => { finishPatch = resolve })
+    const baseApi = mockedApi.getMockImplementation()!
+    mockedApi.mockImplementation(async (...args) => {
+      if (args[0] === '/api/admin/children/1' && args[1]?.method === 'PATCH') return pendingPatch
+      return baseApi(...args)
+    })
+    render(<AdminPage />)
+    const trigger = await screen.findByRole('button', { name: '修改 PIN' })
+    fireEvent.click(trigger)
+    const dialog = screen.getByRole('dialog', { name: '修改 小宇 的 PIN' })
+    const input = within(dialog).getByLabelText('新 PIN')
+    expect(input).toHaveFocus()
+    expect(within(dialog).getByRole('button', { name: '保存新 PIN' })).toBeDisabled()
+    fireEvent.change(input, { target: { value: '12a34' } })
+    expect(input).toHaveValue('1234')
+    fireEvent.click(within(dialog).getByRole('button', { name: '显示 PIN' }))
+    expect(input).toHaveAttribute('type', 'text')
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存新 PIN' }))
+    expect(within(dialog).getByRole('button', { name: '正在保存…' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: '关闭 PIN 修改窗口' })).toBeDisabled()
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/children/1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pin: '1234' }) }))
+    finishPatch({ id: 1, name: '小宇', active: true })
+    expect(await screen.findByRole('status')).toHaveTextContent('PIN 已修改')
+    expect(screen.queryByRole('dialog', { name: '修改 小宇 的 PIN' })).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
+    expect(screen.queryByText('PIN 已修改')?.closest('.admin-content')).toBeNull()
+  })
+
+  it('keeps the PIN modal and entered value available after a failed request', async () => {
+    const baseApi = mockedApi.getMockImplementation()!
+    mockedApi.mockImplementation(async (...args) => {
+      if (args[0] === '/api/admin/children/1' && args[1]?.method === 'PATCH') throw new Error('无法连接服务器，请检查网络或稍后重试')
+      return baseApi(...args)
+    })
+    render(<AdminPage />)
+    const trigger = await screen.findByRole('button', { name: '修改 PIN' })
+    fireEvent.click(trigger)
+    const input = screen.getByLabelText('新 PIN')
+    fireEvent.change(input, { target: { value: '5678' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存新 PIN' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法连接服务器，请检查网络或稍后重试')
+    expect(screen.getByRole('dialog', { name: '修改 小宇 的 PIN' })).toBeInTheDocument()
+    expect(input).toHaveValue('5678')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '修改 小宇 的 PIN' })).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+  })
+
   it('requires an exact name before permanently resetting one students learning data', async () => {
     let finishReset!: (value: unknown) => void
     const pendingReset = new Promise((resolve) => { finishReset = resolve })

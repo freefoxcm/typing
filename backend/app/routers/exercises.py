@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, selectinload
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_library import loads_json, question_set_dict, question_snapshot
-from ..exercise_schemas import AnswerWrite, SampleRunCreate, SessionCreate, SyntaxCheckCreate
+from ..exercise_schemas import AnswerWrite, PythonCompletionCreate, PythonCompletionResolve, SampleRunCreate, SessionCreate, SyntaxCheckCreate
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -374,6 +374,60 @@ def syntax_check(session_id: int, payload: SyntaxCheckCreate, principal: Princip
             }],
         }
     return {"valid": True, "diagnostics": []}
+
+
+def _require_programming_item(session: ExerciseSession, session_item_id: int) -> ExerciseSessionItem:
+    item = next((candidate for candidate in session.items if candidate.id == session_item_id), None)
+    snapshot = loads_json(item.snapshot_json, {}) if item else {}
+    if not item or snapshot.get("type") != "programming" or not snapshot.get("programming"):
+        raise HTTPException(status_code=404, detail="编程题不存在")
+    return item
+
+
+@router.post("/sessions/{session_id}/python-completions")
+async def python_completions(
+    session_id: int,
+    payload: PythonCompletionCreate,
+    request: Request,
+    principal: Principal = Depends(require_child),
+    db: Session = Depends(get_db),
+):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="已提交或已放弃的练习不能请求代码补全")
+    _require_programming_item(session, payload.session_item_id)
+    try:
+        return await request.app.state.pyright_service.complete(
+            child_id=principal.actor_id,
+            session_id=session.id,
+            session_item_id=payload.session_item_id,
+            code=payload.code,
+            line=payload.position.line,
+            character=payload.position.character,
+            trigger_character=payload.trigger_character,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/sessions/{session_id}/python-completions/resolve")
+async def resolve_python_completion(
+    session_id: int,
+    payload: PythonCompletionResolve,
+    request: Request,
+    principal: Principal = Depends(require_child),
+    db: Session = Depends(get_db),
+):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="已提交或已放弃的练习不能请求代码补全")
+    _require_programming_item(session, payload.session_item_id)
+    return await request.app.state.pyright_service.resolve(
+        child_id=principal.actor_id,
+        session_id=session.id,
+        session_item_id=payload.session_item_id,
+        completion_id=payload.completion_id,
+    )
 
 
 @router.post("/sessions/{session_id}/sample-runs", status_code=202)

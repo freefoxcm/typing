@@ -198,3 +198,20 @@ class SampleRunCreate(BaseModel):
 class SyntaxCheckCreate(BaseModel):
     session_item_id: int = Field(gt=0)
     code: str = Field(default="", max_length=100000)
+
+
+class PythonCompletionPosition(BaseModel):
+    line: int = Field(ge=0)
+    character: int = Field(ge=0)
+
+
+class PythonCompletionCreate(BaseModel):
+    session_item_id: int = Field(gt=0)
+    code: str = Field(default="", max_length=100000)
+    position: PythonCompletionPosition
+    trigger_character: str | None = Field(default=None, max_length=1)
+
+
+class PythonCompletionResolve(BaseModel):
+    session_item_id: int = Field(gt=0)
+    completion_id: str = Field(min_length=8, max_length=200)

@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     judge_max_time_ms: int = Field(default=5000, ge=100, le=30000)
     judge_max_memory_mb: int = Field(default=512, ge=32, le=2048)
     judge_output_limit_bytes: int = Field(default=65536, ge=1024, le=1048576)
+    pyright_enabled: bool = True
+    pyright_node_path: str = "node"
+    pyright_langserver_path: str = "/opt/pyright/langserver.index.js"
+    pyright_completion_timeout_seconds: float = Field(default=2, gt=0, le=10)
+    pyright_max_open_documents: int = Field(default=100, ge=1, le=1000)
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

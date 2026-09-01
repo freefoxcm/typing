@@ -45,7 +45,9 @@ docker compose logs -f kidtype
 docker compose logs -f judge
 ```
 
-编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。`IMPORT_LLM_REASONING_EFFORT` 可单独设置识别模型的思考级别，留空时使用模型默认值。PDF 默认每次向模型发送 3 页，可通过 `IMPORT_LLM_BATCH_PAGES` 在 1–8 页之间调整。单道候选结构异常时会定向高清修复；仍不完整的首次导入题会保留为待补草稿，不会终止整套任务。草稿题套可从原 PDF 整套重新识别，单题也可从当前截图或原 PDF 生成差异预览；只有管理员确认后才会应用。首次导入和重新识别任务都会展示阶段、百分比及页数或题数，管理员可在界面终止等待中或运行中的任务，并在需要时重新排队。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
+编程题判题依赖 `judge` 服务。它没有网络和公开端口，通过专用卷与 Web 应用交换任务。Web 镜像内置 Pyright Language Server，为学生代码提供列表、字典、字符串、自定义类和已导入标准库的智能补全；它只分析内存中的虚拟文档，不执行学生代码，也不会把类型诊断混入现有语法提示。可通过 `PYRIGHT_ENABLED` 关闭，补全超时和最多打开文档数分别由 `PYRIGHT_COMPLETION_TIMEOUT_SECONDS`、`PYRIGHT_MAX_OPEN_DOCUMENTS` 控制。Pyright 暂时不可用时编辑器会自动保留关键字、内置函数和入门代码片段补全。
+
+PDF 智能导入另需配置 `IMPORT_LLM_API_KEY` 和 `IMPORT_LLM_MODEL`；这组配置与单词补全使用的 `LLM_*` 相互独立。`IMPORT_LLM_REASONING_EFFORT` 可单独设置识别模型的思考级别，留空时使用模型默认值。PDF 默认每次向模型发送 3 页，可通过 `IMPORT_LLM_BATCH_PAGES` 在 1–8 页之间调整。单道候选结构异常时会定向高清修复；仍不完整的首次导入题会保留为待补草稿，不会终止整套任务。草稿题套可从原 PDF 整套重新识别，单题也可从当前截图或原 PDF 生成差异预览；只有管理员确认后才会应用。首次导入和重新识别任务都会展示阶段、百分比及页数或题数，管理员可在界面终止等待中或运行中的任务，并在需要时重新排队。完整的部署与隔离验收步骤见 [习题与判题服务器验收清单](docs/exercise-server-checklist.md)。
 
 题套可在“导入导出 → 习题题库”导出为 ZIP 迁移包，或从其他部署先预览再导入。迁移包包含当前题目、答案、复核状态、原题截图、题干配图、原始 PDF 和编程测试点，不包含学生成绩、错题、练习记录和识别任务。导入时可逐套跳过、创建副本或覆盖同源草稿；包体上限由 `QUESTION_BUNDLE_MAX_MB` 控制，默认 250 MB。草稿题套也可在题库标题栏上传或替换原始 PDF，替换后所有题目会恢复为待复核。
 
