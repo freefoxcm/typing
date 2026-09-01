@@ -298,7 +298,7 @@ describe('QuestionLibraryPanel', () => {
     expect(within(viewer).getByText('已发布题目仅供查看，如需修改请先撤回题套')).toBeInTheDocument()
     expect(within(viewer).queryByRole('button', { name: /保存/ })).not.toBeInTheDocument()
     expect(within(viewer).getByText('只读查看')).toBeInTheDocument()
-    expect(within(viewer).getByLabelText('向学生显示完整原题截图')).toBeDisabled()
+    expect(within(viewer).getByLabelText('显示原题')).toBeDisabled()
     expect(within(viewer).getByRole('button', { name: '收起原题区域' })).toBeEnabled()
     expect(within(viewer).queryByRole('button', { name: '本地图片替换' })).not.toBeInTheDocument()
     expect(within(viewer).queryByRole('button', { name: '重新识别本题' })).not.toBeInTheDocument()
@@ -333,7 +333,7 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /编辑/ })[0])
     expect(screen.getByRole('heading', { level: 2, name: '当前题套' })).toBeInTheDocument()
     expect(screen.getByText('第 1 / 2 题')).toBeInTheDocument()
-    const sourceSwitch = screen.getByLabelText('向学生显示完整原题截图')
+    const sourceSwitch = screen.getByLabelText('显示原题')
     const sourceHeading = sourceSwitch.closest('.question-source-heading') as HTMLElement
     expect(sourceHeading).not.toBeNull()
     expect(within(sourceHeading).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
@@ -422,12 +422,12 @@ describe('QuestionLibraryPanel', () => {
     render(<QuestionLibraryPanel />)
     fireEvent.click(await screen.findByRole('button', { name: '展开习题集 原图上传测试' }))
     fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
-    expect(screen.queryByLabelText('向学生显示完整原题截图')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('显示原题')).not.toBeInTheDocument()
     const file = new File(['image'], 'source.webp', { type: 'image/webp' })
     fireEvent.change(screen.getByLabelText('选择原题图片'), { target: { files: [file] } })
     expect(await screen.findByAltText('原题截图')).toHaveAttribute('src', '/api/question-assets/45')
     expect(screen.getByRole('button', { name: '本地图片替换' })).toBeInTheDocument()
-    expect(screen.getByLabelText('向学生显示完整原题截图')).toBeInTheDocument()
+    expect(screen.getByLabelText('显示原题')).toBeInTheDocument()
     expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/96/source-image', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) }))
   })
 
@@ -444,7 +444,7 @@ describe('QuestionLibraryPanel', () => {
     expect(within(editor).getByRole('button', { name: '上传原题图片' })).toBeDisabled()
     expect(within(editor).getByRole('button', { name: '重新识别本题' })).toBeDisabled()
     expect(within(editor).getByRole('button', { name: '上传题干配图' })).toBeDisabled()
-    expect(within(editor).queryByLabelText('向学生显示完整原题截图')).not.toBeInTheDocument()
+    expect(within(editor).queryByLabelText('显示原题')).not.toBeInTheDocument()
   })
 
   it('reviews forward with the keyboard and closes after the last item in the set queue', async () => {
