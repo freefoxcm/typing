@@ -81,6 +81,8 @@ export function ExercisePage() {
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const sessionRef = useRef<ExerciseSession | null>(null)
   const initializedSessionRef = useRef<string | undefined>(undefined)
+  const indexRef = useRef(0)
+  const navigationChainRef = useRef<Promise<void>>(Promise.resolve())
   const pendingCodesRef = useRef(new Map<number, string>())
   const codeDraftsRef = useRef<Record<number, string>>({})
   const codeTimersRef = useRef(new Map<number, number>())
@@ -107,7 +109,16 @@ export function ExercisePage() {
     setSession(data)
     if (initializedSessionRef.current !== sessionId) {
       const firstUnanswered = data.items.findIndex((candidate) => candidate.answer.status === 'unanswered')
-      setIndex(firstUnanswered >= 0 ? firstUnanswered : Math.max(0, data.items.length - 1))
+      const savedIndex = data.status === 'in_progress' && Number.isInteger(data.current_item_sort_order)
+        ? data.items.findIndex((candidate) => candidate.sort_order === data.current_item_sort_order)
+        : -1
+      const initialIndex = savedIndex >= 0
+        ? savedIndex
+        : data.status === 'in_progress'
+          ? firstUnanswered >= 0 ? firstUnanswered : 0
+          : Math.max(0, data.items.length - 1)
+      indexRef.current = initialIndex
+      setIndex(initialIndex)
       initializedSessionRef.current = sessionId
     }
     setCodeDrafts((current) => {
@@ -342,13 +353,40 @@ export function ExercisePage() {
     const results = await Promise.all(pending.map(([itemId, code]) => persistCode(itemId, code)))
     return results.every(Boolean) && pendingCodesRef.current.size === 0
   }
-  const goToIndex = async (nextIndex: number) => {
-    if (!await flushPendingSaves()) return
-    setIndex(nextIndex)
+  const persistPosition = async (nextIndex: number) => {
+    const current = sessionRef.current
+    const target = current?.items[nextIndex]
+    if (!current || !target || current.status !== 'in_progress') return true
+    setSaveState('saving')
+    try {
+      const saved = await api<{ session_item_id: number; sort_order: number }>(`/api/exercises/sessions/${current.id}/position`, {
+        method: 'PATCH', ...jsonBody({ session_item_id: target.id }),
+      })
+      const updated = { ...current, current_item_sort_order: saved.sort_order ?? target.sort_order }
+      sessionRef.current = updated
+      setSession(updated)
+      if (!pendingCodesRef.current.size && activeAnswerSavesRef.current === 0) setSaveState('saved')
+      return true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '当前位置保存失败')
+      setSaveState('error')
+      return false
+    }
+  }
+  const goToIndex = (nextIndex: number) => {
+    const transition = navigationChainRef.current.then(async () => {
+      if (nextIndex === indexRef.current || !await flushPendingSaves() || !await persistPosition(nextIndex)) return
+      indexRef.current = nextIndex
+      setIndex(nextIndex)
+    })
+    navigationChainRef.current = transition.catch(() => undefined)
+    return transition
   }
   const saveAndExit = async () => {
     try {
+      await navigationChainRef.current
       if (!await flushPendingSaves()) return
+      if (!await persistPosition(indexRef.current)) return
       navigate('/')
     } catch (e) {
       setError(e instanceof Error ? e.message : '答案保存失败')
@@ -403,6 +441,7 @@ export function ExercisePage() {
       return <button
         className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''} ${resultClass}`}
         aria-label={`第 ${itemIndex + 1} 题${resultLabel ? `：${resultLabel}` : ''}`}
+        aria-current={itemIndex === index ? 'true' : undefined}
         title={resultLabel || undefined}
         onClick={() => void goToIndex(itemIndex)}
         key={candidate.id}

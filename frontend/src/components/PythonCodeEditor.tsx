@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FocusEvent } from 'react'
-import { Braces, LoaderCircle, Play, Search } from 'lucide-react'
+import { Braces, LoaderCircle, Play, Search, ShieldCheck, Sparkles } from 'lucide-react'
 import {
   acceptCompletion,
   autocompletion,
@@ -37,6 +37,7 @@ import {
   keywordDescriptions,
   keywordLabels,
   pythonDocumentationFor,
+  pythonMemberDocumentationEntries,
   pythonMemberDocumentationFor,
   snippetDocumentation,
   type PythonDocumentation,
@@ -108,6 +109,11 @@ const snippets: Completion[] = [
   snippetCompletion('for ${item} in range(${count}):\n\t${pass}', { label: 'for', detail: '循环代码片段', info: documentedCompletion(snippetDocumentation.for), type: 'keyword', boost: 100 }),
   snippetCompletion('while ${condition}:\n\t${pass}', { label: 'while', detail: '循环代码片段', info: documentedCompletion(snippetDocumentation.while), type: 'keyword', boost: 100 }),
   snippetCompletion('def ${name}(${arguments}):\n\t${pass}', { label: 'def', detail: '函数代码片段', info: documentedCompletion(snippetDocumentation.def), type: 'keyword', boost: 100 }),
+  snippetCompletion('import turtle\n\nturtle.${done}()', { label: 'turtle import', detail: 'Turtle 导入代码片段', info: documentedCompletion(snippetDocumentation.turtle_import), type: 'module', boost: 92 }),
+  snippetCompletion('for _ in range(${sides}):\n\tturtle.forward(${length})\n\tturtle.left(360 / ${sides})', { label: 'turtle polygon', detail: 'Turtle 正多边形代码片段', info: documentedCompletion(snippetDocumentation.turtle_polygon), type: 'keyword', boost: 96 }),
+  snippetCompletion('for _ in range(${count}):\n\tturtle.forward(${length})\n\tturtle.right(${angle})', { label: 'turtle loop', detail: 'Turtle 循环绘图代码片段', info: documentedCompletion(snippetDocumentation.turtle_loop), type: 'keyword', boost: 94 }),
+  snippetCompletion('turtle.fillcolor("${color}")\nturtle.begin_fill()\n${draw}\nturtle.end_fill()', { label: 'turtle fill', detail: 'Turtle 填充图形代码片段', info: documentedCompletion(snippetDocumentation.turtle_fill), type: 'keyword', boost: 93 }),
+  snippetCompletion('pen = turtle.Turtle()\npen.${done}()', { label: 'turtle pen', detail: 'Turtle 独立画笔代码片段', info: documentedCompletion(snippetDocumentation.turtle_pen), type: 'class', boost: 91 }),
 ]
 
 const keywordCompletions: Completion[] = keywordLabels
@@ -116,11 +122,33 @@ const keywordCompletions: Completion[] = keywordLabels
 const builtinCompletions: Completion[] = builtinLabels
   .map((label) => ({ label, type: 'function', detail: builtinDocumentation[label].signature, info: documentedCompletion(builtinDocumentation[label]) }))
 
+const gespTurtlePriority = new Set(['forward', 'fd', 'backward', 'bk', 'right', 'rt', 'left', 'lt', 'goto', 'circle', 'speed', 'penup', 'pu', 'pendown', 'pd', 'pencolor', 'fillcolor', 'color', 'begin_fill', 'end_fill'])
+
+function memberStaticCompletions(receiverKind: PythonReceiverKind): Completion[] {
+  return pythonMemberDocumentationEntries(receiverKind).map(([label, documentation]) => ({
+    label,
+    type: /^[A-Z]/.test(label) ? 'class' : 'function',
+    detail: documentation.signature,
+    info: documentedCompletion(documentation),
+    boost: gespTurtlePriority.has(label) ? 120 : 70,
+  }))
+}
+
 export function pythonCompletionSource(context: CompletionContext): CompletionResult | null {
+  const state = context.state
+  const code = state?.doc.toString() ?? ''
+  const linePrefix = state ? state.sliceDoc(state.doc.lineAt(context.pos).from, context.pos) : ''
+  if (state && /[A-Za-z_]\w*\.[A-Za-z_]*$/.test(linePrefix)) {
+    const receiverKind = inferPythonReceiverKind(code, context.pos)
+    if (!receiverKind) return null
+    const member = context.matchBefore(/[A-Za-z_]*$/)
+    return { from: member?.from ?? context.pos, options: memberStaticCompletions(receiverKind), validFor: /^[A-Za-z_]\w*$/ }
+  }
   const word = context.matchBefore(/[A-Za-z_]\w*/)
   if (!word || word.from === word.to && !context.explicit) return null
   if (word.from > 0 && context.state?.sliceDoc(word.from - 1, word.from) === '.') return null
-  return { from: word.from, options: [...snippets, ...keywordCompletions, ...builtinCompletions], validFor: /^[A-Za-z_]\w*$/ }
+  const turtleGlobals = /(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(code) ? memberStaticCompletions('turtle') : []
+  return { from: word.from, options: [...snippets, ...keywordCompletions, ...builtinCompletions, ...turtleGlobals], validFor: /^[A-Za-z_]\w*$/ }
 }
 
 function appendRestrictedInline(parent: HTMLElement, value: string) {
@@ -276,7 +304,7 @@ export function inferPythonReceiverKind(code: string, position: number): PythonR
   const prefix = code.slice(0, position)
   const receiver = prefix.match(/([A-Za-z_]\w*)\.[A-Za-z_]*$/)?.[1]
   if (!receiver) return undefined
-  if (['math', 'random', 'sys', 'collections', 'heapq'].includes(receiver)) return receiver as PythonReceiverKind
+  if (['math', 'random', 'sys', 'collections', 'heapq', 'bisect', 'itertools', 'turtle'].includes(receiver)) return receiver as PythonReceiverKind
   const escaped = receiver.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const annotation = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:\\s*(list|dict|str|set|tuple)\\b`, 'g')
   const annotated = [...code.matchAll(annotation)].at(-1)?.[1]
@@ -288,8 +316,23 @@ export function inferPythonReceiverKind(code: string, position: number): PythonR
   if (/^(?:[rubf]*['"]|str\s*\()/.test(value)) return 'str'
   if (/^set\s*\(/.test(value)) return 'set'
   if (/^tuple\s*\(/.test(value) || /^\([^)]*,[^)]*\)/.test(value)) return 'tuple'
-  const importAlias = new RegExp(`(?:^|\\n)\\s*import\\s+(math|random|sys|collections|heapq)\\s+as\\s+${escaped}\\b`, 'g')
-  return [...code.matchAll(importAlias)].at(-1)?.[1] as PythonReceiverKind | undefined
+  const turtleImport = [...prefix.matchAll(/(?:^|[;\n])\s*import\s+turtle(?:\s+as\s+([A-Za-z_]\w*))?/g)].at(-1)
+  const turtleAlias = turtleImport?.[1] || (turtleImport ? 'turtle' : undefined)
+  if (turtleAlias) {
+    const constructor = new RegExp(`(?:^|[;\\n])\\s*${escaped}\\s*=\\s*${turtleAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(Turtle|Screen)\\s*\\(`, 'g')
+    const kind = [...prefix.matchAll(constructor)].at(-1)?.[1]
+    if (kind === 'Turtle') return 'turtle_instance'
+    if (kind === 'Screen') return 'turtle_screen'
+    if (receiver === turtleAlias) return 'turtle'
+  }
+  const importedConstructor = new RegExp(`(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(Turtle|Screen)\\s*\\(`, 'g')
+  const importedKind = [...prefix.matchAll(importedConstructor)].at(-1)?.[1]
+  if (/(?:^|[;\n])\s*from\s+turtle\s+import\s+(?:\*|[^\n;]*(?:Turtle|Screen))/m.test(prefix)) {
+    if (importedKind === 'Turtle') return 'turtle_instance'
+    if (importedKind === 'Screen') return 'turtle_screen'
+  }
+  const importAlias = new RegExp(`(?:^|\\n)\\s*import\\s+(math|random|sys|collections|heapq|bisect|itertools)\\s+as\\s+${escaped}\\b`, 'g')
+  return [...prefix.matchAll(importAlias)].at(-1)?.[1] as PythonReceiverKind | undefined
 }
 
 export function createPyrightCompletionSource({
@@ -328,7 +371,9 @@ export function createPyrightCompletionSource({
     const receiverKind = memberContext ? inferPythonReceiverKind(code, context.pos) : undefined
     const localizedFor = (label: string, detail: string) => memberContext
       ? pythonMemberDocumentationFor(label, receiverKind, detail)
-      : pythonDocumentationFor(label, undefined, detail) ?? (keywordDescriptions[label]
+      : pythonDocumentationFor(label, undefined, detail)
+        ?? (/(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(code) ? pythonMemberDocumentationFor(label, 'turtle', detail) : undefined)
+        ?? (keywordDescriptions[label]
         ? { signature: label, description: keywordDescriptions[label] }
         : undefined)
     onAvailability('checking')
@@ -463,7 +508,13 @@ function documentationAt(state: EditorState, pos: number) {
   const left = before.match(/[A-Za-z_]\w*$/)?.[0] ?? ''
   const right = after.match(/^\w*/)?.[0] ?? ''
   const word = left + right
-  const documentation = builtinDocumentation[word]
+  const receiverKind = before.slice(0, Math.max(0, before.length - left.length)).endsWith('.')
+    ? inferPythonReceiverKind(state.doc.toString(), pos)
+    : undefined
+  const documentation = receiverKind
+    ? pythonMemberDocumentationFor(word, receiverKind)
+    : builtinDocumentation[word]
+      ?? (/(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(state.doc.toString()) ? pythonMemberDocumentationFor(word, 'turtle') : undefined)
   if (!documentation) return null
   return { from: pos - left.length, to: pos + right.length, documentation }
 }
@@ -660,15 +711,15 @@ export function PythonCodeEditor({
     <header className="python-ide-tabbar">
       <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
       {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
-        {onRun && <button type="button" className="python-toolbar-run" disabled={runDisabled} onClick={onRun} title={runDisabled ? runDisabledReason || '当前不能运行公开样例' : runLabel}><Play />{runLabel}</button>}
-        {onAutoSyntaxChange && <label className="python-toolbar-toggle" title="停止输入后自动检查 Python 语法"><input type="checkbox" checked={autoSyntaxEnabled} onChange={(event) => onAutoSyntaxChange(event.target.checked)} /><span aria-hidden="true" /><b>自动语法</b></label>}
-        {onSyntaxCheck && <button type="button" className="python-toolbar-icon" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法" title="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button>}
-        {onAutoFormatChange && <label className="python-toolbar-toggle" title="离开编辑器或运行样例前自动格式化"><input type="checkbox" checked={autoFormatEnabled} onChange={(event) => onAutoFormatChange(event.target.checked)} /><span aria-hidden="true" /><b>自动格式化</b></label>}
-        {onFormat && <button type="button" className="python-toolbar-icon" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码" title="立即格式化代码（Shift+Alt+F）">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button>}
-        {formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}
+        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}><Play /></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
+        {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法'}</span></span>}
+        {onFormat && <span className="python-tool-wrap" tabIndex={formatDisabled || formatStatus === 'formatting' ? 0 : undefined}><button type="button" className="python-tool-button format" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button><span className="python-tool-tip" role="tooltip">{formatStatus === 'formatting' ? '正在格式化代码' : formatDisabled ? '当前不能格式化代码' : '立即格式化代码（Shift+Alt+F）'}</span></span>}
+        {(onAutoSyntaxChange || onAutoFormatChange) && <span className="python-toolbar-separator" aria-hidden="true" />}
+        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><ShieldCheck /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动语法：{autoSyntaxEnabled ? '已开启，停止输入后自动检查' : '已关闭，点击开启'}</span></span>}
+        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Sparkles /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动格式化：{autoFormatEnabled ? '已开启，失焦或运行前自动格式化' : '已关闭，点击开启'}</span></span>}
       </div> : <span className="python-ide-runtime">Python 3.13</span>}
     </header>
     <div ref={hostRef} className="python-code-editor" />
-    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
+    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
   </div>
 }

@@ -118,16 +118,23 @@ describe('PythonCodeEditor', () => {
     const editor = await screen.findByLabelText('Python 3.13 代码')
     const run = screen.getByRole('button', { name: '运行公开样例' })
     expect(run.closest('.python-ide-tabbar')).not.toBeNull()
-    expect(screen.getByRole('checkbox', { name: '自动语法' })).toBeChecked()
-    expect(screen.getByRole('checkbox', { name: '自动格式化' })).not.toBeChecked()
+    const toolbar = screen.getByLabelText('代码编辑工具栏')
+    const toolbarButtons = Array.from(toolbar.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))
+    expect(toolbarButtons).toEqual(['运行公开样例', '立即检查语法', '立即格式化代码', '自动语法', '自动格式化'])
+    expect(run).toHaveClass('run')
+    expect(screen.getByRole('button', { name: '立即检查语法' })).toHaveClass('syntax')
+    expect(screen.getByRole('button', { name: '立即格式化代码' })).toHaveClass('format')
+    expect(screen.getByRole('button', { name: '自动语法' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '自动格式化' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('tooltip', { name: /自动语法：已开启/ })).toBeInTheDocument()
     fireEvent.blur(editor, { relatedTarget: run })
     fireEvent.focus(run)
     fireEvent.click(run)
     expect(onRun).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => window.setTimeout(resolve, 0))
     expect(onBlur).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('checkbox', { name: '自动语法' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: '自动格式化' }))
+    fireEvent.click(screen.getByRole('button', { name: '自动语法' }))
+    fireEvent.click(screen.getByRole('button', { name: '自动格式化' }))
     expect(onAutoSyntaxChange).toHaveBeenCalledWith(false)
     expect(onAutoFormatChange).toHaveBeenCalledWith(true)
     fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))
@@ -280,5 +287,39 @@ describe('PythonCodeEditor', () => {
     expect(inferPythonReceiverKind("message = 'hi'\nmessage.", 23)).toBe('str')
     expect(inferPythonReceiverKind('import math as maths\nmaths.', 27)).toBe('math')
     expect(inferPythonReceiverKind('mapping: dict[str, int] = {}\nmapping.', 40)).toBe('dict')
+  })
+
+  it('infers Turtle modules, aliases, pens, and screens', () => {
+    const moduleCode = 'import turtle\nturtle.'
+    const aliasCode = 'import turtle as t\nt.'
+    const penCode = 'import turtle as t\npen = t.Turtle()\npen.'
+    const screenCode = 'from turtle import Screen\nscreen = Screen()\nscreen.'
+    expect(inferPythonReceiverKind(moduleCode, moduleCode.length)).toBe('turtle')
+    expect(inferPythonReceiverKind(aliasCode, aliasCode.length)).toBe('turtle')
+    expect(inferPythonReceiverKind(penCode, penCode.length)).toBe('turtle_instance')
+    expect(inferPythonReceiverKind(screenCode, screenCode.length)).toBe('turtle_screen')
+  })
+
+  it('provides localized Turtle fallback completions and snippets without Pyright', async () => {
+    const source = createCombinedPythonCompletionSource({
+      sessionId: () => 7, sessionItemId: () => 72, onAvailability: vi.fn(),
+      request: vi.fn().mockResolvedValue({ available: false, items: [] }) as never,
+    })
+    const moduleState = EditorState.create({ doc: 'import turtle as t\nt.' })
+    const moduleResult = await source(new CompletionContext(moduleState, moduleState.doc.length, false))
+    const forward = moduleResult?.options.find((item) => item.label === 'forward')
+    expect(forward?.detail).toContain('turtle.forward')
+    const info = typeof forward?.info === 'function' ? await forward.info(forward) : null
+    expect(info).toBeInstanceOf(HTMLElement)
+    expect((info as HTMLElement).textContent).toContain('当前判题环境暂不支持 Turtle 图形输出')
+
+    const penState = EditorState.create({ doc: 'import turtle\npen = turtle.Turtle()\npen.' })
+    const penResult = await source(new CompletionContext(penState, penState.doc.length, false))
+    expect(penResult?.options.some((item) => item.label === 'circle')).toBe(true)
+
+    const starState = EditorState.create({ doc: 'from turtle import *\nfo' })
+    const starResult = await source(new CompletionContext(starState, starState.doc.length, false))
+    expect(starResult?.options.some((item) => item.label === 'forward')).toBe(true)
+    expect(starResult?.options.some((item) => item.label === 'turtle polygon')).toBe(true)
   })
 })

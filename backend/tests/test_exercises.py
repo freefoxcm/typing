@@ -485,7 +485,14 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         child_login(client)
 
         session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}}).json()
+        assert session["current_item_sort_order"] == 0
         first = session["items"][0]
+        second = session["items"][1]
+        moved = client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]})
+        assert moved.status_code == 200
+        assert moved.json() == {"session_item_id": second["id"], "sort_order": second["sort_order"]}
+        assert client.get(f"/api/exercises/sessions/{session['id']}").json()["current_item_sort_order"] == second["sort_order"]
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": 999999}).status_code == 404
         option_id = first["question"]["options"][0]["id"]
         assert client.patch(f"/api/exercises/sessions/{session['id']}/answers/{first['id']}", json={
             "selected_option_ids": [option_id], "bool_answer": None, "code": "",
@@ -502,11 +509,13 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小雨", "pin": "5678"}).status_code == 200
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").status_code == 404
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 404
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小宇", "pin": "1234"}).status_code == 200
 
         abandoned = client.post(f"/api/exercises/sessions/{session['id']}/abandon")
         assert abandoned.json()["status"] == "abandoned"
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 409
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").json()["status"] == "abandoned"
         assert client.get("/api/exercises/active-sessions").json() == []
         stored = client.get(f"/api/exercises/sessions/{session['id']}").json()

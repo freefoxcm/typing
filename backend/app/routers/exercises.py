@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_library import loads_json, question_set_dict, question_snapshot
-from ..exercise_schemas import AnswerWrite, PythonCompletionCreate, PythonCompletionResolve, PythonFormatCreate, SampleRunCreate, SessionCreate, SyntaxCheckCreate
+from ..exercise_schemas import AnswerWrite, PythonCompletionCreate, PythonCompletionResolve, PythonFormatCreate, SampleRunCreate, SessionCreate, SessionPositionWrite, SyntaxCheckCreate
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -149,6 +149,7 @@ def _session_dict(session: ExerciseSession) -> dict[str, Any]:
         "status": session.status,
         "score": session.score if reveal else None,
         "max_score": session.max_score,
+        "current_item_sort_order": session.current_item_sort_order,
         "created_at": session.created_at,
         "submitted_at": session.submitted_at,
         "completed_at": session.completed_at,
@@ -364,6 +365,19 @@ def save_answer(session_id: int, item_id: int, payload: AnswerWrite, principal: 
             db.add(answer)
     db.commit()
     return {"ok": True, "status": status}
+
+
+@router.patch("/sessions/{session_id}/position")
+def save_session_position(session_id: int, payload: SessionPositionWrite, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="已提交或已放弃的练习不能更新当前位置")
+    item = next((candidate for candidate in session.items if candidate.id == payload.session_item_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="练习题目不存在")
+    session.current_item_sort_order = item.sort_order
+    db.commit()
+    return {"session_item_id": item.id, "sort_order": item.sort_order}
 
 
 @router.post("/sessions/{session_id}/syntax-check")

@@ -190,6 +190,10 @@ class AnswerWrite(BaseModel):
         return value
 
 
+class SessionPositionWrite(BaseModel):
+    session_item_id: int = Field(gt=0)
+
+
 class SampleRunCreate(BaseModel):
     session_item_id: int = Field(gt=0)
     code: str = Field(min_length=1, max_length=100000)

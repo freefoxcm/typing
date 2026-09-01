@@ -30,9 +30,9 @@ vi.mock('../components/PythonCodeEditor', () => ({
   }) => <div>
     <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={() => onBlur(value)} />
     {onRun && <button disabled={runDisabled} onClick={onRun}>{runLabel}</button>}
-    {onAutoSyntaxChange && <label>自动语法<input aria-label="自动语法" type="checkbox" checked={autoSyntaxEnabled} onChange={(event) => onAutoSyntaxChange(event.target.checked)} /></label>}
+    {onAutoSyntaxChange && <button aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}>自动语法</button>}
     {onSyntaxCheck && <button aria-label="立即检查语法" disabled={syntaxCheckDisabled} onClick={onSyntaxCheck}>检查语法</button>}
-    {onAutoFormatChange && <label>自动格式化<input aria-label="自动格式化" type="checkbox" checked={autoFormatEnabled} onChange={(event) => onAutoFormatChange(event.target.checked)} /></label>}
+    {onAutoFormatChange && <button aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}>自动格式化</button>}
     {onFormat && <button aria-label="立即格式化代码" onClick={onFormat}>格式化</button>}
     {formatStatus && <span>{formatStatus}</span>}
   </div>,
@@ -228,7 +228,7 @@ describe('ExercisePage', () => {
     expect(screen.getByText('/ 3')).toBeInTheDocument()
   })
 
-  it('resumes at the last question when every answer is saved but not submitted', async () => {
+  it('falls back to the first question when every answer is saved but no position exists', async () => {
     const resumed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
     resumed.items = [
       { ...resumed.items[0], id: 71, question: { ...resumed.items[0].question, stem_markdown: '第一题' }, answer: { ...resumed.items[0].answer, selected_option_ids: [31], status: 'answered' } },
@@ -236,8 +236,56 @@ describe('ExercisePage', () => {
     ]
     mockedApi.mockResolvedValue(resumed)
     renderPage()
-    expect(await screen.findByText('最后一题')).toBeInTheDocument()
+    expect(await screen.findByText('第一题')).toBeInTheDocument()
     expect(screen.getByText(/全部题目均已作答，尚未提交/)).toBeInTheDocument()
+  })
+
+  it('restores the saved question and keeps the header and navigator in sync', async () => {
+    const resumed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
+    resumed.current_item_sort_order = 2
+    resumed.items = [
+      { ...resumed.items[0], id: 71, sort_order: 0, question: { ...resumed.items[0].question, stem_markdown: '第一题' } },
+      { ...resumed.items[0], id: 72, sort_order: 1, question: { ...resumed.items[0].question, stem_markdown: '第二题' } },
+      { ...resumed.items[0], id: 73, sort_order: 2, question: { ...resumed.items[0].question, stem_markdown: '保存的第三题' } },
+    ]
+    mockedApi.mockResolvedValue(resumed)
+    renderPage()
+    expect(await screen.findByText('保存的第三题')).toBeInTheDocument()
+    expect(screen.getByText('/ 3')).toBeInTheDocument()
+    expect(screen.getByText('3', { selector: '.exercise-score strong' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '第 3 题' })).toHaveClass('active')
+    expect(screen.getByRole('button', { name: '第 3 题' })).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('button', { name: '第 1 题' })).not.toHaveClass('active')
+  })
+
+  it('saves the target position before switching questions and stays put on failure', async () => {
+    const resumed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
+    resumed.items = [
+      { ...resumed.items[0], id: 71, sort_order: 0, question: { ...resumed.items[0].question, stem_markdown: '当前位置' } },
+      { ...resumed.items[0], id: 72, sort_order: 1, question: { ...resumed.items[0].question, stem_markdown: '目标位置' } },
+    ]
+    let fail = true
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return resumed
+      if (path === '/api/exercises/sessions/7/position') {
+        if (fail) throw new Error('位置保存失败')
+        return { session_item_id: 72, sort_order: 1 }
+      }
+      return { ok: true }
+    })
+    renderPage()
+    await screen.findByText('当前位置')
+    fireEvent.click(screen.getByRole('button', { name: '第 2 题' }))
+    expect(await screen.findByText('位置保存失败')).toBeInTheDocument()
+    expect(screen.getByText('当前位置')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '第 1 题' })).toHaveClass('active')
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '第 2 题' }))
+    expect(await screen.findByText('目标位置')).toBeInTheDocument()
+    expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/position', expect.objectContaining({
+      method: 'PATCH', body: JSON.stringify({ session_item_id: 72 }),
+    }))
+    expect(screen.getByRole('button', { name: '第 2 题' })).toHaveClass('active')
   })
 
   it('keeps Python indentation on Enter and supports Tab indentation', () => {
@@ -271,12 +319,12 @@ describe('ExercisePage', () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
     renderPage()
-    expect(await screen.findByRole('checkbox', { name: '自动语法' })).toBeChecked()
-    const autoFormat = screen.getByRole('checkbox', { name: '自动格式化' })
-    expect(autoFormat).not.toBeChecked()
+    expect(await screen.findByRole('button', { name: '自动语法' })).toHaveAttribute('aria-pressed', 'true')
+    const autoFormat = screen.getByRole('button', { name: '自动格式化' })
+    expect(autoFormat).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(autoFormat)
     await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: true, autoFormat: true }))
-    fireEvent.click(screen.getByRole('checkbox', { name: '自动语法' }))
+    fireEvent.click(screen.getByRole('button', { name: '自动语法' }))
     await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: false, autoFormat: true }))
   })
 
@@ -284,7 +332,7 @@ describe('ExercisePage', () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
     renderPage()
-    fireEvent.click(await screen.findByRole('checkbox', { name: '自动语法' }))
+    fireEvent.click(await screen.findByRole('button', { name: '自动语法' }))
     await new Promise((resolve) => window.setTimeout(resolve, 800))
     expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/syntax-check')).toHaveLength(0)
     expect(screen.queryByText(/自动检查语法|正在检查语法|未发现语法错误/)).not.toBeInTheDocument()
@@ -301,7 +349,7 @@ describe('ExercisePage', () => {
       return { ok: true }
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('checkbox', { name: '自动语法' }))
+    fireEvent.click(await screen.findByRole('button', { name: '自动语法' }))
     const editor = screen.getByLabelText('Python 3.13 代码')
     fireEvent.change(editor, { target: { value: 'if True' } })
     fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))

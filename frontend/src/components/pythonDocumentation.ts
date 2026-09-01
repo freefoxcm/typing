@@ -5,11 +5,15 @@ export type PythonDocumentation = {
   returns?: string
 }
 
-export type PythonReceiverKind = 'list' | 'dict' | 'str' | 'set' | 'tuple' | 'file' | 'deque' | 'math' | 'random' | 'sys' | 'collections' | 'heapq' | 'bisect' | 'itertools'
+export type PythonReceiverKind = 'list' | 'dict' | 'str' | 'set' | 'tuple' | 'file' | 'deque' | 'math' | 'random' | 'sys' | 'collections' | 'heapq' | 'bisect' | 'itertools' | 'turtle' | 'turtle_instance' | 'turtle_screen'
 
 const doc = (signature: string, description: string, parameters?: string, returns?: string): PythonDocumentation => ({
   signature, description, parameters, returns,
 })
+
+export const TURTLE_RUNTIME_NOTICE = '当前判题环境暂不支持 Turtle 图形输出。'
+const turtleDoc = (signature: string, description: string, parameters?: string, returns?: string) =>
+  doc(signature, `${description} ${TURTLE_RUNTIME_NOTICE}`, parameters, returns)
 
 export const builtinDocumentation: Record<string, PythonDocumentation> = {
   abs: doc('abs(x)', '返回数字的绝对值。', 'x：整数、浮点数或实现了绝对值运算的对象。', '绝对值。'),
@@ -71,6 +75,11 @@ export const snippetDocumentation: Record<string, PythonDocumentation> = {
   for: doc('for item in range(count):', '插入按次数遍历的 for 循环。'),
   while: doc('while condition:', '插入条件循环代码块。'),
   def: doc('def name(arguments):', '插入函数定义代码块。'),
+  turtle_import: turtleDoc('import turtle', '导入 Turtle 绘图库。'),
+  turtle_polygon: turtleDoc('for _ in range(sides): ...', '插入使用循环绘制正多边形的代码。', 'sides：边数；length：边长。'),
+  turtle_loop: turtleDoc('for _ in range(count): ...', '插入重复前进和转向的循环绘图代码。'),
+  turtle_fill: turtleDoc('begin_fill(); ...; end_fill()', '插入设置填充色并绘制填充图形的代码。'),
+  turtle_pen: turtleDoc('pen = turtle.Turtle()', '创建一个可独立控制的画笔对象。'),
 }
 
 const memberDocumentation: Record<PythonReceiverKind, Record<string, PythonDocumentation>> = {
@@ -186,10 +195,81 @@ const memberDocumentation: Record<PythonReceiverKind, Record<string, PythonDocum
     permutations: doc('itertools.permutations(iterable, r=None)', '生成元素的排列。'),
     product: doc('itertools.product(*iterables, repeat=1)', '生成多个可迭代对象的笛卡尔积。'),
   },
+  turtle: {
+    forward: turtleDoc('turtle.forward(distance)', '沿当前方向前进指定距离。', 'distance：前进距离，可为负数。'),
+    fd: turtleDoc('turtle.fd(distance)', 'forward() 的简写，沿当前方向前进。', 'distance：前进距离。'),
+    backward: turtleDoc('turtle.backward(distance)', '沿当前方向后退指定距离。', 'distance：后退距离。'),
+    back: turtleDoc('turtle.back(distance)', 'backward() 的简写，沿当前方向后退。'),
+    bk: turtleDoc('turtle.bk(distance)', 'backward() 的简写，沿当前方向后退。'),
+    right: turtleDoc('turtle.right(angle)', '向右旋转指定角度。', 'angle：旋转角度。'),
+    rt: turtleDoc('turtle.rt(angle)', 'right() 的简写，向右旋转。'),
+    left: turtleDoc('turtle.left(angle)', '向左旋转指定角度。', 'angle：旋转角度。'),
+    lt: turtleDoc('turtle.lt(angle)', 'left() 的简写，向左旋转。'),
+    goto: turtleDoc('turtle.goto(x, y)', '移动到指定坐标；落笔时会画线。', 'x、y：目标坐标。'),
+    setpos: turtleDoc('turtle.setpos(x, y)', 'goto() 的别名，移动到指定坐标。'),
+    setposition: turtleDoc('turtle.setposition(x, y)', 'goto() 的别名，移动到指定坐标。'),
+    setx: turtleDoc('turtle.setx(x)', '只修改横坐标。'), sety: turtleDoc('turtle.sety(y)', '只修改纵坐标。'),
+    setheading: turtleDoc('turtle.setheading(angle)', '设置画笔朝向角度。'), seth: turtleDoc('turtle.seth(angle)', 'setheading() 的简写。'),
+    home: turtleDoc('turtle.home()', '回到原点并恢复初始朝向。'),
+    circle: turtleDoc('turtle.circle(radius, extent=None, steps=None)', '绘制圆、圆弧或近似正多边形。', 'radius：半径；extent：圆弧角度；steps：用多少条线段近似。'),
+    dot: turtleDoc('turtle.dot(size=None, color=None)', '在当前位置绘制圆点。'),
+    stamp: turtleDoc('turtle.stamp()', '在当前位置印下画笔形状。', undefined, '印章编号。'),
+    clearstamp: turtleDoc('turtle.clearstamp(stampid)', '删除指定印章。'), clearstamps: turtleDoc('turtle.clearstamps(n=None)', '删除全部或指定数量的印章。'),
+    undo: turtleDoc('turtle.undo()', '撤销最近一次画笔操作。'), speed: turtleDoc('turtle.speed(speed=None)', '设置或读取绘制速度，0 表示最快。', 'speed：0–10 的整数或速度名称。'),
+    position: turtleDoc('turtle.position()', '返回当前坐标。', undefined, '二维坐标。'), pos: turtleDoc('turtle.pos()', 'position() 的简写。'),
+    xcor: turtleDoc('turtle.xcor()', '返回当前横坐标。'), ycor: turtleDoc('turtle.ycor()', '返回当前纵坐标。'),
+    heading: turtleDoc('turtle.heading()', '返回当前朝向角度。'), distance: turtleDoc('turtle.distance(x, y)', '返回当前位置到目标点的距离。'),
+    towards: turtleDoc('turtle.towards(x, y)', '返回从当前位置指向目标点的角度。'),
+    degrees: turtleDoc('turtle.degrees(fullcircle=360.0)', '将角度单位设置为度。'), radians: turtleDoc('turtle.radians()', '将角度单位设置为弧度。'),
+    pendown: turtleDoc('turtle.pendown()', '落下画笔，之后移动会画线。'), pd: turtleDoc('turtle.pd()', 'pendown() 的简写。'), down: turtleDoc('turtle.down()', 'pendown() 的别名。'),
+    penup: turtleDoc('turtle.penup()', '抬起画笔，之后移动不画线。'), pu: turtleDoc('turtle.pu()', 'penup() 的简写。'), up: turtleDoc('turtle.up()', 'penup() 的别名。'),
+    pensize: turtleDoc('turtle.pensize(width=None)', '设置或读取画笔线宽。'), width: turtleDoc('turtle.width(width=None)', 'pensize() 的别名。'),
+    pen: turtleDoc('turtle.pen(pen=None, **pendict)', '读取或批量设置画笔属性。'), isdown: turtleDoc('turtle.isdown()', '判断画笔当前是否落下。', undefined, '布尔值。'),
+    pencolor: turtleDoc('turtle.pencolor(*args)', '设置或读取画笔颜色。'), fillcolor: turtleDoc('turtle.fillcolor(*args)', '设置或读取填充颜色。'),
+    color: turtleDoc('turtle.color(*args)', '同时设置或读取画笔颜色与填充颜色。'),
+    begin_fill: turtleDoc('turtle.begin_fill()', '开始记录需要填充的图形边界。'), end_fill: turtleDoc('turtle.end_fill()', '结束边界记录并填充图形。'),
+    filling: turtleDoc('turtle.filling()', '判断当前是否正在记录填充边界。'),
+    reset: turtleDoc('turtle.reset()', '清除当前画笔绘图并恢复初始状态。'), clear: turtleDoc('turtle.clear()', '清除当前画笔绘制的内容但保留状态。'),
+    write: turtleDoc('turtle.write(arg, move=False, align="left", font=("Arial", 8, "normal"))', '在当前位置书写文字。'),
+    hideturtle: turtleDoc('turtle.hideturtle()', '隐藏画笔图形。'), ht: turtleDoc('turtle.ht()', 'hideturtle() 的简写。'),
+    showturtle: turtleDoc('turtle.showturtle()', '显示画笔图形。'), st: turtleDoc('turtle.st()', 'showturtle() 的简写。'),
+    isvisible: turtleDoc('turtle.isvisible()', '判断画笔图形是否可见。'), shape: turtleDoc('turtle.shape(name=None)', '设置或读取画笔形状。'),
+    shapesize: turtleDoc('turtle.shapesize(stretch_wid=None, stretch_len=None, outline=None)', '设置或读取画笔形状缩放。'), turtlesize: turtleDoc('turtle.turtlesize(...)', 'shapesize() 的别名。'),
+    tilt: turtleDoc('turtle.tilt(angle)', '旋转画笔形状。'), settiltangle: turtleDoc('turtle.settiltangle(angle)', '设置画笔形状的倾斜角。'),
+    onclick: turtleDoc('turtle.onclick(fun, btn=1, add=None)', '绑定点击画笔时执行的函数。'), onrelease: turtleDoc('turtle.onrelease(fun, btn=1, add=None)', '绑定释放鼠标按钮时执行的函数。'),
+    ondrag: turtleDoc('turtle.ondrag(fun, btn=1, add=None)', '绑定拖动画笔时执行的函数。'),
+    Turtle: turtleDoc('turtle.Turtle(shape="classic", undobuffersize=1000, visible=True)', '创建一个可独立控制的画笔对象。', undefined, 'Turtle 画笔对象。'),
+    Screen: turtleDoc('turtle.Screen()', '取得或创建绘图窗口。', undefined, 'TurtleScreen 窗口对象。'),
+    done: turtleDoc('turtle.done()', '进入事件循环，通常放在绘图程序末尾。'), mainloop: turtleDoc('turtle.mainloop()', 'done() 的别名，进入事件循环。'),
+  },
+  turtle_instance: {},
+  turtle_screen: {
+    bgcolor: turtleDoc('screen.bgcolor(*args)', '设置或读取窗口背景颜色。'), bgpic: turtleDoc('screen.bgpic(picname=None)', '设置或读取窗口背景图片。'),
+    screensize: turtleDoc('screen.screensize(canvwidth=None, canvheight=None, bg=None)', '设置或读取画布大小。'), setup: turtleDoc('screen.setup(width=0.5, height=0.75, startx=None, starty=None)', '设置窗口大小和位置。'),
+    title: turtleDoc('screen.title(titlestring)', '设置绘图窗口标题。'), colormode: turtleDoc('screen.colormode(cmode=None)', '设置颜色分量使用 1.0 或 255 模式。'),
+    tracer: turtleDoc('screen.tracer(n=None, delay=None)', '控制屏幕刷新频率，可用于加速动画。'), update: turtleDoc('screen.update()', '立即刷新绘图窗口。'),
+    delay: turtleDoc('screen.delay(delay=None)', '设置或读取绘图延迟毫秒数。'),
+    listen: turtleDoc('screen.listen(xdummy=None, ydummy=None)', '让窗口开始接收键盘事件。'),
+    onkey: turtleDoc('screen.onkey(fun, key)', '绑定松开按键时执行的函数。'), onkeypress: turtleDoc('screen.onkeypress(fun, key=None)', '绑定按下按键时执行的函数。'), onkeyrelease: turtleDoc('screen.onkeyrelease(fun, key)', '绑定松开按键时执行的函数。'),
+    onclick: turtleDoc('screen.onclick(fun, btn=1, add=None)', '绑定点击画布时执行的函数。'), onscreenclick: turtleDoc('screen.onscreenclick(fun, btn=1, add=None)', 'onclick() 的别名。'),
+    ontimer: turtleDoc('screen.ontimer(fun, t=0)', '在指定毫秒后调用函数。'),
+    bye: turtleDoc('screen.bye()', '关闭绘图窗口。'), exitonclick: turtleDoc('screen.exitonclick()', '点击窗口后关闭。'), mainloop: turtleDoc('screen.mainloop()', '进入事件循环。'),
+    reset: turtleDoc('screen.reset()', '重置窗口中的所有画笔。'), clear: turtleDoc('screen.clear()', '清空窗口中的所有绘图和绑定。'),
+    turtles: turtleDoc('screen.turtles()', '返回窗口中的画笔列表。'), window_width: turtleDoc('screen.window_width()', '返回窗口宽度。'), window_height: turtleDoc('screen.window_height()', '返回窗口高度。'),
+    register_shape: turtleDoc('screen.register_shape(name, shape=None)', '注册可供画笔使用的新形状。'), addshape: turtleDoc('screen.addshape(name, shape=None)', 'register_shape() 的别名。'), getshapes: turtleDoc('screen.getshapes()', '返回已注册的形状名称。'),
+  },
 }
+
+memberDocumentation.turtle_instance = Object.fromEntries(
+  Object.entries(memberDocumentation.turtle).filter(([label]) => !['Turtle', 'Screen', 'done', 'mainloop'].includes(label)),
+)
 
 export const builtinLabels = Object.keys(builtinDocumentation)
 export const keywordLabels = Object.keys(keywordDescriptions)
+
+export function pythonMemberDocumentationEntries(receiverKind: PythonReceiverKind): [string, PythonDocumentation][] {
+  return Object.entries(memberDocumentation[receiverKind] ?? {})
+}
 
 export function pythonDocumentationFor(label: string, receiverKind?: PythonReceiverKind, detail = ''): PythonDocumentation | undefined {
   if (!receiverKind) return builtinDocumentation[label]

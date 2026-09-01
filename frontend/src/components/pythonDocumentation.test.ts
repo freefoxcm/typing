@@ -1,4 +1,4 @@
-import { pythonDocumentationFor, pythonMemberDocumentationFor } from './pythonDocumentation'
+import { pythonDocumentationFor, pythonMemberDocumentationFor, pythonMemberDocumentationEntries, snippetDocumentation, TURTLE_RUNTIME_NOTICE } from './pythonDocumentation'
 
 describe('python documentation catalog', () => {
   it('covers common built-ins and beginner container members', () => {
@@ -48,5 +48,15 @@ describe('python documentation catalog', () => {
       .toEqual(expect.objectContaining({ signature: 'dict.pop(key, default=...)' }))
     expect(pythonMemberDocumentationFor('pop', undefined, 'pop()'))
       .toEqual(expect.objectContaining({ signature: 'set.pop()' }))
+  })
+
+  it('covers GESP-oriented Turtle movement, drawing, screen, aliases, and snippets', () => {
+    expect(pythonMemberDocumentationFor('forward', 'turtle')?.description).toContain(TURTLE_RUNTIME_NOTICE)
+    expect(pythonMemberDocumentationFor('fd', 'turtle_instance')?.description).toContain('forward() 的简写')
+    expect(pythonMemberDocumentationFor('circle', 'turtle')?.parameters).toContain('steps')
+    expect(pythonMemberDocumentationFor('begin_fill', 'turtle')?.description).toContain('填充')
+    expect(pythonMemberDocumentationFor('tracer', 'turtle_screen')?.description).toContain('刷新频率')
+    expect(pythonMemberDocumentationEntries('turtle').length).toBeGreaterThan(50)
+    expect(snippetDocumentation.turtle_polygon.description).toContain(TURTLE_RUNTIME_NOTICE)
   })
 })
