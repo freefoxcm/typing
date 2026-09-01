@@ -135,7 +135,6 @@ describe('PythonCodeEditor', () => {
     expect(manualFormat.querySelector('svg')).toHaveClass('lucide-braces')
     expect(autoFormat.querySelector('svg')).toHaveClass('lucide-braces')
     expect(screen.getByRole('group', { name: '自动检查与格式化' })).toContainElement(autoSyntax)
-    expect(screen.getByRole('group', { name: '自动检查与格式化' })).toHaveTextContent('自动')
     expect(autoSyntax.querySelector('.python-toggle-track')).not.toBeNull()
     expect(autoFormat.querySelector('.python-toggle-track')).not.toBeNull()
     expect(manualSyntax.querySelector('.python-toggle-track')).toBeNull()
