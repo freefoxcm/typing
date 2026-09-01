@@ -118,6 +118,7 @@ def _public_snapshot(snapshot: dict[str, Any], reveal: bool) -> dict[str, Any]:
                 case.pop("input_data", None)
                 case.pop("expected_output", None)
                 case.pop("note", None)
+                case.pop("explanation_markdown", None)
                 case.pop("confirmed", None)
     return data
 

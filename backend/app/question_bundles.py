@@ -23,7 +23,8 @@ from .exercise_schemas import QuestionWrite
 from .models import Question, QuestionAsset, QuestionSet
 
 
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
+SUPPORTED_BUNDLE_VERSIONS = {1, 2}
 MAX_ARCHIVE_ENTRIES = 5000
 MIGRATION_KEY_RE = re.compile(r"^[0-9a-f]{32}$")
 ASSET_KINDS = {"source_pdf", "question", "question_stem"}
@@ -118,13 +119,16 @@ def _question_payload(question: Question, asset_ref: Callable[[int | None, str],
     return value
 
 
-def _fingerprint_payload(question_set: dict[str, Any], asset_sha: dict[str, str]) -> dict[str, Any]:
+def _fingerprint_payload(question_set: dict[str, Any], asset_sha: dict[str, str], version: int = BUNDLE_VERSION) -> dict[str, Any]:
     value = copy.deepcopy(question_set)
     value.pop("fingerprint", None)
     value.pop("source_status", None)
     source_ref = value.pop("source_pdf_ref", None)
     value["source_pdf_sha256"] = asset_sha.get(source_ref, "") if source_ref else ""
     for question in value.get("questions", []):
+        if version == 1 and question.get("programming"):
+            for case in question["programming"].get("cases", []):
+                case.pop("explanation_markdown", None)
         for ref_key, sha_key in (
             ("source_asset_ref", "source_asset_sha256"),
             ("stem_image_asset_ref", "stem_image_asset_sha256"),
@@ -134,8 +138,8 @@ def _fingerprint_payload(question_set: dict[str, Any], asset_sha: dict[str, str]
     return value
 
 
-def set_fingerprint(question_set: dict[str, Any], asset_sha: dict[str, str]) -> str:
-    return hashlib.sha256(_canonical_json(_fingerprint_payload(question_set, asset_sha))).hexdigest()
+def set_fingerprint(question_set: dict[str, Any], asset_sha: dict[str, str], version: int = BUNDLE_VERSION) -> str:
+    return hashlib.sha256(_canonical_json(_fingerprint_payload(question_set, asset_sha, version))).hexdigest()
 
 
 def _serialize_sets(question_sets: Iterable[QuestionSet], settings: Settings) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, bytes]]:
@@ -304,7 +308,7 @@ def load_bundle(data: bytes, settings: Settings) -> LoadedBundle:
             manifest = json.loads(archive.read("manifest.json"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise BundleValidationError("manifest.json 不是有效 JSON") from exc
-        if not isinstance(manifest, dict) or manifest.get("version") != BUNDLE_VERSION:
+        if not isinstance(manifest, dict) or manifest.get("version") not in SUPPORTED_BUNDLE_VERSIONS:
             raise BundleValidationError("不支持的迁移包格式版本")
         _migration_key(manifest.get("bundle_id"), "迁移包")
         raw_assets = manifest.get("assets")
@@ -381,7 +385,7 @@ def load_bundle(data: bytes, settings: Settings) -> LoadedBundle:
             "questions": questions,
         }
         expected_fingerprint = str(raw.get("fingerprint") or "")
-        actual_fingerprint = set_fingerprint(normalized, asset_sha)
+        actual_fingerprint = set_fingerprint(normalized, asset_sha, int(manifest["version"]))
         if expected_fingerprint != actual_fingerprint:
             raise BundleValidationError(f"题套《{title}》内容指纹校验失败")
         normalized["fingerprint"] = actual_fingerprint
@@ -392,9 +396,9 @@ def load_bundle(data: bytes, settings: Settings) -> LoadedBundle:
     return LoadedBundle(manifest=manifest, assets=assets, asset_bytes=asset_bytes)
 
 
-def _current_set_fingerprint(question_set: QuestionSet, settings: Settings) -> str:
+def _current_set_fingerprint(question_set: QuestionSet, settings: Settings, version: int = BUNDLE_VERSION) -> str:
     serialized, assets, _ = _serialize_sets([question_set], settings)
-    return set_fingerprint(serialized[0], {key: value["sha256"] for key, value in assets.items()})
+    return set_fingerprint(serialized[0], {key: value["sha256"] for key, value in assets.items()}, version)
 
 
 def _set_counts(raw_set: dict[str, Any]) -> tuple[dict[str, int], int]:
@@ -411,7 +415,7 @@ def preview_bundle(db: Session, settings: Settings, bundle: LoadedBundle) -> dic
     result_sets: list[dict[str, Any]] = []
     for raw_set in bundle.manifest["question_sets"]:
         target = db.scalar(select(QuestionSet).where(QuestionSet.migration_key == raw_set["migration_key"]))
-        target_fingerprint = _current_set_fingerprint(target, settings) if target else None
+        target_fingerprint = _current_set_fingerprint(target, settings, int(bundle.manifest["version"])) if target else None
         if not target:
             conflict = "none"
             default_action = "create"

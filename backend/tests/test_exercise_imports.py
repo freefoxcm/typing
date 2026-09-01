@@ -58,7 +58,7 @@ def test_json_import_supports_full_programming_shape_and_forces_review():
                     "reference_solution": "print(input())",
                     "time_limit_ms": 1000,
                     "memory_limit_mb": 128,
-                    "cases": [{"input_data": "1\n", "expected_output": "1\n", "is_sample": False, "weight": 10, "confirmed": True}],
+                    "cases": [{"input_data": "1\n", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": True, "explanation_markdown": "直接输出输入值。"}],
                 },
             }],
         }],
@@ -71,6 +71,7 @@ def test_json_import_supports_full_programming_shape_and_forces_review():
     assert question.reviewed is False
     assert question.source_asset_id is None
     assert question.programming.cases[0].confirmed is True
+    assert question.programming.cases[0].explanation_markdown == "直接输出输入值。"
 
 
 def test_txt_and_csv_reject_programming_questions_with_json_guidance():

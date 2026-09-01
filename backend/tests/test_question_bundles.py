@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.config import Settings
 from app.main import create_app
 from app.models import Question, QuestionSet
+from app.question_bundles import set_fingerprint
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
@@ -67,7 +68,7 @@ def question_payload(kind: str, order: int) -> dict:
             "time_limit_ms": 1000,
             "memory_limit_mb": 128,
             "cases": [
-                {"input_data": "1\n", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": True, "note": "样例"},
+                {"input_data": "1\n", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": True, "note": "样例", "explanation_markdown": "因为输入和输出相同。"},
                 {"input_data": "10\n", "expected_output": "10\n", "is_sample": False, "weight": order + 1, "confirmed": True, "note": "边界"},
             ],
         }
@@ -106,7 +107,7 @@ def build_source_bundle(client: TestClient) -> tuple[int, bytes]:
     assert response.headers["content-type"] == "application/zip"
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["version"] == 1
+        assert manifest["version"] == 2
         assert len(manifest["assets"]) == 3
     return question_set["id"], response.content
 
@@ -165,6 +166,7 @@ def test_bundle_round_trip_copy_and_overwrite_preserve_content_and_ids(tmp_path)
         assert stored["source_pdf_asset_id"]
         assert stored["questions"][0]["source_asset_id"] and stored["questions"][0]["stem_image_asset_id"]
         assert len(stored["questions"][-1]["programming"]["cases"]) == 2
+        assert stored["questions"][-1]["programming"]["cases"][0]["explanation_markdown"] == "因为输入和输出相同。"
         original_question_id = stored["questions"][0]["id"]
 
         unchanged = target.post(
@@ -216,6 +218,47 @@ def test_bundle_round_trip_copy_and_overwrite_preserve_content_and_ids(tmp_path)
             assert db.get(Question, extra["id"]) is None
             sets = db.scalars(select(QuestionSet)).all()
             assert len(sets) == 2
+
+
+def test_bundle_version_one_remains_importable(tmp_path):
+    with make_client(tmp_path / "legacy-source") as source:
+        login(source)
+        _, current_bundle = build_source_bundle(source)
+
+    source_archive = zipfile.ZipFile(io.BytesIO(current_bundle))
+    manifest = json.loads(source_archive.read("manifest.json"))
+    manifest["version"] = 1
+    asset_sha = {key: value["sha256"] for key, value in manifest["assets"].items()}
+    for question_set in manifest["question_sets"]:
+        for question in question_set["questions"]:
+            if question.get("programming"):
+                for case in question["programming"].get("cases", []):
+                    case.pop("explanation_markdown", None)
+        question_set["fingerprint"] = set_fingerprint(question_set, asset_sha, 1)
+    legacy_bytes = io.BytesIO()
+    with zipfile.ZipFile(legacy_bytes, "w", compression=zipfile.ZIP_DEFLATED) as legacy_archive:
+        legacy_archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        for name in source_archive.namelist():
+            if name != "manifest.json":
+                legacy_archive.writestr(name, source_archive.read(name))
+    source_archive.close()
+
+    with make_client(tmp_path / "legacy-target") as target:
+        login(target)
+        preview = target.post(
+            "/api/admin/question-set-bundles/preview",
+            files={"file": ("legacy.zip", legacy_bytes.getvalue(), "application/zip")},
+        )
+        assert preview.status_code == 200, preview.text
+        item = preview.json()["question_sets"][0]
+        imported = target.post(
+            "/api/admin/question-set-bundles/import",
+            files={"file": ("legacy.zip", legacy_bytes.getvalue(), "application/zip")},
+            data={"decisions": json.dumps([{"migration_key": item["migration_key"], "action": "create"}])},
+        )
+        assert imported.status_code == 200, imported.text
+        stored = target.get(f"/api/admin/question-sets/{imported.json()['created'][0]['id']}").json()
+        assert stored["questions"][-1]["programming"]["cases"][0]["explanation_markdown"] == ""
 
 
 def test_bundle_detects_stale_preview_for_copy_and_supports_empty_sets(tmp_path):

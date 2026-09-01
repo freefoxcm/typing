@@ -43,6 +43,7 @@ def case_dict(item: ProgrammingCase, include_hidden: bool) -> dict[str, Any] | N
         "expected_output": item.expected_output,
         "is_sample": item.is_sample,
         "weight": item.weight,
+        "explanation_markdown": display_text(item.explanation_markdown),
     }
     if include_hidden:
         result.update({"confirmed": item.confirmed, "note": display_text(item.note)})

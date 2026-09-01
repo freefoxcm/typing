@@ -78,6 +78,7 @@ class ProgrammingCaseWrite(BaseModel):
     weight: int = Field(default=0, ge=0, le=10000)
     confirmed: bool = False
     note: str = Field(default="", max_length=1000)
+    explanation_markdown: str = Field(default="", max_length=10000)
 
 
 class ProgrammingWrite(BaseModel):

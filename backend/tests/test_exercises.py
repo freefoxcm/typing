@@ -917,8 +917,8 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
                 "input_markdown": "两个整数", "output_markdown": "一个整数", "constraints_markdown": "均为正整数",
                 "starter_code": "", "reference_solution": "a,b=map(int,input().split());print(a+b)", "time_limit_ms": 1000, "memory_limit_mb": 128,
                 "cases": [
-                    {"input_data": "1 2\n", "expected_output": "3\n", "is_sample": True, "weight": 0, "confirmed": False, "note": ""},
-                    {"input_data": "10 20\n", "expected_output": "30\n", "is_sample": False, "weight": 25, "confirmed": True, "note": ""},
+                    {"input_data": "1 2\n", "expected_output": "3\n", "is_sample": True, "weight": 0, "confirmed": False, "note": "", "explanation_markdown": "将 $1+2$ 相加。"},
+                    {"input_data": "10 20\n", "expected_output": "30\n", "is_sample": False, "weight": 25, "confirmed": True, "note": "", "explanation_markdown": "不得公开"},
                 ],
             },
         })
@@ -929,6 +929,7 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
         program = session["items"][0]["question"]["programming"]
         assert program["reference_solution"] == ""
         assert all(case["is_sample"] for case in program["cases"])
+        assert program["cases"][0]["explanation_markdown"] == "将 $1+2$ 相加。"
         item = session["items"][0]
         sample_run = client.post(f"/api/exercises/sessions/{session['id']}/sample-runs", json={
             "session_item_id": item["id"],
@@ -957,6 +958,7 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
         assert result["score"] == 25
         hidden_result = next(case for case in result["items"][0]["question"]["programming"]["cases"] if not case["is_sample"])
         assert "input_data" not in hidden_result and "expected_output" not in hidden_result
+        assert "explanation_markdown" not in hidden_result
         assert result["items"][0]["answer"]["details"] == {"cases": [{"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 25}], "passed": 1, "total": 1}
 
 
