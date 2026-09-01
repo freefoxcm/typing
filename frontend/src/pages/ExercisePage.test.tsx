@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api'
 import type { ExerciseSession } from '../types'
@@ -8,6 +8,16 @@ vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return { ...actual, api: vi.fn() }
 })
+
+vi.mock('../components/PythonCodeEditor', () => ({
+  PythonCodeEditor: ({ value, disabled, diagnostics, onChange, onBlur }: {
+    value: string
+    disabled: boolean
+    diagnostics: unknown[]
+    onChange: (value: string) => void
+    onBlur: () => void
+  }) => <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />,
+}))
 
 const mockedApi = vi.mocked(api)
 const activeSession: ExerciseSession = {
@@ -54,6 +64,60 @@ describe('ExercisePage', () => {
       '/api/exercises/sessions/7/answers/71',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ selected_option_ids: [32], bool_answer: null, blank_answers: [], code: '' }) }),
     ))
+  })
+
+  it('uses the compact save state without showing a saved-answer banner', async () => {
+    let finishSave: () => void = () => undefined
+    const pendingSave = new Promise<{ ok: boolean }>((resolve) => { finishSave = () => resolve({ ok: true }) })
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? activeSession : await pendingSave)
+    renderPage()
+    const option = await screen.findByRole('radio', { name: /input/ })
+    expect(screen.getByText('所有答案已保存')).toBeInTheDocument()
+    fireEvent.click(option)
+    expect(await screen.findByText('正在保存…')).toBeInTheDocument()
+    expect(screen.queryByText(/^答案已保存$/)).not.toBeInTheDocument()
+    await act(async () => finishSave())
+    await waitFor(() => expect(screen.getByText('所有答案已保存')).toBeInTheDocument())
+  })
+
+  it('waits for every active answer request before reporting all answers saved', async () => {
+    let finishFirst: () => void = () => undefined
+    let finishSecond: () => void = () => undefined
+    const firstSave = new Promise<{ ok: boolean }>((resolve) => { finishFirst = () => resolve({ ok: true }) })
+    const secondSave = new Promise<{ ok: boolean }>((resolve) => { finishSecond = () => resolve({ ok: true }) })
+    let saveRequest = 0
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return activeSession
+      saveRequest += 1
+      return await (saveRequest === 1 ? firstSave : secondSave)
+    })
+    renderPage()
+    const printOption = await screen.findByRole('radio', { name: /print/ })
+    const inputOption = screen.getByRole('radio', { name: /input/ })
+    fireEvent.click(printOption)
+    fireEvent.click(inputOption)
+    await waitFor(() => expect(saveRequest).toBe(2))
+    await act(async () => finishFirst())
+    expect(screen.getByText('正在保存…')).toBeInTheDocument()
+    await act(async () => finishSecond())
+    await waitFor(() => expect(screen.getByText('所有答案已保存')).toBeInTheDocument())
+  })
+
+  it('shows a persistent compact error state when saving an answer fails', async () => {
+    let failSave: () => void = () => undefined
+    const failedSave = new Promise<never>((_, reject) => { failSave = () => reject(new Error('网络连接中断')) })
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return activeSession
+      if (path === '/api/exercises/sessions/7/answers/71') return await failedSave
+      return { ok: true }
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('radio', { name: /input/ }))
+    expect(await screen.findByText('正在保存…')).toBeInTheDocument()
+    failSave()
+    expect(await screen.findByText('保存失败，请重试')).toBeInTheDocument()
+    expect(screen.getByText('网络连接中断')).toBeInTheDocument()
+    expect(screen.queryByText(/^答案已保存$/)).not.toBeInTheDocument()
   })
 
   it('renders a stem illustration independently from the complete source screenshot', async () => {
@@ -151,6 +215,96 @@ describe('ExercisePage', () => {
     ))
     fireEvent.change(editor, { target: { value: '' } })
     expect(editor).toHaveValue('')
+  })
+
+  it('debounces Python syntax checks and shows the latest diagnostic', async () => {
+    const programming = makeProgrammingSession()
+    const checkedCodes: string[] = []
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/syntax-check') {
+        const code = JSON.parse(String(options?.body)).code
+        checkedCodes.push(code)
+        return {
+          valid: false,
+          diagnostics: [{ severity: 'error', code: 'SyntaxError', message: '此处缺少冒号（:）', python_message: "expected ':'", line: 1, column: 8, end_line: 1, end_column: 9 }],
+        }
+      }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'if True:' } })
+    fireEvent.change(editor, { target: { value: 'if True' } })
+    expect(screen.getByText('正在检查语法…')).toBeInTheDocument()
+    await waitFor(() => expect(checkedCodes).toEqual(['if True']), { timeout: 2000 })
+    expect(await screen.findByText(/第 1 行，第 8 列：此处缺少冒号/)).toBeInTheDocument()
+    expect(screen.getByText("Python：expected ':'")).toBeInTheDocument()
+    expect(editor).toHaveAttribute('data-diagnostic-count', '1')
+  })
+
+  it('shows a valid syntax state and keeps syntax service failures local to the editor', async () => {
+    const programming = makeProgrammingSession()
+    programming.items[0].question.programming!.starter_code = 'print(1)'
+    let failSyntax = false
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/syntax-check') {
+        if (failSyntax) throw new Error('syntax service offline')
+        return { valid: true, diagnostics: [] }
+      }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    expect(await screen.findByText('未发现语法错误', {}, { timeout: 2000 })).toBeInTheDocument()
+    failSyntax = true
+    fireEvent.change(editor, { target: { value: 'print(2)' } })
+    expect(await screen.findByText(/语法检查暂时不可用/, {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(screen.queryByText('syntax service offline')).not.toBeInTheDocument()
+  })
+
+  it('ignores an older syntax response after the code changes again', async () => {
+    const programming = makeProgrammingSession()
+    programming.items[0].question.programming!.starter_code = ''
+    let resolveFirst: (value: unknown) => void = () => undefined
+    let resolveSecond: (value: unknown) => void = () => undefined
+    const first = new Promise((resolve) => { resolveFirst = resolve })
+    const second = new Promise((resolve) => { resolveSecond = resolve })
+    const checkedCodes: string[] = []
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/exercises/sessions/7') return programming
+      if (path === '/api/exercises/sessions/7/syntax-check') {
+        checkedCodes.push(JSON.parse(String(options?.body)).code)
+        return await (checkedCodes.length === 1 ? first : second)
+      }
+      return { ok: true }
+    })
+    renderPage()
+    const editor = await screen.findByLabelText('Python 3.13 代码')
+    fireEvent.change(editor, { target: { value: 'if True' } })
+    await waitFor(() => expect(checkedCodes).toEqual(['if True']), { timeout: 2000 })
+    fireEvent.change(editor, { target: { value: 'print(1)' } })
+    await waitFor(() => expect(checkedCodes).toEqual(['if True', 'print(1)']), { timeout: 2000 })
+    await act(async () => resolveSecond({ valid: true, diagnostics: [] }))
+    expect(await screen.findByText('未发现语法错误')).toBeInTheDocument()
+    await act(async () => resolveFirst({
+      valid: false,
+      diagnostics: [{ severity: 'error', code: 'SyntaxError', message: '旧错误', python_message: 'old error', line: 1, column: 1, end_line: 1, end_column: 2 }],
+    }))
+    expect(screen.getByText('未发现语法错误')).toBeInTheDocument()
+    expect(screen.queryByText(/旧错误/)).not.toBeInTheDocument()
+  })
+
+  it('renders completed programming answers read-only without requesting a syntax check', async () => {
+    const programming = makeProgrammingSession()
+    programming.status = 'completed'
+    programming.score = 25
+    programming.items[0].answer = { ...programming.items[0].answer, code: 'print(1)', status: 'correct', awarded_points: 25, details: { passed: 1, total: 1 } }
+    mockedApi.mockResolvedValue(programming)
+    renderPage()
+    expect(await screen.findByLabelText('Python 3.13 代码')).toBeDisabled()
+    expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/syntax-check')).toHaveLength(0)
   })
 
   it('flushes a programming draft before saving and exiting', async () => {

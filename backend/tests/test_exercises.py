@@ -705,6 +705,101 @@ def test_random_session_validates_availability(tmp_path):
         assert len(valid.json()["items"]) == 2
 
 
+def test_python_syntax_check_parses_without_executing_and_returns_diagnostics(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client); create_child(client)
+        question_set = client.post("/api/admin/question-sets", json={"title": "语法练习", "description": ""}).json()
+        question = client.post(f"/api/admin/question-sets/{question_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "编写程序。", "explanation_markdown": "",
+            "points": 10, "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [],
+            "programming": {
+                "input_markdown": "无", "output_markdown": "无", "constraints_markdown": "", "starter_code": "", "reference_solution": "print(1)",
+                "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [
+                    {"input_data": "", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": False, "note": ""},
+                    {"input_data": "", "expected_output": "1\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""},
+                ],
+            },
+        })
+        assert question.status_code == 201
+        assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
+        child_login(client)
+        session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [question_set["id"]], "counts": {}}).json()
+        item_id = session["items"][0]["id"]
+        path = f"/api/exercises/sessions/{session['id']}/syntax-check"
+
+        marker = tmp_path / "syntax-check-must-not-run"
+        valid = client.post(path, json={"session_item_id": item_id, "code": f'名字 = "小宇"\nopen(r"{marker}", "w").write(名字)'})
+        assert valid.status_code == 200
+        assert valid.json() == {"valid": True, "diagnostics": []}
+        assert not marker.exists()
+        assert client.post(path, json={"session_item_id": item_id, "code": ""}).json()["valid"] is True
+
+        missing_colon = client.post(path, json={"session_item_id": item_id, "code": "if True\n    print(1)"})
+        assert missing_colon.status_code == 200
+        diagnostic = missing_colon.json()["diagnostics"][0]
+        assert diagnostic["code"] == "SyntaxError"
+        assert diagnostic["message"] == "此处缺少冒号（:）"
+        assert diagnostic["line"] == 1 and diagnostic["column"] > 0
+        assert diagnostic["end_line"] >= diagnostic["line"] and diagnostic["end_column"] > diagnostic["column"]
+
+        indentation = client.post(path, json={"session_item_id": item_id, "code": "if True:\nprint(1)"}).json()["diagnostics"][0]
+        assert indentation["code"] == "IndentationError"
+        assert "缩进" in indentation["message"]
+        tab_error = client.post(path, json={"session_item_id": item_id, "code": "if True:\n\tprint(1)\n        print(2)"}).json()["diagnostics"][0]
+        assert tab_error["code"] == "TabError"
+        assert "Tab 和空格" in tab_error["message"]
+        unclosed = client.post(path, json={"session_item_id": item_id, "code": "print((1 + 2)"}).json()["diagnostics"][0]
+        assert "闭合" in unclosed["message"]
+        assert client.post(path, json={"session_item_id": item_id, "code": "x" * 100001}).status_code == 422
+
+
+def test_python_syntax_check_enforces_session_ownership_status_and_question_type(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client); create_child(client)
+        objective_set_id, _, _ = create_objective_set(client)
+        programming_set = client.post("/api/admin/question-sets", json={"title": "受限语法练习", "description": ""}).json()
+        programming = client.post(f"/api/admin/question-sets/{programming_set['id']}/questions", json={
+            "type": "programming", "stem_markdown": "输出 1。", "explanation_markdown": "", "points": 10,
+            "sort_order": 0, "reviewed": True, "correct_bool": None, "show_source_crop": False, "options": [],
+            "programming": {
+                "input_markdown": "无", "output_markdown": "1", "constraints_markdown": "", "starter_code": "", "reference_solution": "print(1)",
+                "time_limit_ms": 1000, "memory_limit_mb": 128,
+                "cases": [
+                    {"input_data": "", "expected_output": "1\n", "is_sample": True, "weight": 0, "confirmed": False, "note": ""},
+                    {"input_data": "", "expected_output": "1\n", "is_sample": False, "weight": 10, "confirmed": True, "note": ""},
+                ],
+            },
+        })
+        assert programming.status_code == 201
+        assert client.post(f"/api/admin/question-sets/{programming_set['id']}/publish").status_code == 200
+        child_login(client)
+        program_session = client.post("/api/exercises/sessions", json={
+            "mode": "random", "question_set_ids": [objective_set_id, programming_set["id"]],
+            "counts": {"single_choice": 1, "programming": 1},
+        }).json()
+        program_item = next(item for item in program_session["items"] if item["question"]["type"] == "programming")
+        objective_item = next(item for item in program_session["items"] if item["question"]["type"] == "single_choice")
+        syntax_payload = {"session_item_id": program_item["id"], "code": "print(1)"}
+
+        wrong_type = client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json={
+            "session_item_id": objective_item["id"], "code": "print(1)",
+        })
+        assert wrong_type.status_code == 404
+
+        client.post("/api/auth/logout")
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 401
+        admin_login(client)
+        assert client.post("/api/admin/children", json={"name": "小明", "pin": "5678", "active": True}).status_code == 201
+        client.post("/api/auth/logout")
+        assert client.post("/api/auth/child/login", json={"name": "小明", "pin": "5678"}).status_code == 200
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 404
+
+        client.post("/api/auth/logout"); child_login(client)
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/abandon").status_code == 200
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 409
+
+
 def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
     with make_client(tmp_path) as client:
         admin_login(client); create_child(client)
