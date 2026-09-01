@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FocusEvent } from 'react'
-import { Braces, LoaderCircle, Play, Search, ShieldCheck, Sparkles } from 'lucide-react'
+import { Braces, LoaderCircle, Play, Search } from 'lucide-react'
 import {
   acceptCompletion,
   autocompletion,
@@ -463,6 +463,7 @@ export const pythonEditorKeyBindings: readonly KeyBinding[] = [
   { key: 'Tab', run: indentMore, shift: indentLess },
   { key: 'Enter', run: acceptCompletion },
 ]
+export const PYTHON_SYNTAX_CHECK_SHORTCUT = 'Mod-Shift-Enter'
 export const pythonEditorKeymap = Prec.highest(keymap.of(pythonEditorKeyBindings))
 
 const editorTheme = EditorView.theme({
@@ -610,11 +611,17 @@ export function PythonCodeEditor({
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
   const onFormatRef = useRef(onFormat)
+  const onSyntaxCheckRef = useRef(onSyntaxCheck)
+  const syntaxCheckDisabledRef = useRef(syntaxCheckDisabled)
+  const syntaxStatusRef = useRef(syntaxStatus)
   const sessionIdRef = useRef(sessionId)
   const sessionItemIdRef = useRef(sessionItemId)
   onChangeRef.current = onChange
   onBlurRef.current = onBlur
   onFormatRef.current = onFormat
+  onSyntaxCheckRef.current = onSyntaxCheck
+  syntaxCheckDisabledRef.current = syntaxCheckDisabled
+  syntaxStatusRef.current = syntaxStatus
   sessionIdRef.current = sessionId
   sessionItemIdRef.current = sessionItemId
 
@@ -649,6 +656,11 @@ export function PythonCodeEditor({
         Prec.highest(keymap.of([{ key: 'Shift-Alt-f', run: () => {
           if (!onFormatRef.current) return false
           onFormatRef.current()
+          return true
+        } }, { key: PYTHON_SYNTAX_CHECK_SHORTCUT, run: () => {
+          if (!onSyntaxCheckRef.current) return false
+          if (syntaxCheckDisabledRef.current || syntaxStatusRef.current === 'checking') return true
+          onSyntaxCheckRef.current()
           return true
         } }])),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap]),
@@ -712,11 +724,11 @@ export function PythonCodeEditor({
       <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
       {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
         {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}><Play /></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
-        {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法'}</span></span>}
+        {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法（Ctrl/Cmd+Shift+Enter）'}</span></span>}
         {onFormat && <span className="python-tool-wrap" tabIndex={formatDisabled || formatStatus === 'formatting' ? 0 : undefined}><button type="button" className="python-tool-button format" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button><span className="python-tool-tip" role="tooltip">{formatStatus === 'formatting' ? '正在格式化代码' : formatDisabled ? '当前不能格式化代码' : '立即格式化代码（Shift+Alt+F）'}</span></span>}
         {(onAutoSyntaxChange || onAutoFormatChange) && <span className="python-toolbar-separator" aria-hidden="true" />}
-        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><ShieldCheck /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动语法：{autoSyntaxEnabled ? '已开启，停止输入后自动检查' : '已关闭，点击开启'}</span></span>}
-        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Sparkles /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动格式化：{autoFormatEnabled ? '已开启，失焦或运行前自动格式化' : '已关闭，点击开启'}</span></span>}
+        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><Search /><span className="python-tool-auto-badge" aria-hidden="true">A</span></button><span className="python-tool-tip" role="tooltip">自动语法：{autoSyntaxEnabled ? '已开启，停止输入后自动检查' : '已关闭，点击开启'}</span></span>}
+        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Braces /><span className="python-tool-auto-badge" aria-hidden="true">A</span></button><span className="python-tool-tip" role="tooltip">自动格式化：{autoFormatEnabled ? '已开启，失焦或运行前自动格式化' : '已关闭，点击开启'}</span></span>}
       </div> : <span className="python-ide-runtime">Python 3.13</span>}
     </header>
     <div ref={hostRef} className="python-code-editor" />

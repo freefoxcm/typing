@@ -180,20 +180,22 @@
 .python-documentation.original{max-height:min(420px,70vh);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
 .python-type-details[open] .python-original-documentation{max-height:min(300px,48vh);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
 .python-original-documentation>pre,.python-markdown pre{overflow-x:auto;overflow-y:hidden}
-.python-ide-tabbar{height:43px;min-height:43px;gap:8px;flex-wrap:nowrap;overflow:visible}
+.python-ide-tabbar{height:43px;min-height:43px;gap:8px;flex-wrap:nowrap;overflow:visible;border-radius:10px 10px 0 0}
 .python-ide-shell{overflow:visible}
-.python-file-tab{flex:0 0 auto}
+.python-file-tab{flex:0 0 auto;border-radius:10px 0 0 0}
+.python-ide-statusbar{border-radius:0 0 10px 10px}
 .python-editor-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;height:100%;padding:5px 8px;overflow:visible}
 .python-tool-wrap{position:relative;display:inline-grid;flex:0 0 auto;place-items:center}
 .python-tool-button{position:relative;display:grid;place-items:center;width:32px;height:32px;min-height:32px;margin:0;padding:0;border:1px solid #4b5263;border-radius:7px;background:#282c34;color:#abb2bf;box-shadow:none;transition:background .15s,border-color .15s,color .15s,transform .15s}
 .python-tool-button svg{width:16px;height:16px}.python-tool-button .spin{animation:spin .9s linear infinite}
 .python-tool-button:hover:not(:disabled){transform:none;color:#fff}.python-tool-button:focus-visible{outline:2px solid #528bff;outline-offset:2px}
-.python-tool-button.run{border-color:#3a7655;color:#7fcca4}.python-tool-button.run:hover:not(:disabled){background:#28543d;border-color:#7fcca4}
-.python-tool-button.syntax{border-color:#356b91;color:#61afef}.python-tool-button.syntax:hover:not(:disabled){background:#294b68;border-color:#61afef}
-.python-tool-button.format{border-color:#75508a;color:#c678dd}.python-tool-button.format:hover:not(:disabled){background:#51375e;border-color:#c678dd}
-.python-tool-button.auto-syntax.active{border-color:#56b6c2;background:#28535a;color:#8de2eb}.python-tool-button.auto-format.active{border-color:#d19a66;background:#604a34;color:#f0bd88}
-.python-tool-button.auto-syntax:hover:not(:disabled){border-color:#56b6c2;color:#8de2eb}.python-tool-button.auto-format:hover:not(:disabled){border-color:#d19a66;color:#f0bd88}
-.python-tool-state-dot{position:absolute;right:3px;bottom:3px;width:5px;height:5px;border-radius:50%;background:#69717e;box-shadow:0 0 0 1px #21252b}.python-tool-button.active .python-tool-state-dot{background:#fff}
+.python-tool-button.run{border-color:#3a7655;background:#28543d;color:#9bdfb8}.python-tool-button.run:hover:not(:disabled){background:#32684b;border-color:#9bdfb8}
+.python-tool-button.syntax{border-color:#477da5;background:#294b68;color:#8ac9f5}.python-tool-button.syntax:hover:not(:disabled){background:#345e80;border-color:#8ac9f5}
+.python-tool-button.format{border-color:#805b94;background:#51375e;color:#d59ae8}.python-tool-button.format:hover:not(:disabled){background:#674577;border-color:#d59ae8}
+.python-tool-button.auto-syntax{border-color:#477da5;color:#8ac9f5}.python-tool-button.auto-format{border-color:#805b94;color:#d59ae8}
+.python-tool-button.auto-syntax.active{background:#294b68;color:#a9dafb}.python-tool-button.auto-format.active{background:#51375e;color:#e3b4f1}
+.python-tool-button.auto-syntax:hover:not(:disabled){background:#243b4d;border-color:#8ac9f5}.python-tool-button.auto-format:hover:not(:disabled){background:#3f3147;border-color:#d59ae8}
+.python-tool-auto-badge{position:absolute;right:2px;bottom:2px;display:grid;place-items:center;min-width:10px;height:10px;padding:0 2px;border:1px solid #21252b;border-radius:4px;background:#69717e;color:#f4f6f8;font-family:'DM Mono',monospace;font-size:7px;font-weight:800;line-height:1}.python-tool-button.active .python-tool-auto-badge{background:#fff;color:#21252b}
 .python-toolbar-separator{width:1px;height:22px;margin:0 2px;background:#4b5263}
 .python-tool-tip{position:absolute;z-index:40;top:calc(100% + 8px);right:0;width:max-content;max-width:250px;padding:7px 9px;border:1px solid #4b5263;border-radius:7px;background:#171a1f;color:#e4e8ee;font-size:.65rem;font-weight:600;line-height:1.4;white-space:normal;box-shadow:0 8px 22px rgba(0,0,0,.38);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-3px);transition:opacity .12s,transform .12s,visibility .12s}.python-tool-wrap:hover .python-tool-tip,.python-tool-wrap:focus-within .python-tool-tip{opacity:1;visibility:visible;transform:none}
 .python-format-state{font-size:.62rem;white-space:nowrap}.python-format-state.formatting{color:#e5c07b}.python-format-state.formatted,.python-format-state.unchanged{color:#7fcca4}.python-format-state.error{color:#e06c75}
