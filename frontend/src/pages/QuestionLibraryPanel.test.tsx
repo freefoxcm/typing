@@ -276,6 +276,38 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.queryByRole('group', { name: '题套乙复核状态过滤' })).not.toBeInTheDocument()
   })
 
+  it('opens published questions in a read-only viewer and navigates within the set', async () => {
+    const publishedQuestions = [
+      { id: 91, question_set_id: 9, type: 'true_false' as const, stem_markdown: '已发布题目一', explanation_markdown: '解析一', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 44, show_source_crop: true, options: [], blanks: [], programming: null },
+      { id: 92, question_set_id: 9, type: 'true_false' as const, stem_markdown: '已发布题目二', explanation_markdown: '解析二', points: 2, sort_order: 1, reviewed: true, correct_bool: false, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
+    ]
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '只读发布题套', description: '', status: 'published', question_count: 2, total_points: 4, counts: { true_false: 2 }, questions: publishedQuestions }]
+      if (path === '/api/admin/question-imports' || path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 只读发布题套' }))
+    const viewButtons = screen.getAllByRole('button', { name: '查看' })
+    expect(viewButtons).toHaveLength(2)
+    fireEvent.click(viewButtons[0])
+
+    const viewer = screen.getByRole('form', { name: '题目查看器' })
+    expect(viewer).toHaveAttribute('aria-readonly', 'true')
+    expect(within(viewer).getByText('已发布题目仅供查看，如需修改请先撤回题套')).toBeInTheDocument()
+    expect(within(viewer).queryByRole('button', { name: /保存/ })).not.toBeInTheDocument()
+    expect(within(viewer).getByText('只读查看')).toBeInTheDocument()
+    const stem = within(viewer).getByLabelText('题面')
+    expect(stem).toHaveValue('已发布题目一')
+    fireEvent.change(stem, { target: { value: '不应修改' } })
+    expect(stem).toHaveValue('已发布题目一')
+
+    fireEvent.click(within(viewer).getByRole('button', { name: /下一题/ }))
+    expect(within(viewer).getByLabelText('题面')).toHaveValue('已发布题目二')
+    expect(mockedApi.mock.calls.some(([, options]) => options?.method === 'PUT' || options?.method === 'POST' || options?.method === 'DELETE')).toBe(false)
+  })
+
   it('navigates only inside the active set and keeps the editor open after saving a draft', async () => {
     const firstSetQuestions = [
       { id: 71, question_set_id: 7, type: 'true_false' as const, stem_markdown: '第一题', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: 3, show_source_crop: false, options: [], blanks: [], programming: null },

@@ -10,6 +10,27 @@ type SessionCreatePayload = {
   counts: Partial<Record<ExerciseQuestionType, number>>
 }
 
+const QUESTION_TYPES: ExerciseQuestionType[] = ['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'programming']
+
+export const STANDARD_RANDOM_COUNTS: Record<ExerciseQuestionType, number> = {
+  single_choice: 15,
+  multiple_choice: 0,
+  true_false: 10,
+  fill_blank: 0,
+  programming: 2,
+}
+
+export function getDefaultRandomCounts(sets: QuestionSetSummary[]): Record<ExerciseQuestionType, number> {
+  const available = sets.reduce<Record<ExerciseQuestionType, number>>((totals, item) => {
+    for (const type of QUESTION_TYPES) totals[type] += item.counts[type] ?? 0
+    return totals
+  }, { single_choice: 0, multiple_choice: 0, true_false: 0, fill_blank: 0, programming: 0 })
+  return QUESTION_TYPES.reduce<Record<ExerciseQuestionType, number>>((result, type) => {
+    result[type] = Math.min(STANDARD_RANDOM_COUNTS[type], available[type])
+    return result
+  }, { single_choice: 0, multiple_choice: 0, true_false: 0, fill_blank: 0, programming: 0 })
+}
+
 export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSessionsChange = () => undefined }: {
   sets: QuestionSetSummary[]
   activeSessions?: ExerciseSessionSummary[]
@@ -17,7 +38,7 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
 }) {
   const navigate = useNavigate()
   const [selected, setSelected] = useState<number[]>(() => sets.map((item) => item.id))
-  const [counts, setCounts] = useState<Record<ExerciseQuestionType, number>>({ single_choice: 5, multiple_choice: 0, true_false: 5, fill_blank: 0, programming: 0 })
+  const [counts, setCounts] = useState<Record<ExerciseQuestionType, number>>(() => getDefaultRandomCounts(sets))
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
   const [randomOpen, setRandomOpen] = useState(false)
@@ -40,6 +61,7 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
   useEffect(() => {
     if (selectionInitializedRef.current || !sets.length) return
     setSelected(sets.map((item) => item.id))
+    setCounts(getDefaultRandomCounts(sets))
     selectionInitializedRef.current = true
   }, [sets])
 
@@ -101,7 +123,7 @@ export function ExerciseHomeSection({ sets, activeSessions = [], onActiveSession
     {randomOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setRandomOpen(false); window.setTimeout(() => randomTriggerRef.current?.focus()) } }}><div ref={randomDialogRef} className="random-practice-modal card" role="dialog" aria-modal="true" aria-labelledby="random-practice-title">
       <header><div><p className="eyebrow">个性化练习</p><h2 id="random-practice-title">随机组题</h2><p>选择题套，再决定每种题型抽取多少道。</p></div><button className="ghost" aria-label="关闭随机组题" onClick={() => { setRandomOpen(false); window.setTimeout(() => randomTriggerRef.current?.focus()) }}><X /></button></header>
       <section><h3>选择题套</h3><div className="random-set-options">{sets.map((item) => <label className="check-label" key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggle(item.id)} />{item.title}</label>)}</div></section>
-      <section><h3>设置题量</h3><div className="random-count-grid">{([
+      <section><h3>设置题量</h3><p className="random-count-hint">默认按标准套题设置：单选 15、判断 10、编程 2；题库不足时按可用题量取值。</p><div className="random-count-grid">{([
         ['single_choice', '单选'], ['multiple_choice', '多选'], ['true_false', '判断'], ['fill_blank', '填空'], ['programming', '编程'],
       ] as [ExerciseQuestionType, string][]).map(([type, label]) => <label key={type}>{type === 'programming' && <Code2 />}{label}<span>可用 {availableByType[type]}</span><input aria-label={`${label}题数量`} type="number" min="0" max={availableByType[type]} value={counts[type]} onChange={(e) => setCounts({ ...counts, [type]: Math.max(0, Number(e.target.value)) })} /></label>)}</div></section>
       {randomError && <p className="random-validation" role="alert">{randomError}</p>}

@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, Play, Save, Send, XCircle } from 'lucide-react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertCircle, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, LoaderCircle, Play, Save, Send, WifiOff, XCircle } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, jsonBody } from '../api'
+import type { PythonSyntaxDiagnostic } from '../components/PythonCodeEditor'
 import type { ExerciseSession, ExerciseSessionItem } from '../types'
 
 type SampleResult = { status: string; cases?: { id?: number; status: string; duration_ms: number; stdout?: string; stderr?: string }[] }
 type TextEdit = { value: string; selectionStart: number; selectionEnd: number }
+type SyntaxCheckResult = { valid: boolean; diagnostics: PythonSyntaxDiagnostic[] }
+type SyntaxCheckState = { status: 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable'; diagnostics: PythonSyntaxDiagnostic[] }
+
+const PythonCodeEditor = lazy(() => import('../components/PythonCodeEditor').then((module) => ({ default: module.PythonCodeEditor })))
 
 export function pythonIndentEdit(value: string, selectionStart: number, selectionEnd: number, key: 'Enter' | 'Tab', shiftKey = false): TextEdit {
   if (key === 'Enter') {
@@ -53,12 +58,18 @@ export function ExercisePage() {
   const [submitting, setSubmitting] = useState(false)
   const [sampleResults, setSampleResults] = useState<Record<number, SampleResult>>({})
   const [codeDrafts, setCodeDrafts] = useState<Record<number, string>>({})
+  const [syntaxChecks, setSyntaxChecks] = useState<Record<number, SyntaxCheckState>>({})
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const sessionRef = useRef<ExerciseSession | null>(null)
   const initializedSessionRef = useRef<string | undefined>(undefined)
   const pendingCodesRef = useRef(new Map<number, string>())
   const codeTimersRef = useRef(new Map<number, number>())
   const codeSavesRef = useRef(new Map<number, { code: string; promise: Promise<boolean> }>())
+  const activeAnswerSavesRef = useRef(0)
+  const syntaxTimersRef = useRef(new Map<number, number>())
+  const syntaxControllersRef = useRef(new Map<number, AbortController>())
+  const syntaxVersionsRef = useRef(new Map<number, number>())
+  const initializedSyntaxRef = useRef(new Set<number>())
 
   const load = useCallback(() => api<ExerciseSession>(`/api/exercises/sessions/${sessionId}`).then((data) => {
     sessionRef.current = data
@@ -95,6 +106,8 @@ export function ExercisePage() {
   }, [])
   useEffect(() => () => {
     for (const timer of codeTimersRef.current.values()) window.clearTimeout(timer)
+    for (const timer of syntaxTimersRef.current.values()) window.clearTimeout(timer)
+    for (const controller of syntaxControllersRef.current.values()) controller.abort()
   }, [])
   const item = session?.items[index]
   const unanswered = useMemo(() => session?.items.filter((candidate) => candidate.answer.status === 'unanswered').length ?? 0, [session])
@@ -105,14 +118,25 @@ export function ExercisePage() {
     sessionRef.current = next
     return next
   })
-  const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>, showMessage = true) => {
+  const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>) => {
     const next = { ...target.answer, ...patch }
     updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || (next.blank_answers || []).some((value) => value.trim()) || next.code.trim() ? 'answered' : 'unanswered' })
+    activeAnswerSavesRef.current += 1
+    setSaveState('saving')
+    setError('')
     try {
       await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, blank_answers: next.blank_answers || [], code: next.code }) })
-      if (showMessage) { setMessage('答案已保存'); window.setTimeout(() => setMessage(''), 1000) }
       return true
-    } catch (e) { setError(e instanceof Error ? e.message : '答案保存失败'); return false }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '答案保存失败')
+      setSaveState('error')
+      return false
+    } finally {
+      activeAnswerSavesRef.current = Math.max(0, activeAnswerSavesRef.current - 1)
+      if (activeAnswerSavesRef.current === 0 && pendingCodesRef.current.size === 0) {
+        setSaveState((current) => current === 'error' ? 'error' : 'saved')
+      }
+    }
   }
   const persistCode = async (itemId: number, code: string): Promise<boolean> => {
     const timer = codeTimersRef.current.get(itemId)
@@ -129,12 +153,15 @@ export function ExercisePage() {
     const promise = (async () => {
       let saved = false
       try {
-        saved = await save(target, { code }, false)
+        saved = await save(target, { code })
       } catch (e) {
         setError(e instanceof Error ? e.message : '代码保存失败')
       }
       if (saved && pendingCodesRef.current.get(itemId) === code) pendingCodesRef.current.delete(itemId)
-      setSaveState(saved && pendingCodesRef.current.size === 0 ? 'saved' : saved ? 'saving' : 'error')
+      setSaveState((current) => {
+        if (!saved || current === 'error') return 'error'
+        return pendingCodesRef.current.size === 0 && activeAnswerSavesRef.current === 0 ? 'saved' : 'saving'
+      })
       return saved
     })()
     codeSavesRef.current.set(itemId, { code, promise })
@@ -151,6 +178,46 @@ export function ExercisePage() {
     if (currentTimer) window.clearTimeout(currentTimer)
     codeTimersRef.current.set(itemId, window.setTimeout(() => void persistCode(itemId, code), 600))
   }
+  const scheduleSyntaxCheck = (target: ExerciseSessionItem, code: string) => {
+    const itemId = target.id
+    const existingTimer = syntaxTimersRef.current.get(itemId)
+    if (existingTimer) window.clearTimeout(existingTimer)
+    syntaxTimersRef.current.delete(itemId)
+    syntaxControllersRef.current.get(itemId)?.abort()
+    syntaxControllersRef.current.delete(itemId)
+    const version = (syntaxVersionsRef.current.get(itemId) ?? 0) + 1
+    syntaxVersionsRef.current.set(itemId, version)
+    if (!code.trim()) {
+      setSyntaxChecks((current) => ({ ...current, [itemId]: { status: 'idle', diagnostics: [] } }))
+      return
+    }
+    setSyntaxChecks((current) => ({ ...current, [itemId]: { status: 'checking', diagnostics: [] } }))
+    syntaxTimersRef.current.set(itemId, window.setTimeout(async () => {
+      syntaxTimersRef.current.delete(itemId)
+      const controller = new AbortController()
+      syntaxControllersRef.current.set(itemId, controller)
+      try {
+        const result = await api<SyntaxCheckResult>(`/api/exercises/sessions/${sessionId}/syntax-check`, {
+          method: 'POST', signal: controller.signal, ...jsonBody({ session_item_id: itemId, code }),
+        })
+        if (syntaxVersionsRef.current.get(itemId) !== version) return
+        setSyntaxChecks((current) => ({
+          ...current,
+          [itemId]: { status: result.valid ? 'valid' : 'invalid', diagnostics: result.diagnostics ?? [] },
+        }))
+      } catch (error) {
+        if (controller.signal.aborted || syntaxVersionsRef.current.get(itemId) !== version) return
+        setSyntaxChecks((current) => ({ ...current, [itemId]: { status: 'unavailable', diagnostics: [] } }))
+      } finally {
+        if (syntaxControllersRef.current.get(itemId) === controller) syntaxControllersRef.current.delete(itemId)
+      }
+    }, 700))
+  }
+  useEffect(() => {
+    if (!item || session?.status !== 'in_progress' || item.question.type !== 'programming' || initializedSyntaxRef.current.has(item.id)) return
+    initializedSyntaxRef.current.add(item.id)
+    scheduleSyntaxCheck(item, codeDrafts[item.id] ?? item.answer.code ?? item.question.programming?.starter_code ?? '')
+  }, [item?.id, session?.status])
   const flushPendingSaves = async () => {
     const pending = [...pendingCodesRef.current.entries()]
     if (!pending.length) return true
@@ -211,7 +278,17 @@ export function ExercisePage() {
     {abandoned && <div className="abandoned-banner"><XCircle /><div><strong>本次练习已放弃</strong><p>已保存的作答记录仍会保留，但不能继续修改、提交或查看正确答案。</p></div></div>}
     {editable && <div className={`exercise-save-state ${saveState}`} aria-live="polite"><Save />{saveState === 'saving' ? '正在保存…' : saveState === 'error' ? '保存失败，请重试' : '所有答案已保存'}</div>}
     {editable && unanswered === 0 && <p className="exercise-ready-submit">全部题目均已作答，尚未提交。检查无误后请提交整套练习。</p>}
-    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => <button className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''}`} onClick={() => void goToIndex(itemIndex)} key={candidate.id}>{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>)}</aside>
+    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => {
+      const resultClass = complete ? (candidate.answer.awarded_points === candidate.points ? 'result-correct' : 'result-incorrect') : ''
+      const resultLabel = complete ? (candidate.answer.awarded_points === candidate.points ? '回答正确' : '回答错误') : ''
+      return <button
+        className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''} ${resultClass}`}
+        aria-label={`第 ${itemIndex + 1} 题${resultLabel ? `：${resultLabel}` : ''}`}
+        title={resultLabel || undefined}
+        onClick={() => void goToIndex(itemIndex)}
+        key={candidate.id}
+      >{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>
+    })}</aside>
       <main className="exercise-question-card card"><div className="question-heading"><span>{questionTypeLabel(item.question.type)}</span><strong>{item.points} 分</strong><small>{item.question.question_set_title}</small></div>
         {item.question.type === 'fill_blank' ? <FillBlankStem item={item} complete={complete} disabled={!editable} onChange={(blank_answers) => void save(item, { blank_answers })} /> : <MarkdownText value={item.question.stem_markdown} />}
         {item.question.stem_image_asset_id && <img className="exercise-stem-image" src={`/api/question-assets/${item.question.stem_image_asset_id}`} alt="题目配图" />}
@@ -219,7 +296,7 @@ export function ExercisePage() {
         {item.question.type === 'single_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="radio" name={`question-${item.id}`} checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={() => void save(item, { selected_option_ids: [option.id!] })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'multiple_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="checkbox" checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={(e) => void save(item, { selected_option_ids: e.target.checked ? [...item.answer.selected_option_ids, option.id!] : item.answer.selected_option_ids.filter((id) => id !== option.id) })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
         {item.question.type === 'true_false' && <div className="judgment-options"><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === true ? 'selected' : ''} onClick={() => void save(item, { bool_answer: true })}><CheckCircle2 />正确</button><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === false ? 'selected' : ''} onClick={() => void save(item, { bool_answer: false })}><XCircle />错误</button></div>}
-        {item.question.type === 'programming' && item.question.programming && <ProgrammingAnswer item={item} complete={complete} sessionStatus={session.status} code={codeDrafts[item.id] ?? item.answer.code ?? item.question.programming.starter_code ?? ''} sampleResult={sampleResults[item.id]} onCodeChange={(code) => { setCodeDrafts((current) => ({ ...current, [item.id]: code })); updateLocal(item.id, { code, status: code.trim() ? 'answered' : 'unanswered' }); scheduleCodeSave(item.id, code) }} onSave={(code) => void persistCode(item.id, code)} onRun={() => void runSamples(item)} />}
+        {item.question.type === 'programming' && item.question.programming && <ProgrammingAnswer item={item} complete={complete} sessionStatus={session.status} code={codeDrafts[item.id] ?? item.answer.code ?? item.question.programming.starter_code ?? ''} sampleResult={sampleResults[item.id]} syntaxCheck={syntaxChecks[item.id] ?? { status: 'idle', diagnostics: [] }} onCodeChange={(code) => { setCodeDrafts((current) => ({ ...current, [item.id]: code })); updateLocal(item.id, { code, status: code.trim() ? 'answered' : 'unanswered' }); scheduleCodeSave(item.id, code); scheduleSyntaxCheck(item, code) }} onSave={(code) => void persistCode(item.id, code)} onRun={() => void runSamples(item)} />}
         {complete && <ResultPanel item={item} />}
         <footer className="exercise-question-footer"><button className="ghost" disabled={index === 0} onClick={() => void goToIndex(index - 1)}><ChevronLeft />上一题</button>{index < session.items.length - 1 ? <button className="primary" onClick={() => void goToIndex(index + 1)}>下一题<ChevronRight /></button> : editable && <button className="primary" disabled={submitting} onClick={() => void submit()}><Send />提交整套练习</button>}</footer>
       </main></div>
@@ -247,30 +324,29 @@ function FillBlankStem({ item, complete, disabled, onChange }: { item: ExerciseS
   })}</div>
 }
 
-function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, onCodeChange, onSave, onRun }: {
+function ProgrammingAnswer({ item, complete, sessionStatus, code, sampleResult, syntaxCheck, onCodeChange, onSave, onRun }: {
   item: ExerciseSessionItem
   complete: boolean
   sessionStatus: string
   code: string
   sampleResult?: SampleResult
+  syntaxCheck: SyntaxCheckState
   onCodeChange: (code: string) => void
   onSave: (code: string) => void
   onRun: () => void
 }) {
   const program = item.question.programming!
   const samples = program.cases.filter((sample) => sample.is_sample && (sample.input_data.trim() || sample.expected_output.trim()))
-  const applyIndent = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' && event.key !== 'Tab') return
-    event.preventDefault()
-    const target = event.currentTarget
-    const edit = pythonIndentEdit(code, target.selectionStart, target.selectionEnd, event.key, event.shiftKey)
-    onCodeChange(edit.value)
-    window.requestAnimationFrame(() => {
-      target.selectionStart = edit.selectionStart
-      target.selectionEnd = edit.selectionEnd
-    })
-  }
-  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div>{samples.length > 0 ? <section className="public-samples"><h3>公开样例</h3>{samples.map((sample, index) => <div className="public-sample" key={sample.id ?? index}><strong>样例 {index + 1}</strong><div><label>标准输入<pre>{sample.input_data || '（无输入）'}</pre></label><label>期望输出<pre>{sample.expected_output || '（无输出）'}</pre></label></div></div>)}</section> : <p className="notice">该题未配置有效的公开样例，请联系管理员补充。</p>}<label>Python 3.13 代码<textarea aria-label="Python 3.13 代码" className="code-editor" spellCheck={false} rows={16} value={code} disabled={complete || sessionStatus !== 'in_progress'} onKeyDown={applyIndent} onChange={(event) => onCodeChange(event.target.value)} onBlur={() => onSave(code)} /></label>{sessionStatus === 'in_progress' && <button className="ghost" disabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
+  return <div className="programming-answer"><div className="program-spec-grid"><section><h3>输入格式</h3><MarkdownText value={program.input_markdown} /></section><section><h3>输出格式</h3><MarkdownText value={program.output_markdown} /></section></div>{program.constraints_markdown && <section><h3>数据范围</h3><MarkdownText value={program.constraints_markdown} /></section>}<div className="program-limits"><span>{program.time_limit_ms} ms</span><span>{program.memory_limit_mb} MB</span></div>{samples.length > 0 ? <section className="public-samples"><h3>公开样例</h3>{samples.map((sample, index) => <div className="public-sample" key={sample.id ?? index}><strong>样例 {index + 1}</strong><div><label>标准输入<pre>{sample.input_data || '（无输入）'}</pre></label><label>期望输出<pre>{sample.expected_output || '（无输出）'}</pre></label></div></div>)}</section> : <p className="notice">该题未配置有效的公开样例，请联系管理员补充。</p>}<section className="python-answer-editor"><h3>Python 3.13 代码</h3><Suspense fallback={<div className="python-editor-loading">正在加载代码编辑器…</div>}><PythonCodeEditor value={code} disabled={complete || sessionStatus !== 'in_progress'} diagnostics={syntaxCheck.diagnostics} onChange={onCodeChange} onBlur={() => onSave(code)} /></Suspense>{sessionStatus === 'in_progress' && <SyntaxCheckStatus state={syntaxCheck} />}</section>{sessionStatus === 'in_progress' && <button className="ghost" disabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'} onClick={onRun}><Play />{sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}</button>}<SampleResults result={sampleResult} /></div>
+}
+
+function SyntaxCheckStatus({ state }: { state: SyntaxCheckState }) {
+  const diagnostic = state.diagnostics[0]
+  if (state.status === 'checking') return <div className="python-syntax-status checking" role="status" aria-live="polite"><LoaderCircle />正在检查语法…</div>
+  if (state.status === 'valid') return <div className="python-syntax-status valid" role="status" aria-live="polite"><CheckCircle2 />未发现语法错误</div>
+  if (state.status === 'invalid' && diagnostic) return <div className="python-syntax-status invalid" role="status" aria-live="polite"><AlertCircle /><div><strong>第 {diagnostic.line} 行，第 {diagnostic.column} 列：{diagnostic.message}</strong><small>Python：{diagnostic.python_message}</small></div></div>
+  if (state.status === 'unavailable') return <div className="python-syntax-status unavailable" role="status" aria-live="polite"><WifiOff />语法检查暂时不可用，可继续保存或运行样例</div>
+  return <div className="python-syntax-status idle" role="status"><Code2 />输入代码后自动检查语法</div>
 }
 
 function inlineMarkdown(text: string, prefix: string): React.ReactNode[] {

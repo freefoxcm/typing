@@ -27,6 +27,24 @@ describe('ExerciseHomeSection', () => {
     rerender(<MemoryRouter><ExerciseHomeSection sets={sets} /></MemoryRouter>)
     fireEvent.click(await screen.findByRole('button', { name: /随机组题/ }))
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Python 基础' })).toBeChecked())
+    expect(screen.getByLabelText('单选题数量')).toHaveValue(2)
+    expect(screen.getByLabelText('判断题数量')).toHaveValue(1)
+    expect(screen.getByLabelText('编程题数量')).toHaveValue(1)
+  })
+
+  it('uses the standard question set counts as random practice defaults', () => {
+    const standardSets: QuestionSetSummary[] = [{
+      ...sets[0], question_count: 43,
+      counts: { single_choice: 20, multiple_choice: 4, true_false: 12, fill_blank: 3, programming: 4 },
+    }]
+    render(<MemoryRouter><ExerciseHomeSection sets={standardSets} /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: /随机组题/ }))
+    expect(screen.getByLabelText('单选题数量')).toHaveValue(15)
+    expect(screen.getByLabelText('多选题数量')).toHaveValue(0)
+    expect(screen.getByLabelText('判断题数量')).toHaveValue(10)
+    expect(screen.getByLabelText('填空题数量')).toHaveValue(0)
+    expect(screen.getByLabelText('编程题数量')).toHaveValue(2)
+    expect(screen.getByText(/默认按标准套题设置/)).toBeInTheDocument()
   })
 
   it('opens random practice in a modal and validates available counts', async () => {

@@ -1,3 +1,4 @@
+import ast
 import json
 import random
 from datetime import datetime
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import Settings, get_settings
 from ..database import get_db
 from ..exercise_library import loads_json, question_set_dict, question_snapshot
-from ..exercise_schemas import AnswerWrite, SampleRunCreate, SessionCreate
+from ..exercise_schemas import AnswerWrite, SampleRunCreate, SessionCreate, SyntaxCheckCreate
 from ..judge_queue import enqueue, result as judge_result
 from ..models import (
     ExerciseAnswer,
@@ -26,6 +27,29 @@ from ..security import Principal, require_child
 
 
 router = APIRouter(prefix="/api/exercises", tags=["exercises"])
+
+
+def _syntax_error_message(message: str) -> str:
+    lowered = message.lower()
+    if "expected ':'" in lowered:
+        return "此处缺少冒号（:）"
+    if "was never closed" in lowered or "unmatched" in lowered:
+        return "括号没有正确闭合或配对"
+    if "unexpected indent" in lowered:
+        return "此处出现了意外缩进"
+    if "expected an indented block" in lowered:
+        return "这里需要一个缩进代码块"
+    if "unindent does not match" in lowered:
+        return "此处缩进与前面的代码块不一致"
+    if "inconsistent use of tabs and spaces" in lowered:
+        return "缩进混用了 Tab 和空格"
+    if "unterminated string literal" in lowered or "eol while scanning string literal" in lowered:
+        return "字符串没有正确结束"
+    if "invalid character" in lowered:
+        return "这里包含 Python 不支持的字符"
+    if "cannot assign to" in lowered:
+        return "等号左侧不是可以赋值的目标"
+    return "这里的 Python 语法不正确"
 
 
 def _published_sets_query():
@@ -315,6 +339,41 @@ def save_answer(session_id: int, item_id: int, payload: AnswerWrite, principal: 
             db.add(answer)
     db.commit()
     return {"ok": True, "status": status}
+
+
+@router.post("/sessions/{session_id}/syntax-check")
+def syntax_check(session_id: int, payload: SyntaxCheckCreate, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
+    session = _owned_session(db, session_id, principal.actor_id)
+    if session.status != "in_progress":
+        raise HTTPException(status_code=409, detail="已提交或已放弃的练习不能检查语法")
+    item = next((candidate for candidate in session.items if candidate.id == payload.session_item_id), None)
+    snapshot = loads_json(item.snapshot_json, {}) if item else {}
+    if not item or snapshot.get("type") != "programming" or not snapshot.get("programming"):
+        raise HTTPException(status_code=404, detail="编程题不存在")
+    try:
+        compile(payload.code, "<student-answer>", "exec", flags=ast.PyCF_ONLY_AST, dont_inherit=True)
+    except SyntaxError as exc:
+        line = max(1, int(exc.lineno or 1))
+        column = max(1, int(exc.offset or 1))
+        end_line = max(line, int(exc.end_lineno or line))
+        end_column = max(column + 1, int(exc.end_offset or column + 1))
+        error_type = type(exc).__name__
+        if error_type not in {"SyntaxError", "IndentationError", "TabError"}:
+            error_type = "SyntaxError"
+        return {
+            "valid": False,
+            "diagnostics": [{
+                "severity": "error",
+                "code": error_type,
+                "message": _syntax_error_message(exc.msg),
+                "python_message": exc.msg,
+                "line": line,
+                "column": column,
+                "end_line": end_line,
+                "end_column": end_column,
+            }],
+        }
+    return {"valid": True, "diagnostics": []}
 
 
 @router.post("/sessions/{session_id}/sample-runs", status_code=202)
