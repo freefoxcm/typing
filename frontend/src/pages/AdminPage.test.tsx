@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api, downloadApi, saveDownload } from '../api'
 import type { Course, Report } from '../types'
 import { AdminPage, reorderCourseList, saveCourseOrder } from './AdminPage'
@@ -195,10 +195,14 @@ describe('AdminPage', () => {
     fireEvent.click(firstCourse)
     const firstLesson = screen.getByRole('button', { name: '展开关卡 字母关卡' })
     expect(firstLesson).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: '编辑关卡 字母关卡' })).toHaveClass('compact-icon-button')
+    expect(screen.getByRole('button', { name: '删除关卡 字母关卡' })).toHaveClass('danger-button', 'compact-icon-button')
     expect(screen.queryByText('asdf')).not.toBeInTheDocument()
 
     fireEvent.click(firstLesson)
     expect(screen.getByText('asdf')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '编辑练习内容' })).toHaveClass('compact-icon-button')
+    expect(screen.getByRole('button', { name: '删除练习内容' })).toHaveClass('danger-button', 'compact-icon-button')
 
     fireEvent.click(secondCourse)
     expect(screen.getByRole('button', { name: '展开关卡 符号关卡' })).toBeInTheDocument()
@@ -212,14 +216,41 @@ describe('AdminPage', () => {
   })
 
   it('keeps a course open when its management actions are used', async () => {
-    vi.spyOn(window, 'prompt').mockReturnValue(null)
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null)
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '打字词库' }))
     fireEvent.click(await screen.findByRole('button', { name: '展开课程 入门课程' }))
 
-    fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[0])
+    expect(screen.getByRole('button', { name: '向课程 入门课程 添加关卡' })).toHaveClass('ghost')
+    expect(screen.queryByRole('button', { name: '编辑课程' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '更多操作 课程 入门课程' }))
+    const menu = screen.getByRole('menu', { name: '课程 入门课程操作菜单' })
+    fireEvent.click(within(menu).getByRole('menuitem', { name: '编辑课程' }))
+    expect(prompt).toHaveBeenCalledWith('课程名称', '入门课程')
     expect(screen.getByRole('button', { name: '收起课程 入门课程' })).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: '展开关卡 字母关卡' })).toBeInTheDocument()
+  })
+
+  it('supports keyboard navigation and focus restoration in course action menus', async () => {
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '打字词库' }))
+    const trigger = await screen.findByRole('button', { name: '更多操作 课程 入门课程' })
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' })
+    const edit = screen.getByRole('menuitem', { name: '编辑课程' })
+    const remove = screen.getByRole('menuitem', { name: '删除课程' })
+    expect(edit).toHaveFocus()
+    expect(remove).toHaveClass('danger')
+    fireEvent.keyDown(edit, { key: 'ArrowDown' })
+    expect(remove).toHaveFocus()
+    fireEvent.keyDown(remove, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu', { name: '课程 入门课程操作菜单' })).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menu', { name: '课程 入门课程操作菜单' })).toBeInTheDocument()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu', { name: '课程 入门课程操作菜单' })).not.toBeInTheDocument()
   })
 
   it('exposes dedicated keyboard-accessible drag handles', async () => {
@@ -252,6 +283,7 @@ describe('AdminPage', () => {
     expect(await screen.findByRole('heading', { name: '导入课程与练习' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '导出打字词库' })).toHaveAttribute('href', '/api/admin/export')
     expect(screen.getByLabelText('打字词库文件内容')).toBeInTheDocument()
+    expect(screen.getByLabelText('选择打字词库文件').closest('.file-picker')).toHaveClass('compact-file-picker')
     expect(screen.queryByRole('heading', { name: '导入单词与释义' })).not.toBeInTheDocument()
 
     fireEvent.keyDown(typingTab, { key: 'ArrowRight' })
@@ -261,12 +293,15 @@ describe('AdminPage', () => {
     expect(await screen.findByRole('heading', { name: '导入单词与释义' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '导出单词词库' })).toHaveAttribute('href', '/api/admin/word-export')
     expect(await screen.findByLabelText('单词词库文件内容')).toBeInTheDocument()
+    expect(screen.getByLabelText('选择单词词库文件').closest('.file-picker')).toHaveClass('compact-file-picker')
 
     fireEvent.keyDown(wordTab, { key: 'End' })
     await waitFor(() => expect(questionTab).toHaveAttribute('aria-selected', 'true'))
     expect(questionTab).toHaveFocus()
     expect(screen.getByRole('heading', { name: '导入结构化习题' })).toBeInTheDocument()
     expect(screen.getByLabelText('习题题库文件内容')).toBeInTheDocument()
+    expect(screen.getByLabelText('选择习题题库文件').closest('.file-picker')).toHaveClass('compact-file-picker')
+    expect(screen.getByLabelText('选择题套迁移包').closest('.file-picker')).toHaveClass('compact-file-picker')
   })
 
   it('previews and imports typing and word data through their existing APIs', async () => {

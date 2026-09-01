@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '../api'
 import type { WordSetSummary } from '../types'
 import { reorderWordSetList, saveWordSetOrder, WordLibraryPanel } from './WordLibraryPanel'
@@ -83,6 +83,24 @@ describe('WordLibraryPanel', () => {
     expect(screen.getByText(/使用上下方向键移动/)).toBeInTheDocument()
   })
 
+  it('keeps add word visible and moves secondary set actions into the shared menu', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<WordLibraryPanel />)
+    expect(await screen.findByRole('button', { name: '向单词集 编程词汇 添加单词' })).toHaveClass('ghost')
+    fireEvent.click(screen.getByRole('button', { name: '更多操作 单词集 编程词汇' }))
+    const menu = screen.getByRole('menu', { name: '单词集 编程词汇操作菜单' })
+    expect(within(menu).getByRole('menuitem', { name: '编辑单词集' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '停用单词集' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '删除单词集' })).toHaveClass('danger')
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: '停用单词集' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/word-sets/7', expect.objectContaining({ method: 'PUT' })))
+    fireEvent.click(screen.getByRole('button', { name: '更多操作 单词集 编程词汇' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除单词集' }))
+    expect(confirm).toHaveBeenCalledWith('删除单词集及全部词条？历史成绩会保留拼写快照。')
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/word-sets/7', expect.objectContaining({ method: 'DELETE' })))
+  })
+
   it('keeps the enrichment refresh action inside the LLM status card and shows progress', async () => {
     render(<WordLibraryPanel />)
     const button = await screen.findByRole('button', { name: '刷新补全状态' })
@@ -135,7 +153,10 @@ describe('WordLibraryPanel', () => {
     wordSets = makeWordSets(true)
     render(<WordLibraryPanel />)
     fireEvent.click(await screen.findByRole('button', { name: '展开单词集 编程词汇' }))
-    fireEvent.click(await screen.findByRole('button', { name: '编辑单词 cache' }))
+    const edit = await screen.findByRole('button', { name: '编辑单词 cache' })
+    expect(edit).toHaveClass('compact-icon-button')
+    expect(screen.getByRole('button', { name: '删除单词 cache' })).toHaveClass('danger-button', 'compact-icon-button')
+    fireEvent.click(edit)
 
     expect(screen.getByRole('dialog', { name: '编辑 cache' })).toBeInTheDocument()
     expect(screen.getByLabelText('单词或术语')).toHaveValue('cache')
