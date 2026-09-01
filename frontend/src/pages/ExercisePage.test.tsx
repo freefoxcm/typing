@@ -154,15 +154,27 @@ describe('ExercisePage', () => {
 
   it('shows solutions and awarded points only for a completed session', async () => {
     const completed: ExerciseSession = JSON.parse(JSON.stringify(activeSession))
-    completed.status = 'completed'; completed.score = 2
+    completed.status = 'completed'; completed.score = 2; completed.max_score = 4
     completed.items[0].question.explanation_markdown = 'input 用于读取输入。'
     completed.items[0].question.options[1].correct = true
     completed.items[0].answer = { selected_option_ids: [32], bool_answer: null, code: '', status: 'correct', awarded_points: 2, details: { correct: true } }
+    completed.items.push({
+      ...completed.items[0], id: 72, sort_order: 1,
+      question: { ...completed.items[0].question, id: 4, stem_markdown: '错误题', sort_order: 1 },
+      answer: { selected_option_ids: [31], bool_answer: null, code: '', status: 'incorrect', awarded_points: 0, details: { correct: false } },
+    })
     mockedApi.mockResolvedValue(completed)
     renderPage()
+    const correctButton = await screen.findByRole('button', { name: '第 1 题：回答正确' })
+    const incorrectButton = screen.getByRole('button', { name: '第 2 题：回答错误' })
+    expect(correctButton).toHaveClass('result-correct')
+    expect(incorrectButton).toHaveClass('result-incorrect', 'active')
+    fireEvent.click(correctButton)
     expect(await screen.findByText('回答正确')).toBeInTheDocument()
     expect(screen.getByText('input 用于读取输入。')).toBeInTheDocument()
     expect(screen.getByText('2 / 2 分')).toBeInTheDocument()
+    expect(correctButton).toHaveClass('active')
+    expect(incorrectButton).not.toHaveClass('active')
   })
 
   it('resumes at the first unanswered question', async () => {

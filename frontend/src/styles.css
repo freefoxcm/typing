@@ -136,3 +136,10 @@
 
 /* Leave visible breathing room below the raised primary action's bottom shadow. */
 .active-exercise-actions{align-content:center;gap:14px}
+
+/* Final results use the whole navigator tile, not only the small status icon. */
+.question-navigator button.result-correct{border:2px solid #22a85a;background:#ecf9f0;color:#176b3a;box-shadow:inset 0 0 0 1px rgba(34,168,90,.08)}
+.question-navigator button.result-incorrect{border:2px solid #e05245;background:#fff0ee;color:#a72f26;box-shadow:inset 0 0 0 1px rgba(224,82,69,.08)}
+.question-navigator button.result-correct.active{border-color:#15803d;background:#15803d;color:white;box-shadow:0 5px 12px rgba(21,128,61,.25)}
+.question-navigator button.result-incorrect.active{border-color:#c43b30;background:#c43b30;color:white;box-shadow:0 5px 12px rgba(196,59,48,.25)}
+.question-navigator button.result-correct svg,.question-navigator button.result-incorrect svg{right:4px;bottom:4px;width:15px;height:15px;stroke-width:2.8}

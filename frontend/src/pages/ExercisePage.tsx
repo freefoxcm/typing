@@ -278,7 +278,17 @@ export function ExercisePage() {
     {abandoned && <div className="abandoned-banner"><XCircle /><div><strong>本次练习已放弃</strong><p>已保存的作答记录仍会保留，但不能继续修改、提交或查看正确答案。</p></div></div>}
     {editable && <div className={`exercise-save-state ${saveState}`} aria-live="polite"><Save />{saveState === 'saving' ? '正在保存…' : saveState === 'error' ? '保存失败，请重试' : '所有答案已保存'}</div>}
     {editable && unanswered === 0 && <p className="exercise-ready-submit">全部题目均已作答，尚未提交。检查无误后请提交整套练习。</p>}
-    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => <button className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''}`} onClick={() => void goToIndex(itemIndex)} key={candidate.id}>{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>)}</aside>
+    <div className="exercise-layout"><aside className="question-navigator" aria-label="题目导航">{session.items.map((candidate, itemIndex) => {
+      const resultClass = complete ? (candidate.answer.awarded_points === candidate.points ? 'result-correct' : 'result-incorrect') : ''
+      const resultLabel = complete ? (candidate.answer.awarded_points === candidate.points ? '回答正确' : '回答错误') : ''
+      return <button
+        className={`${itemIndex === index ? 'active' : ''} ${candidate.answer.status !== 'unanswered' ? 'answered' : ''} ${resultClass}`}
+        aria-label={`第 ${itemIndex + 1} 题${resultLabel ? `：${resultLabel}` : ''}`}
+        title={resultLabel || undefined}
+        onClick={() => void goToIndex(itemIndex)}
+        key={candidate.id}
+      >{itemIndex + 1}{complete && (candidate.answer.awarded_points === candidate.points ? <CheckCircle2 /> : <XCircle />)}</button>
+    })}</aside>
       <main className="exercise-question-card card"><div className="question-heading"><span>{questionTypeLabel(item.question.type)}</span><strong>{item.points} 分</strong><small>{item.question.question_set_title}</small></div>
         {item.question.type === 'fill_blank' ? <FillBlankStem item={item} complete={complete} disabled={!editable} onChange={(blank_answers) => void save(item, { blank_answers })} /> : <MarkdownText value={item.question.stem_markdown} />}
         {item.question.stem_image_asset_id && <img className="exercise-stem-image" src={`/api/question-assets/${item.question.stem_image_asset_id}`} alt="题目配图" />}
