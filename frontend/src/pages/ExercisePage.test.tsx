@@ -305,6 +305,8 @@ describe('ExercisePage', () => {
     const editor = await screen.findByLabelText('Python 3.13 代码')
     expect(editor).toHaveValue('for i in range(3):')
     expect(screen.getByRole('button', { name: /运行公开样例/ })).toBeEnabled()
+    expect(screen.getByLabelText('运行限制')).toHaveTextContent('时间限制：1000 ms')
+    expect(screen.getByLabelText('运行限制')).toHaveTextContent('内存限制：128 MB')
     expect(screen.getByText(/^3$/)).toBeInTheDocument()
     fireEvent.change(editor, { target: { value: 'for i in range(3):\n    print(i)' } })
     fireEvent.blur(editor)
