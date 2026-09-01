@@ -203,6 +203,7 @@ export type ExerciseSession = {
   status: ExerciseSessionStatus
   score: number | null
   max_score: number
+  current_item_sort_order?: number | null
   created_at?: string
   submitted_at?: string | null
   completed_at?: string | null

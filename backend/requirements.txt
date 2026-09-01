@@ -7,4 +7,5 @@ argon2-cffi==25.1.0
 python-multipart==0.0.20
 httpx==0.28.1
 PyMuPDF==1.28.0
+black==26.5.1
 

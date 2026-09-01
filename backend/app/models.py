@@ -295,6 +295,7 @@ class ExerciseSession(Base):
     title: Mapped[str] = mapped_column(String(180), default="习题练习")
     score: Mapped[int] = mapped_column(Integer, default=0)
     max_score: Mapped[int] = mapped_column(Integer, default=0)
+    current_item_sort_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

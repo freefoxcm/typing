@@ -485,7 +485,14 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         child_login(client)
 
         session = client.post("/api/exercises/sessions", json={"mode": "set", "question_set_ids": [set_id], "counts": {}}).json()
+        assert session["current_item_sort_order"] == 0
         first = session["items"][0]
+        second = session["items"][1]
+        moved = client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]})
+        assert moved.status_code == 200
+        assert moved.json() == {"session_item_id": second["id"], "sort_order": second["sort_order"]}
+        assert client.get(f"/api/exercises/sessions/{session['id']}").json()["current_item_sort_order"] == second["sort_order"]
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": 999999}).status_code == 404
         option_id = first["question"]["options"][0]["id"]
         assert client.patch(f"/api/exercises/sessions/{session['id']}/answers/{first['id']}", json={
             "selected_option_ids": [option_id], "bool_answer": None, "code": "",
@@ -502,11 +509,13 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小雨", "pin": "5678"}).status_code == 200
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").status_code == 404
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 404
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小宇", "pin": "1234"}).status_code == 200
 
         abandoned = client.post(f"/api/exercises/sessions/{session['id']}/abandon")
         assert abandoned.json()["status"] == "abandoned"
+        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 409
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").json()["status"] == "abandoned"
         assert client.get("/api/exercises/active-sessions").json() == []
         stored = client.get(f"/api/exercises/sessions/{session['id']}").json()
@@ -753,6 +762,23 @@ def test_python_syntax_check_parses_without_executing_and_returns_diagnostics(tm
         assert "闭合" in unclosed["message"]
         assert client.post(path, json={"session_item_id": item_id, "code": "x" * 100001}).status_code == 422
 
+        format_path = f"/api/exercises/sessions/{session['id']}/format-code"
+        format_marker = tmp_path / "format-code-must-not-run"
+        unformatted = f'名字={{"值":1}}\nopen(r"{format_marker}","w").write("不会执行")'
+        formatted = client.post(format_path, json={"session_item_id": item_id, "code": unformatted})
+        assert formatted.status_code == 200
+        assert formatted.json()["valid"] is True
+        assert formatted.json()["changed"] is True
+        assert formatted.json()["formatted_code"].startswith('名字 = {"值": 1}\n')
+        assert not format_marker.exists()
+        unchanged = client.post(format_path, json={"session_item_id": item_id, "code": formatted.json()["formatted_code"]}).json()
+        assert unchanged["valid"] is True and unchanged["changed"] is False
+        invalid_format = client.post(format_path, json={"session_item_id": item_id, "code": "if True\n print(1)"}).json()
+        assert invalid_format["valid"] is False
+        assert invalid_format["formatted_code"] == "if True\n print(1)"
+        assert invalid_format["diagnostics"][0]["code"] == "SyntaxError"
+        assert client.post(format_path, json={"session_item_id": item_id, "code": "x" * 100001}).status_code == 422
+
 
 def test_python_syntax_check_enforces_session_ownership_status_and_question_type(tmp_path):
     with make_client(tmp_path) as client:
@@ -786,18 +812,24 @@ def test_python_syntax_check_enforces_session_ownership_status_and_question_type
             "session_item_id": objective_item["id"], "code": "print(1)",
         })
         assert wrong_type.status_code == 404
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json={
+            "session_item_id": objective_item["id"], "code": "print(1)",
+        }).status_code == 404
 
         client.post("/api/auth/logout")
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 401
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 401
         admin_login(client)
         assert client.post("/api/admin/children", json={"name": "小明", "pin": "5678", "active": True}).status_code == 201
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小明", "pin": "5678"}).status_code == 200
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 404
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 404
 
         client.post("/api/auth/logout"); child_login(client)
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/abandon").status_code == 200
         assert client.post(f"/api/exercises/sessions/{program_session['id']}/syntax-check", json=syntax_payload).status_code == 409
+        assert client.post(f"/api/exercises/sessions/{program_session['id']}/format-code", json=syntax_payload).status_code == 409
 
 
 def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path):
@@ -810,13 +842,13 @@ def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path)
             self.complete_calls.append(kwargs)
             return {"available": True, "items": [{
                 "id": "completion-token", "label": "append", "type": "method", "detail": "append(object: T)",
-                "documentation": "", "insert_text": "append", "insert_text_format": 1,
+                "documentation": "", "documentation_format": "plaintext", "insert_text": "append", "insert_text_format": 1,
                 "filter_text": "append", "sort_text": "append", "replace": None,
             }]}
 
         async def resolve(self, **kwargs):
             self.resolve_calls.append(kwargs)
-            return {"available": True, "detail": "append(object: T)", "documentation": "在列表末尾添加一个元素。"}
+            return {"available": True, "detail": "append(object: T)", "documentation": "在列表末尾添加一个元素。", "documentation_format": "markdown"}
 
         async def close(self):
             return None
@@ -860,6 +892,7 @@ def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path)
         resolved = client.post(f"{path}/resolve", json={"session_item_id": item_id, "completion_id": "completion-token"})
         assert resolved.status_code == 200
         assert "列表末尾" in resolved.json()["documentation"]
+        assert resolved.json()["documentation_format"] == "markdown"
         assert fake.resolve_calls[0]["session_id"] == session["id"]
 
         assert client.post(path, json={

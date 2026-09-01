@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FocusEvent } from 'react'
+import { Braces, LoaderCircle, Play, Search, ShieldCheck, Sparkles } from 'lucide-react'
 import {
   acceptCompletion,
   autocompletion,
@@ -30,6 +31,18 @@ import {
   type Tooltip,
 } from '@codemirror/view'
 import { api, jsonBody } from '../api'
+import {
+  builtinDocumentation,
+  builtinLabels,
+  keywordDescriptions,
+  keywordLabels,
+  pythonDocumentationFor,
+  pythonMemberDocumentationEntries,
+  pythonMemberDocumentationFor,
+  snippetDocumentation,
+  type PythonDocumentation,
+  type PythonReceiverKind,
+} from './pythonDocumentation'
 
 export type PythonSyntaxDiagnostic = {
   severity: 'error'
@@ -42,14 +55,13 @@ export type PythonSyntaxDiagnostic = {
   end_column: number
 }
 
-type PythonDocumentation = { signature: string; description: string; parameters?: string }
-
 type PyrightCompletionItem = {
   id: string
   label: string
   type: string
   detail: string
   documentation: string
+  documentation_format: DocumentationFormat
   insert_text: string
   insert_text_format: number
   filter_text: string
@@ -58,53 +70,11 @@ type PyrightCompletionItem = {
 }
 
 type PyrightCompletionResponse = { available: boolean; items: PyrightCompletionItem[] }
-type PyrightResolveResponse = { available: boolean; detail: string; documentation: string }
+type DocumentationFormat = 'markdown' | 'plaintext'
+type PyrightResolveResponse = { available: boolean; detail: string; documentation: string; documentation_format: DocumentationFormat }
 type CompletionAvailability = 'ready' | 'checking' | 'unavailable'
 type ApiRequester = <T>(path: string, init?: RequestInit) => Promise<T>
-
-const builtinDocumentation: Record<string, PythonDocumentation> = {
-  abs: { signature: 'abs(x)', description: '返回数字的绝对值。', parameters: 'x：整数、浮点数或实现了绝对值运算的对象。' },
-  all: { signature: 'all(iterable)', description: '当可迭代对象中的所有元素都为真时返回 True。', parameters: 'iterable：任意可迭代对象；空对象返回 True。' },
-  any: { signature: 'any(iterable)', description: '当可迭代对象中至少有一个元素为真时返回 True。', parameters: 'iterable：任意可迭代对象；空对象返回 False。' },
-  bool: { signature: 'bool(object=False)', description: '将对象转换为布尔值 True 或 False。' },
-  dict: { signature: 'dict(...)', description: '创建字典，可接收键值对序列或关键字参数。' },
-  enumerate: { signature: 'enumerate(iterable, start=0)', description: '遍历元素时同时生成序号。', parameters: 'iterable：被遍历对象；start：起始序号。' },
-  filter: { signature: 'filter(function, iterable)', description: '保留使判断函数返回真的元素。', parameters: 'function：判断函数；iterable：输入序列。' },
-  float: { signature: 'float(x=0)', description: '将数字或字符串转换为浮点数。' },
-  input: { signature: 'input(prompt="")', description: '显示可选提示并读取一行标准输入，返回字符串。', parameters: 'prompt：读取前显示的提示文字。' },
-  int: { signature: 'int(x=0, base=10)', description: '将数字或字符串转换为整数。', parameters: 'x：待转换值；base：字符串使用的进制。' },
-  len: { signature: 'len(object)', description: '返回字符串、列表等容器中的元素数量。' },
-  list: { signature: 'list(iterable=())', description: '创建列表，或将可迭代对象转换为列表。' },
-  map: { signature: 'map(function, iterable, ...)', description: '把函数依次应用到可迭代对象的每个元素。' },
-  max: { signature: 'max(iterable, *, key=None)', description: '返回可迭代对象中的最大元素。', parameters: 'key：可选的比较键函数。' },
-  min: { signature: 'min(iterable, *, key=None)', description: '返回可迭代对象中的最小元素。', parameters: 'key：可选的比较键函数。' },
-  open: { signature: 'open(file, mode="r", encoding=None)', description: '打开文件并返回文件对象。', parameters: 'file：路径；mode：打开模式；encoding：文本编码。' },
-  pow: { signature: 'pow(base, exp, mod=None)', description: '计算 base 的 exp 次幂；指定 mod 时同时取模。' },
-  print: { signature: 'print(*objects, sep=" ", end="\\n")', description: '把一个或多个对象输出到标准输出。', parameters: 'sep：对象间分隔符；end：输出末尾字符。' },
-  range: { signature: 'range(start, stop, step=1)', description: '生成整数序列，常用于 for 循环。', parameters: 'stop 不包含在结果中；step 不能为 0。' },
-  reversed: { signature: 'reversed(sequence)', description: '返回按相反顺序访问序列的迭代器。' },
-  round: { signature: 'round(number, ndigits=None)', description: '将数字舍入到指定的小数位数。' },
-  set: { signature: 'set(iterable=())', description: '创建不包含重复元素的集合。' },
-  sorted: { signature: 'sorted(iterable, *, key=None, reverse=False)', description: '返回排序后的新列表，不修改原对象。', parameters: 'key：排序键函数；reverse：是否降序。' },
-  str: { signature: 'str(object="")', description: '将对象转换为字符串。' },
-  sum: { signature: 'sum(iterable, start=0)', description: '从 start 开始累加可迭代对象中的数值。' },
-  tuple: { signature: 'tuple(iterable=())', description: '创建元组，或将可迭代对象转换为元组。' },
-  zip: { signature: 'zip(*iterables, strict=False)', description: '把多个可迭代对象中相同位置的元素组合成元组。' },
-}
-
-const keywordDescriptions: Record<string, string> = {
-  and: '逻辑与运算。', as: '为导入对象或异常指定别名。', assert: '断言条件为真，否则抛出异常。', async: '声明异步函数或上下文。', await: '等待异步操作完成。',
-  break: '立即结束当前循环。', class: '定义类。', continue: '跳过本轮循环的剩余语句。', del: '删除名称、属性或容器元素。', elif: '为 if 增加条件分支。', else: '定义条件不满足时的分支。', except: '捕获并处理异常。',
-  False: '布尔假值。', finally: '定义无论是否异常都会执行的代码。', from: '从模块中导入指定名称。', global: '声明名称来自全局作用域。', if: '根据条件执行分支。', import: '导入模块或名称。', in: '检查成员关系或用于遍历。', is: '比较两个引用是否指向同一对象。',
-  lambda: '创建匿名函数。', None: '表示没有值的单例对象。', nonlocal: '声明名称来自外层非全局作用域。', not: '逻辑非运算。', or: '逻辑或运算。', pass: '空语句，占位但不执行操作。', raise: '主动抛出异常。', return: '结束函数并返回结果。', True: '布尔真值。', try: '开始异常处理代码块。', while: '条件为真时重复执行。', with: '使用上下文管理器安全管理资源。', yield: '从生成器产出一个值并暂停执行。',
-}
-
-const snippetDocumentation: Record<string, PythonDocumentation> = {
-  if: { signature: 'if condition:', description: '插入条件判断代码块。' },
-  for: { signature: 'for item in range(count):', description: '插入按次数遍历的 for 循环。' },
-  while: { signature: 'while condition:', description: '插入条件循环代码块。' },
-  def: { signature: 'def name(arguments):', description: '插入函数定义代码块。' },
-}
+type PythonCompletion = Completion & { pythonInsertText?: string }
 
 function documentationNode(documentation: PythonDocumentation): HTMLElement {
   const wrapper = document.createElement('div')
@@ -119,8 +89,16 @@ function documentationNode(documentation: PythonDocumentation): HTMLElement {
     parameters.textContent = documentation.parameters
     wrapper.append(parameters)
   }
+  if (documentation.returns) {
+    const returns = document.createElement('small')
+    returns.textContent = `返回：${documentation.returns}`
+    wrapper.append(returns)
+  }
   return wrapper
 }
+
+export type PythonFormatStatus = 'idle' | 'formatting' | 'formatted' | 'unchanged' | 'error'
+export type PythonSyntaxStatus = 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable'
 
 function documentedCompletion(documentation: PythonDocumentation) {
   return () => documentationNode(documentation)
@@ -131,36 +109,188 @@ const snippets: Completion[] = [
   snippetCompletion('for ${item} in range(${count}):\n\t${pass}', { label: 'for', detail: '循环代码片段', info: documentedCompletion(snippetDocumentation.for), type: 'keyword', boost: 100 }),
   snippetCompletion('while ${condition}:\n\t${pass}', { label: 'while', detail: '循环代码片段', info: documentedCompletion(snippetDocumentation.while), type: 'keyword', boost: 100 }),
   snippetCompletion('def ${name}(${arguments}):\n\t${pass}', { label: 'def', detail: '函数代码片段', info: documentedCompletion(snippetDocumentation.def), type: 'keyword', boost: 100 }),
+  snippetCompletion('import turtle\n\nturtle.${done}()', { label: 'turtle import', detail: 'Turtle 导入代码片段', info: documentedCompletion(snippetDocumentation.turtle_import), type: 'module', boost: 92 }),
+  snippetCompletion('for _ in range(${sides}):\n\tturtle.forward(${length})\n\tturtle.left(360 / ${sides})', { label: 'turtle polygon', detail: 'Turtle 正多边形代码片段', info: documentedCompletion(snippetDocumentation.turtle_polygon), type: 'keyword', boost: 96 }),
+  snippetCompletion('for _ in range(${count}):\n\tturtle.forward(${length})\n\tturtle.right(${angle})', { label: 'turtle loop', detail: 'Turtle 循环绘图代码片段', info: documentedCompletion(snippetDocumentation.turtle_loop), type: 'keyword', boost: 94 }),
+  snippetCompletion('turtle.fillcolor("${color}")\nturtle.begin_fill()\n${draw}\nturtle.end_fill()', { label: 'turtle fill', detail: 'Turtle 填充图形代码片段', info: documentedCompletion(snippetDocumentation.turtle_fill), type: 'keyword', boost: 93 }),
+  snippetCompletion('pen = turtle.Turtle()\npen.${done}()', { label: 'turtle pen', detail: 'Turtle 独立画笔代码片段', info: documentedCompletion(snippetDocumentation.turtle_pen), type: 'class', boost: 91 }),
 ]
 
-const keywordCompletions: Completion[] = [
-  'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'del', 'elif', 'else', 'except', 'False',
-  'finally', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass',
-  'raise', 'return', 'True', 'try', 'while', 'with', 'yield',
-].map((label) => ({ label, type: 'keyword', detail: 'Python 关键字', info: documentedCompletion({ signature: label, description: keywordDescriptions[label] }) }))
+const keywordCompletions: Completion[] = keywordLabels
+  .map((label) => ({ label, type: 'keyword', detail: 'Python 关键字', info: documentedCompletion({ signature: label, description: keywordDescriptions[label] }) }))
 
-const builtinCompletions: Completion[] = [
-  'abs', 'all', 'any', 'bool', 'dict', 'enumerate', 'filter', 'float', 'input', 'int', 'len', 'list', 'map',
-  'max', 'min', 'open', 'pow', 'print', 'range', 'reversed', 'round', 'set', 'sorted', 'str', 'sum', 'tuple', 'zip',
-].map((label) => ({ label, type: 'function', detail: builtinDocumentation[label].signature, info: documentedCompletion(builtinDocumentation[label]) }))
+const builtinCompletions: Completion[] = builtinLabels
+  .map((label) => ({ label, type: 'function', detail: builtinDocumentation[label].signature, info: documentedCompletion(builtinDocumentation[label]) }))
 
-export function pythonCompletionSource(context: CompletionContext): CompletionResult | null {
-  const word = context.matchBefore(/[A-Za-z_]\w*/)
-  if (!word || word.from === word.to && !context.explicit) return null
-  return { from: word.from, options: [...snippets, ...keywordCompletions, ...builtinCompletions], validFor: /^[A-Za-z_]\w*$/ }
+const gespTurtlePriority = new Set(['forward', 'fd', 'backward', 'bk', 'right', 'rt', 'left', 'lt', 'goto', 'circle', 'speed', 'penup', 'pu', 'pendown', 'pd', 'pencolor', 'fillcolor', 'color', 'begin_fill', 'end_fill'])
+
+function memberStaticCompletions(receiverKind: PythonReceiverKind): Completion[] {
+  return pythonMemberDocumentationEntries(receiverKind).map(([label, documentation]) => ({
+    label,
+    type: /^[A-Z]/.test(label) ? 'class' : 'function',
+    detail: documentation.signature,
+    info: documentedCompletion(documentation),
+    boost: gespTurtlePriority.has(label) ? 120 : 70,
+  }))
 }
 
-function semanticDocumentationNode(detail: string, documentation: string): HTMLElement {
-  const wrapper = document.createElement('div')
-  wrapper.className = 'python-documentation semantic'
-  if (detail) {
-    const signature = document.createElement('code')
-    signature.textContent = detail
-    wrapper.append(signature)
+export function pythonCompletionSource(context: CompletionContext): CompletionResult | null {
+  const state = context.state
+  const code = state?.doc.toString() ?? ''
+  const linePrefix = state ? state.sliceDoc(state.doc.lineAt(context.pos).from, context.pos) : ''
+  if (state && /[A-Za-z_]\w*\.[A-Za-z_]*$/.test(linePrefix)) {
+    const receiverKind = inferPythonReceiverKind(code, context.pos)
+    if (!receiverKind) return null
+    const member = context.matchBefore(/[A-Za-z_]*$/)
+    return { from: member?.from ?? context.pos, options: memberStaticCompletions(receiverKind), validFor: /^[A-Za-z_]\w*$/ }
   }
-  const description = document.createElement('p')
-  description.textContent = documentation || 'Pyright 未提供更多说明。'
-  wrapper.append(description)
+  const word = context.matchBefore(/[A-Za-z_]\w*/)
+  if (!word || word.from === word.to && !context.explicit) return null
+  if (word.from > 0 && context.state?.sliceDoc(word.from - 1, word.from) === '.') return null
+  const turtleGlobals = /(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(code) ? memberStaticCompletions('turtle') : []
+  return { from: word.from, options: [...snippets, ...keywordCompletions, ...builtinCompletions, ...turtleGlobals], validFor: /^[A-Za-z_]\w*$/ }
+}
+
+function appendRestrictedInline(parent: HTMLElement, value: string) {
+  const pattern = /!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\([^)]*\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*/g
+  let offset = 0
+  for (const match of value.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > offset) parent.append(document.createTextNode(value.slice(offset, index)))
+    if (match[1] !== undefined) parent.append(document.createTextNode(`[图片：${match[1] || '未命名'}]`))
+    else if (match[2] !== undefined) parent.append(document.createTextNode(match[2]))
+    else {
+      const element = document.createElement(match[3] !== undefined ? 'code' : match[4] !== undefined ? 'strong' : 'em')
+      element.textContent = match[3] ?? match[4] ?? match[5] ?? ''
+      parent.append(element)
+    }
+    offset = index + match[0].length
+  }
+  if (offset < value.length) parent.append(document.createTextNode(value.slice(offset)))
+}
+
+function isMarkdownBlockStart(line: string) {
+  return /^\s*```/.test(line) || /^\s*(?:[-*]\s+|\d+\.\s+|>\s?|#{1,6}\s+)/.test(line)
+}
+
+export function restrictedDocumentationNode(value: string, format: DocumentationFormat): HTMLElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'python-markdown'
+  if (!value) return wrapper
+  if (format === 'plaintext') {
+    const paragraph = document.createElement('p')
+    paragraph.className = 'python-plaintext'
+    paragraph.textContent = value
+    wrapper.append(paragraph)
+    return wrapper
+  }
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index]
+    if (!line.trim()) { index += 1; continue }
+    const fence = line.match(/^\s*```([^`]*)$/)
+    if (fence) {
+      index += 1
+      const codeLines: string[] = []
+      while (index < lines.length && !/^\s*```/.test(lines[index])) codeLines.push(lines[index++])
+      if (index < lines.length) index += 1
+      const pre = document.createElement('pre')
+      const code = document.createElement('code')
+      if (fence[1].trim()) code.dataset.language = fence[1].trim()
+      code.textContent = codeLines.join('\n')
+      pre.append(code)
+      wrapper.append(pre)
+      continue
+    }
+    const list = line.match(/^\s*([-*]|\d+\.)\s+(.+)$/)
+    if (list) {
+      const ordered = /\d+\./.test(list[1])
+      const container = document.createElement(ordered ? 'ol' : 'ul')
+      while (index < lines.length) {
+        const item = lines[index].match(/^\s*([-*]|\d+\.)\s+(.+)$/)
+        if (!item || /\d+\./.test(item[1]) !== ordered) break
+        const li = document.createElement('li')
+        appendRestrictedInline(li, item[2])
+        container.append(li)
+        index += 1
+      }
+      wrapper.append(container)
+      continue
+    }
+    const quote = line.match(/^\s*>\s?(.*)$/)
+    if (quote) {
+      const blockquote = document.createElement('blockquote')
+      appendRestrictedInline(blockquote, quote[1])
+      wrapper.append(blockquote)
+      index += 1
+      continue
+    }
+    const heading = line.match(/^\s*(#{1,6})\s+(.+)$/)
+    if (heading) {
+      const element = document.createElement(`h${heading[1].length}`)
+      appendRestrictedInline(element, heading[2])
+      wrapper.append(element)
+      index += 1
+      continue
+    }
+    const paragraphLines = [line]
+    index += 1
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) paragraphLines.push(lines[index++])
+    const paragraph = document.createElement('p')
+    paragraphLines.forEach((part, partIndex) => {
+      appendRestrictedInline(paragraph, part)
+      if (partIndex < paragraphLines.length - 1) paragraph.append(document.createElement('br'))
+    })
+    wrapper.append(paragraph)
+  }
+  return wrapper
+}
+
+function pyrightOriginalNode(detail: string, documentation: string, format: DocumentationFormat): HTMLElement {
+  const original = document.createElement('div')
+  original.className = 'python-original-documentation'
+  if (detail) {
+    const signature = document.createElement('pre')
+    const code = document.createElement('code')
+    code.textContent = detail
+    signature.append(code)
+    original.append(signature)
+  }
+  if (documentation) original.append(restrictedDocumentationNode(documentation, format))
+  if (!detail && !documentation) {
+    const empty = document.createElement('p')
+    empty.textContent = 'Pyright 未提供更多说明。'
+    original.append(empty)
+  }
+  return original
+}
+
+export function semanticDocumentationNode(
+  detail: string,
+  documentation: string,
+  format: DocumentationFormat,
+  localized?: PythonDocumentation,
+): HTMLElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = `python-documentation semantic ${localized ? 'localized' : 'original'}`
+  if (localized) {
+    const localizedNode = documentationNode(localized)
+    while (localizedNode.firstChild) wrapper.append(localizedNode.firstChild)
+    if (detail || documentation) {
+      const details = document.createElement('details')
+      details.className = 'python-type-details'
+      const summary = document.createElement('summary')
+      summary.textContent = '查看详细类型'
+      details.append(summary, pyrightOriginalNode(detail, documentation, format))
+      wrapper.append(details)
+    }
+    return wrapper
+  }
+  const badge = document.createElement('span')
+  badge.className = 'python-original-badge'
+  badge.textContent = 'Pyright 原文'
+  wrapper.append(badge, pyrightOriginalNode(detail, documentation, format))
   return wrapper
 }
 
@@ -168,6 +298,41 @@ function documentPosition(state: EditorState, position: { line: number; characte
   if (position.line < 0 || position.line >= state.doc.lines) return null
   const line = state.doc.line(position.line + 1)
   return line.from + Math.max(0, Math.min(line.length, position.character))
+}
+
+export function inferPythonReceiverKind(code: string, position: number): PythonReceiverKind | undefined {
+  const prefix = code.slice(0, position)
+  const receiver = prefix.match(/([A-Za-z_]\w*)\.[A-Za-z_]*$/)?.[1]
+  if (!receiver) return undefined
+  if (['math', 'random', 'sys', 'collections', 'heapq', 'bisect', 'itertools', 'turtle'].includes(receiver)) return receiver as PythonReceiverKind
+  const escaped = receiver.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const annotation = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:\\s*(list|dict|str|set|tuple)\\b`, 'g')
+  const annotated = [...code.matchAll(annotation)].at(-1)?.[1]
+  if (annotated) return annotated as PythonReceiverKind
+  const assignment = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*=\\s*([^\\n#]+)`, 'g')
+  const value = [...code.matchAll(assignment)].at(-1)?.[1]?.trim() ?? ''
+  if (/^(?:\[|list\s*\()/.test(value)) return 'list'
+  if (/^(?:\{|dict\s*\()/.test(value)) return 'dict'
+  if (/^(?:[rubf]*['"]|str\s*\()/.test(value)) return 'str'
+  if (/^set\s*\(/.test(value)) return 'set'
+  if (/^tuple\s*\(/.test(value) || /^\([^)]*,[^)]*\)/.test(value)) return 'tuple'
+  const turtleImport = [...prefix.matchAll(/(?:^|[;\n])\s*import\s+turtle(?:\s+as\s+([A-Za-z_]\w*))?/g)].at(-1)
+  const turtleAlias = turtleImport?.[1] || (turtleImport ? 'turtle' : undefined)
+  if (turtleAlias) {
+    const constructor = new RegExp(`(?:^|[;\\n])\\s*${escaped}\\s*=\\s*${turtleAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(Turtle|Screen)\\s*\\(`, 'g')
+    const kind = [...prefix.matchAll(constructor)].at(-1)?.[1]
+    if (kind === 'Turtle') return 'turtle_instance'
+    if (kind === 'Screen') return 'turtle_screen'
+    if (receiver === turtleAlias) return 'turtle'
+  }
+  const importedConstructor = new RegExp(`(?:^|[;\\n])\\s*${escaped}\\s*=\\s*(Turtle|Screen)\\s*\\(`, 'g')
+  const importedKind = [...prefix.matchAll(importedConstructor)].at(-1)?.[1]
+  if (/(?:^|[;\n])\s*from\s+turtle\s+import\s+(?:\*|[^\n;]*(?:Turtle|Screen))/m.test(prefix)) {
+    if (importedKind === 'Turtle') return 'turtle_instance'
+    if (importedKind === 'Screen') return 'turtle_screen'
+  }
+  const importAlias = new RegExp(`(?:^|\\n)\\s*import\\s+(math|random|sys|collections|heapq|bisect|itertools)\\s+as\\s+${escaped}\\b`, 'g')
+  return [...prefix.matchAll(importAlias)].at(-1)?.[1] as PythonReceiverKind | undefined
 }
 
 export function createPyrightCompletionSource({
@@ -188,6 +353,7 @@ export function createPyrightCompletionSource({
     const word = context.matchBefore(/[A-Za-z_]\w*/)
     const previousCharacter = context.pos > 0 ? context.state.sliceDoc(context.pos - 1, context.pos) : ''
     const triggerCharacter = previousCharacter === '.' ? '.' : undefined
+    const memberContext = /[A-Za-z_]\w*\.[A-Za-z_]*$/.test(context.state.sliceDoc(context.state.doc.lineAt(context.pos).from, context.pos))
     if (!context.explicit && !triggerCharacter && (!word || word.from === word.to)) return null
 
     const abortController = new AbortController()
@@ -201,6 +367,15 @@ export function createPyrightCompletionSource({
     if (context.aborted) return null
 
     const line = context.state.doc.lineAt(context.pos)
+    const code = context.state.doc.toString()
+    const receiverKind = memberContext ? inferPythonReceiverKind(code, context.pos) : undefined
+    const localizedFor = (label: string, detail: string) => memberContext
+      ? pythonMemberDocumentationFor(label, receiverKind, detail)
+      : pythonDocumentationFor(label, undefined, detail)
+        ?? (/(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(code) ? pythonMemberDocumentationFor(label, 'turtle', detail) : undefined)
+        ?? (keywordDescriptions[label]
+        ? { signature: label, description: keywordDescriptions[label] }
+        : undefined)
     onAvailability('checking')
     try {
       const response = await request<PyrightCompletionResponse>(`/api/exercises/sessions/${currentSessionId}/python-completions`, {
@@ -208,7 +383,7 @@ export function createPyrightCompletionSource({
         signal: abortController.signal,
         ...jsonBody({
           session_item_id: currentItemId,
-          code: context.state.doc.toString(),
+          code,
           position: { line: line.number - 1, character: context.pos - line.from },
           trigger_character: triggerCharacter,
         }),
@@ -218,25 +393,38 @@ export function createPyrightCompletionSource({
       if (!response.available || !response.items.length) return null
       const replacementFrom = documentPosition(context.state, response.items[0].replace?.start ?? { line: line.number - 1, character: (word?.from ?? context.pos) - line.from })
       const from = replacementFrom == null || replacementFrom > context.pos ? word?.from ?? context.pos : replacementFrom
-      const options: Completion[] = response.items.map((item) => {
+      const options: PythonCompletion[] = response.items.map((item) => {
         const apply = item.insert_text_format === 2 ? snippet(item.insert_text) : item.insert_text
+        const localized = localizedFor(item.label, item.detail)
         return {
           label: item.label,
           type: item.type,
-          detail: item.detail,
+          detail: localized?.signature || item.detail,
           filterText: item.filter_text,
           sortText: item.sort_text,
           apply,
+          pythonInsertText: item.insert_text,
           info: async () => {
-            if (item.documentation) return semanticDocumentationNode(item.detail, item.documentation)
+            if (item.documentation) return semanticDocumentationNode(
+              item.detail,
+              item.documentation,
+              item.documentation_format || 'plaintext',
+              localizedFor(item.label, item.detail),
+            )
             try {
               const resolved = await request<PyrightResolveResponse>(`/api/exercises/sessions/${currentSessionId}/python-completions/resolve`, {
                 method: 'POST',
                 ...jsonBody({ session_item_id: currentItemId, completion_id: item.id }),
               })
-              return semanticDocumentationNode(resolved.detail || item.detail, resolved.documentation)
+              const resolvedDetail = resolved.detail || item.detail
+              return semanticDocumentationNode(
+                resolvedDetail,
+                resolved.documentation,
+                resolved.documentation_format || 'plaintext',
+                localizedFor(item.label, resolvedDetail),
+              )
             } catch {
-              return semanticDocumentationNode(item.detail, '')
+              return semanticDocumentationNode(item.detail, '', 'plaintext', localized)
             }
           },
         }
@@ -245,6 +433,28 @@ export function createPyrightCompletionSource({
     } catch (error) {
       if (!abortController.signal.aborted) onAvailability('unavailable')
       return null
+    }
+  }
+}
+
+export function createCombinedPythonCompletionSource(options: Parameters<typeof createPyrightCompletionSource>[0]) {
+  const pyrightSource = createPyrightCompletionSource(options)
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const staticResult = pythonCompletionSource(context)
+    const semanticResult = await pyrightSource(context)
+    if (!semanticResult) return staticResult
+    if (!staticResult) return semanticResult
+    const semanticKeys = new Set(semanticResult.options.map((item) => {
+      const semantic = item as PythonCompletion
+      return `${item.label}\u0000${semantic.pythonInsertText || item.label}`
+    }))
+    const remainingStatic = staticResult.options.filter((item) =>
+      String(item.detail || '').includes('代码片段') || !semanticKeys.has(`${item.label}\u0000${item.label}`),
+    )
+    return {
+      from: semanticResult.from,
+      options: [...semanticResult.options, ...remainingStatic],
+      validFor: semanticResult.validFor || staticResult.validFor,
     }
   }
 }
@@ -273,6 +483,7 @@ const editorTheme = EditorView.theme({
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { background: '#3b73ad !important' },
   '.cm-content ::selection': { backgroundColor: 'rgba(82,139,255,.62) !important' },
   '.cm-tooltip': { color: '#abb2bf', backgroundColor: '#21252b', border: '1px solid #3c414c' },
+  '.cm-tooltip.cm-completionInfo': { maxWidth: 'min(480px, calc(100vw - 32px))', overflow: 'visible' },
   '.cm-tooltip-autocomplete ul li[aria-selected]': { color: '#fff', backgroundColor: '#3e4451' },
   '.cm-completionDetail': { color: '#7f848e' },
   '.cm-diagnostic-error': { borderLeftColor: '#e06c75' },
@@ -297,7 +508,13 @@ function documentationAt(state: EditorState, pos: number) {
   const left = before.match(/[A-Za-z_]\w*$/)?.[0] ?? ''
   const right = after.match(/^\w*/)?.[0] ?? ''
   const word = left + right
-  const documentation = builtinDocumentation[word]
+  const receiverKind = before.slice(0, Math.max(0, before.length - left.length)).endsWith('.')
+    ? inferPythonReceiverKind(state.doc.toString(), pos)
+    : undefined
+  const documentation = receiverKind
+    ? pythonMemberDocumentationFor(word, receiverKind)
+    : builtinDocumentation[word]
+      ?? (/(?:^|[;\n])\s*from\s+turtle\s+import\s+\*/m.test(state.doc.toString()) ? pythonMemberDocumentationFor(word, 'turtle') : undefined)
   if (!documentation) return null
   return { from: pos - left.length, to: pos + right.length, documentation }
 }
@@ -339,14 +556,50 @@ function editorDiagnostics(state: EditorState, diagnostics: PythonSyntaxDiagnost
   })
 }
 
-export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sessionItemId, onChange, onBlur }: {
+export function PythonCodeEditor({
+  value,
+  disabled,
+  diagnostics,
+  sessionId,
+  sessionItemId,
+  onChange,
+  onBlur,
+  onRun,
+  runDisabled = false,
+  runDisabledReason,
+  runLabel = '运行公开样例',
+  autoSyntaxEnabled = true,
+  onAutoSyntaxChange,
+  onSyntaxCheck,
+  syntaxCheckDisabled = false,
+  syntaxStatus = 'idle',
+  autoFormatEnabled = false,
+  onAutoFormatChange,
+  onFormat,
+  formatDisabled = false,
+  formatStatus = 'idle',
+}: {
   value: string
   disabled: boolean
   diagnostics: PythonSyntaxDiagnostic[]
   sessionId?: number
   sessionItemId?: number
   onChange: (value: string) => void
-  onBlur: () => void
+  onBlur: (value: string) => void
+  onRun?: () => void
+  runDisabled?: boolean
+  runDisabledReason?: string
+  runLabel?: string
+  autoSyntaxEnabled?: boolean
+  onAutoSyntaxChange?: (enabled: boolean) => void
+  onSyntaxCheck?: () => void
+  syntaxCheckDisabled?: boolean
+  syntaxStatus?: PythonSyntaxStatus
+  autoFormatEnabled?: boolean
+  onAutoFormatChange?: (enabled: boolean) => void
+  onFormat?: () => void
+  formatDisabled?: boolean
+  formatStatus?: PythonFormatStatus
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -356,10 +609,12 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
   const editableCompartmentRef = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
+  const onFormatRef = useRef(onFormat)
   const sessionIdRef = useRef(sessionId)
   const sessionItemIdRef = useRef(sessionItemId)
   onChangeRef.current = onChange
   onBlurRef.current = onBlur
+  onFormatRef.current = onFormat
   sessionIdRef.current = sessionId
   sessionItemIdRef.current = sessionItemId
 
@@ -380,18 +635,22 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
         bracketMatching(),
         closeBrackets(),
         autocompletion({ override: [
-          createPyrightCompletionSource({
+          createCombinedPythonCompletionSource({
             sessionId: () => sessionIdRef.current,
             sessionItemId: () => sessionItemIdRef.current,
             onAvailability: setCompletionAvailability,
           }),
-          pythonCompletionSource,
         ], activateOnTyping: true }),
         hoverTooltip(pythonDocumentationTooltip, { hoverTime: 250, hideOnChange: true }),
         python(),
         syntaxHighlighting(softDarkHighlightStyle, { fallback: true }),
         indentUnit.of('    '),
         pythonEditorKeymap,
+        Prec.highest(keymap.of([{ key: 'Shift-Alt-f', run: () => {
+          if (!onFormatRef.current) return false
+          onFormatRef.current()
+          return true
+        } }])),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap]),
         editable.of([EditorView.editable.of(!disabled), EditorState.readOnly.of(disabled)]),
         EditorView.contentAttributes.of({ 'aria-label': 'Python 3.13 代码', spellcheck: 'false', autocapitalize: 'off' }),
@@ -399,7 +658,6 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
           if (update.docChanged && !syncingRef.current) onChangeRef.current(update.state.doc.toString())
           if (update.selectionSet || update.docChanged) setCursorPosition(pythonCursorPosition(update.state))
         }),
-        EditorView.domEventHandlers({ blur: () => { onBlurRef.current(); return false } }),
         editorTheme,
       ],
     })
@@ -412,10 +670,17 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
     const view = viewRef.current
     if (!view || view.state.doc.toString() === value) return
     syncingRef.current = true
-    const selection = view.state.selection.main
+    const current = view.state.doc.toString()
+    let from = 0
+    while (from < current.length && from < value.length && current[from] === value[from]) from += 1
+    let currentTo = current.length
+    let valueTo = value.length
+    while (currentTo > from && valueTo > from && current[currentTo - 1] === value[valueTo - 1]) {
+      currentTo -= 1
+      valueTo -= 1
+    }
     view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-      selection: { anchor: Math.min(selection.anchor, value.length), head: Math.min(selection.head, value.length) },
+      changes: { from, to: currentTo, insert: value.slice(from, valueTo) },
     })
     syncingRef.current = false
   }, [value])
@@ -432,9 +697,29 @@ export function PythonCodeEditor({ value, disabled, diagnostics, sessionId, sess
     view.dispatch(setDiagnostics(view.state, editorDiagnostics(view.state, diagnostics)))
   }, [diagnostics])
 
-  return <div className="python-ide-shell" data-theme="soft-dark">
-    <header className="python-ide-tabbar"><div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div><span className="python-ide-runtime">Python 3.13</span></header>
+  const showTools = !disabled && Boolean(onRun || onSyntaxCheck || onFormat || onAutoSyntaxChange || onAutoFormatChange)
+  const handleShellBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const shell = event.currentTarget
+    const next = event.relatedTarget as Node | null
+    if (next && shell.contains(next)) return
+    window.setTimeout(() => {
+      if (!shell.contains(document.activeElement)) onBlurRef.current(viewRef.current?.state.doc.toString() ?? value)
+    }, 0)
+  }
+
+  return <div className="python-ide-shell" data-theme="soft-dark" onBlurCapture={handleShellBlur}>
+    <header className="python-ide-tabbar">
+      <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
+      {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
+        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}><Play /></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
+        {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法'}</span></span>}
+        {onFormat && <span className="python-tool-wrap" tabIndex={formatDisabled || formatStatus === 'formatting' ? 0 : undefined}><button type="button" className="python-tool-button format" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button><span className="python-tool-tip" role="tooltip">{formatStatus === 'formatting' ? '正在格式化代码' : formatDisabled ? '当前不能格式化代码' : '立即格式化代码（Shift+Alt+F）'}</span></span>}
+        {(onAutoSyntaxChange || onAutoFormatChange) && <span className="python-toolbar-separator" aria-hidden="true" />}
+        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><ShieldCheck /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动语法：{autoSyntaxEnabled ? '已开启，停止输入后自动检查' : '已关闭，点击开启'}</span></span>}
+        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Sparkles /><span className="python-tool-state-dot" aria-hidden="true" /></button><span className="python-tool-tip" role="tooltip">自动格式化：{autoFormatEnabled ? '已开启，失焦或运行前自动格式化' : '已关闭，点击开启'}</span></span>}
+      </div> : <span className="python-ide-runtime">Python 3.13</span>}
+    </header>
     <div ref={hostRef} className="python-code-editor" />
-    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
+    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
   </div>
 }

@@ -59,12 +59,13 @@ COMPLETION_KIND = {
 }
 
 
-def _documentation_text(value: Any) -> str:
+def _documentation_payload(value: Any) -> tuple[str, str]:
     if isinstance(value, str):
-        return value
+        return value, "plaintext"
     if isinstance(value, dict) and isinstance(value.get("value"), str):
-        return value["value"]
-    return ""
+        kind = value.get("kind")
+        return value["value"], kind if kind in {"markdown", "plaintext"} else "plaintext"
+    return "", "plaintext"
 
 
 def _completion_range(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -159,7 +160,7 @@ class PyrightLanguageService:
         completion_id: str,
     ) -> dict[str, Any]:
         if not self.enabled:
-            return {"available": False, "detail": "", "documentation": ""}
+            return {"available": False, "detail": "", "documentation": "", "documentation_format": "plaintext"}
         async with self._lock:
             self._clean_completion_cache()
             cached = self._completion_cache.get(completion_id)
@@ -173,7 +174,7 @@ class PyrightLanguageService:
                 or document.uri != cached.document_uri
                 or document.version != cached.document_version
             ):
-                return {"available": False, "detail": "", "documentation": ""}
+                return {"available": False, "detail": "", "documentation": "", "documentation_format": "plaintext"}
             try:
                 await self._ensure_started()
                 resolved = await asyncio.wait_for(
@@ -183,12 +184,14 @@ class PyrightLanguageService:
             except (asyncio.TimeoutError, ConnectionError, OSError, RuntimeError) as exc:
                 logger.warning("Pyright completion resolve failed: %s", exc)
                 await self._stop(graceful=False)
-                return {"available": False, "detail": "", "documentation": ""}
+                return {"available": False, "detail": "", "documentation": "", "documentation_format": "plaintext"}
             item = resolved if isinstance(resolved, dict) else cached.item
+            documentation, documentation_format = _documentation_payload(item.get("documentation"))
             return {
                 "available": True,
                 "detail": str(item.get("detail") or ""),
-                "documentation": _documentation_text(item.get("documentation")),
+                "documentation": documentation,
+                "documentation_format": documentation_format,
             }
 
     async def _ensure_started(self) -> None:
@@ -325,12 +328,14 @@ class PyrightLanguageService:
                 created_at=time.monotonic(),
             )
             edit = raw.get("textEdit") if isinstance(raw.get("textEdit"), dict) else {}
+            documentation, documentation_format = _documentation_payload(raw.get("documentation"))
             items.append({
                 "id": completion_id,
                 "label": raw["label"],
                 "type": COMPLETION_KIND.get(raw.get("kind"), "text"),
                 "detail": str(raw.get("detail") or ""),
-                "documentation": _documentation_text(raw.get("documentation")),
+                "documentation": documentation,
+                "documentation_format": documentation_format,
                 "insert_text": str(edit.get("newText") or raw.get("insertText") or raw["label"]),
                 "insert_text_format": int(raw.get("insertTextFormat") or 1),
                 "filter_text": str(raw.get("filterText") or raw["label"]),
