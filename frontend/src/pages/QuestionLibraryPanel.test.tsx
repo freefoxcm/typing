@@ -130,7 +130,7 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: '展开习题集 进度题套' }))
     expect(screen.getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
-    expect(within(screen.getByRole('form', { name: '题目编辑器' })).getByRole('button', { name: /重新识别 25%/ })).toBeDisabled()
+    expect(within(screen.getByRole('form', { name: '题目编辑器' })).getByRole('button', { name: /重新识别本题 25%/ })).toBeDisabled()
     expect(screen.getByRole('progressbar', { name: '正在重新识别本题' })).toHaveAttribute('aria-valuenow', '25')
     fireEvent.click(screen.getByRole('button', { name: /PDF 智能识别/ }))
     fireEvent.click(screen.getByRole('button', { name: /题目 #61/ }))
@@ -298,6 +298,11 @@ describe('QuestionLibraryPanel', () => {
     expect(within(viewer).getByText('已发布题目仅供查看，如需修改请先撤回题套')).toBeInTheDocument()
     expect(within(viewer).queryByRole('button', { name: /保存/ })).not.toBeInTheDocument()
     expect(within(viewer).getByText('只读查看')).toBeInTheDocument()
+    expect(within(viewer).getByLabelText('向学生显示完整原题截图')).toBeDisabled()
+    expect(within(viewer).getByRole('button', { name: '收起原题区域' })).toBeEnabled()
+    expect(within(viewer).queryByRole('button', { name: '本地图片替换' })).not.toBeInTheDocument()
+    expect(within(viewer).queryByRole('button', { name: '重新识别本题' })).not.toBeInTheDocument()
+    expect(within(viewer).queryByRole('button', { name: /题干配图/ })).not.toBeInTheDocument()
     const stem = within(viewer).getByLabelText('题面')
     expect(stem).toHaveValue('已发布题目一')
     fireEvent.change(stem, { target: { value: '不应修改' } })
@@ -329,7 +334,14 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.getByRole('heading', { level: 2, name: '当前题套' })).toBeInTheDocument()
     expect(screen.getByText('第 1 / 2 题')).toBeInTheDocument()
     const sourceSwitch = screen.getByLabelText('向学生显示完整原题截图')
-    expect(sourceSwitch.closest('.question-source-heading')).not.toBeNull()
+    const sourceHeading = sourceSwitch.closest('.question-source-heading') as HTMLElement
+    expect(sourceHeading).not.toBeNull()
+    expect(within(sourceHeading).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      '本地图片替换',
+      '重新识别本题',
+      '收起原题区域',
+    ])
+    expect(screen.getByRole('form', { name: '题目编辑器' }).querySelector('.question-editor-header')).not.toHaveTextContent('收起原图')
     fireEvent.click(sourceSwitch)
     expect(sourceSwitch).toBeChecked()
     fireEvent.click(sourceSwitch)
@@ -387,14 +399,52 @@ describe('QuestionLibraryPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: '展开习题集 题干配图测试' }))
     fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
     const file = new File(['image'], 'diagram.png', { type: 'image/png' })
-    fireEvent.change(screen.getByLabelText('上传题干配图'), { target: { files: [file] } })
+    fireEvent.change(screen.getByLabelText('选择题干配图'), { target: { files: [file] } })
     expect(await screen.findByAltText('题干配图预览')).toHaveAttribute('src', '/api/question-assets/44')
     expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) }))
-    fireEvent.click(screen.getByRole('button', { name: '移除' }))
+    expect(screen.getByRole('button', { name: '替换题干配图' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '移除题干配图' }))
     await waitFor(() => expect(screen.queryByAltText('题干配图预览')).not.toBeInTheDocument())
     expect(screen.getByText('当前没有题干配图')).toBeInTheDocument()
     expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/95/stem-image', expect.objectContaining({ method: 'DELETE' }))
     confirm.mockRestore()
+  })
+
+  it('uploads a source screenshot from the image toolbar and enables its student visibility switch', async () => {
+    const question = { id: 96, question_set_id: 9, type: 'true_false' as const, stem_markdown: '缺少原图', explanation_markdown: '', points: 2, sort_order: 0, reviewed: false, correct_bool: true, source_asset_id: null, stem_image_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 9, title: '原图上传测试', description: '', status: 'draft', source_pdf_asset_id: null, question_count: 1, total_points: 2, counts: { true_false: 1 }, questions: [question] }]
+      if (path === '/api/admin/question-imports' || path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/96/source-image' && options?.method === 'PUT') return { ...question, source_asset_id: 45 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 原图上传测试' }))
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+    expect(screen.queryByLabelText('向学生显示完整原题截图')).not.toBeInTheDocument()
+    const file = new File(['image'], 'source.webp', { type: 'image/webp' })
+    fireEvent.change(screen.getByLabelText('选择原题图片'), { target: { files: [file] } })
+    expect(await screen.findByAltText('原题截图')).toHaveAttribute('src', '/api/question-assets/45')
+    expect(screen.getByRole('button', { name: '本地图片替换' })).toBeInTheDocument()
+    expect(screen.getByLabelText('向学生显示完整原题截图')).toBeInTheDocument()
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/96/source-image', expect.objectContaining({ method: 'PUT', body: expect.any(FormData) }))
+  })
+
+  it('keeps image upload and recognition icons disabled until a new question is saved', async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/admin/question-sets') return [{ id: 12, title: '新题测试', description: '', status: 'draft', source_pdf_asset_id: 8, question_count: 0, total_points: 0, counts: {}, questions: [] }]
+      if (path === '/api/admin/question-imports' || path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: true, base_url: 'https://example.test/v1', model: 'vision', batch_pages: 3 }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '题目' }))
+    const editor = screen.getByRole('form', { name: '题目编辑器' })
+    expect(within(editor).getByRole('button', { name: '上传原题图片' })).toBeDisabled()
+    expect(within(editor).getByRole('button', { name: '重新识别本题' })).toBeDisabled()
+    expect(within(editor).getByRole('button', { name: '上传题干配图' })).toBeDisabled()
+    expect(within(editor).queryByLabelText('向学生显示完整原题截图')).not.toBeInTheDocument()
   })
 
   it('reviews forward with the keyboard and closes after the last item in the set queue', async () => {
