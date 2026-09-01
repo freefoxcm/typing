@@ -5,7 +5,17 @@ from pathlib import Path
 import pytest
 
 from app.config import Settings
-from app.pyright_service import PyrightLanguageService
+from app.pyright_service import PyrightLanguageService, _documentation_payload
+
+
+def test_pyright_documentation_preserves_lsp_markup_kind():
+    assert _documentation_payload("plain docs") == ("plain docs", "plaintext")
+    assert _documentation_payload({"kind": "markdown", "value": "```python\nmin(values)\n```"}) == (
+        "```python\nmin(values)\n```",
+        "markdown",
+    )
+    assert _documentation_payload({"kind": "html", "value": "<b>unsafe</b>"}) == ("<b>unsafe</b>", "plaintext")
+    assert _documentation_payload(None) == ("", "plaintext")
 
 
 def test_real_pyright_completes_list_and_user_class_members():

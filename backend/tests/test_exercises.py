@@ -810,13 +810,13 @@ def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path)
             self.complete_calls.append(kwargs)
             return {"available": True, "items": [{
                 "id": "completion-token", "label": "append", "type": "method", "detail": "append(object: T)",
-                "documentation": "", "insert_text": "append", "insert_text_format": 1,
+                "documentation": "", "documentation_format": "plaintext", "insert_text": "append", "insert_text_format": 1,
                 "filter_text": "append", "sort_text": "append", "replace": None,
             }]}
 
         async def resolve(self, **kwargs):
             self.resolve_calls.append(kwargs)
-            return {"available": True, "detail": "append(object: T)", "documentation": "在列表末尾添加一个元素。"}
+            return {"available": True, "detail": "append(object: T)", "documentation": "在列表末尾添加一个元素。", "documentation_format": "markdown"}
 
         async def close(self):
             return None
@@ -860,6 +860,7 @@ def test_python_completion_endpoints_are_scoped_and_forward_to_pyright(tmp_path)
         resolved = client.post(f"{path}/resolve", json={"session_item_id": item_id, "completion_id": "completion-token"})
         assert resolved.status_code == 200
         assert "列表末尾" in resolved.json()["documentation"]
+        assert resolved.json()["documentation_format"] == "markdown"
         assert fake.resolve_calls[0]["session_id"] == session["id"]
 
         assert client.post(path, json={
