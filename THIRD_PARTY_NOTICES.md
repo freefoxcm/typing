@@ -11,3 +11,12 @@
 - Modifications: converted from KTouch XML into this project's JSON import format on 2026-07-20
 
 The original descriptive notices have been retained in the converted data where possible. This file is not licensed under the project's default `AGPL-3.0-or-later` license. The GPL version 2 license text is available at [LICENSES/GPL-2.0-or-later.txt](LICENSES/GPL-2.0-or-later.txt).
+
+## KaTeX
+
+- Component: `katex` frontend dependency and bundled math fonts
+- Upstream project: <https://katex.org/>
+- Copyright: 2013-2020 Khan Academy and other contributors
+- License: `MIT`
+
+KaTeX renders TeX-compatible mathematics in exercise content. Its license text is available at [LICENSES/KaTeX-MIT.txt](LICENSES/KaTeX-MIT.txt).

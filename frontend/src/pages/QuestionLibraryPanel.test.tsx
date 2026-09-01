@@ -279,7 +279,7 @@ describe('QuestionLibraryPanel', () => {
 
   it('opens published questions in a read-only viewer and navigates within the set', async () => {
     const publishedQuestions = [
-      { id: 91, question_set_id: 9, type: 'true_false' as const, stem_markdown: '已发布题目一', explanation_markdown: '解析一', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 44, show_source_crop: true, options: [], blanks: [], programming: null },
+      { id: 91, question_set_id: 9, type: 'true_false' as const, stem_markdown: '已发布题目 $H_1$', explanation_markdown: '解析 $100 \\le H_i$', points: 2, sort_order: 0, reviewed: true, correct_bool: true, source_asset_id: 44, show_source_crop: true, options: [], blanks: [], programming: null },
       { id: 92, question_set_id: 9, type: 'true_false' as const, stem_markdown: '已发布题目二', explanation_markdown: '解析二', points: 2, sort_order: 1, reviewed: true, correct_bool: false, source_asset_id: null, show_source_crop: false, options: [], blanks: [], programming: null },
     ]
     mockedApi.mockImplementation(async (path) => {
@@ -304,13 +304,13 @@ describe('QuestionLibraryPanel', () => {
     expect(within(viewer).queryByRole('button', { name: '本地图片替换' })).not.toBeInTheDocument()
     expect(within(viewer).queryByRole('button', { name: '重新识别本题' })).not.toBeInTheDocument()
     expect(within(viewer).queryByRole('button', { name: /题干配图/ })).not.toBeInTheDocument()
-    const stem = within(viewer).getByLabelText('题面')
-    expect(stem).toHaveValue('已发布题目一')
-    fireEvent.change(stem, { target: { value: '不应修改' } })
-    expect(stem).toHaveValue('已发布题目一')
+    const stem = within(viewer).getByRole('region', { name: '题面' })
+    expect(within(stem).getByText('查看 Markdown 源码')).toBeInTheDocument()
+    expect(stem.querySelector('.katex')).not.toBeNull()
+    expect(within(viewer).queryByRole('textbox', { name: '题面' })).not.toBeInTheDocument()
 
     fireEvent.click(within(viewer).getByRole('button', { name: /下一题/ }))
-    expect(within(viewer).getByLabelText('题面')).toHaveValue('已发布题目二')
+    expect(within(viewer).getByRole('region', { name: '题面' })).toHaveTextContent('已发布题目二')
     expect(mockedApi.mock.calls.some(([, options]) => options?.method === 'PUT' || options?.method === 'POST' || options?.method === 'DELETE')).toBe(false)
   })
 
@@ -352,11 +352,16 @@ describe('QuestionLibraryPanel', () => {
     expect(screen.queryByDisplayValue('不应进入的题目')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /保存并完成复核/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '上一题' }))
-    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '第一题（已修改）' } })
+    const stemPreview = screen.getByRole('form', { name: '题目编辑器' }).querySelector('.question-stem-field .markdown-preview') as HTMLDetailsElement
+    expect(stemPreview).not.toHaveAttribute('open')
+    fireEvent.change(screen.getByLabelText('题面'), { target: { value: '第一题 $H_1$' } })
+    expect(stemPreview.querySelector('.katex')).not.toBeNull()
+    fireEvent.click(within(stemPreview).getByText('渲染预览'))
+    expect(stemPreview).toHaveAttribute('open')
     fireEvent.keyDown(window, { key: 's', ctrlKey: true })
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/71', expect.objectContaining({ method: 'PUT' })))
     expect(screen.getByRole('form', { name: '题目编辑器' })).toBeInTheDocument()
-    expect(screen.getByLabelText('题面')).toHaveValue('第一题（已修改）')
+    expect(screen.getByLabelText('题面')).toHaveValue('第一题 $H_1$')
     expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
   })
 
