@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '../api'
 import type { WordSetSummary } from '../types'
-import { reorderWordSetList, saveWordSetOrder, WordLibraryPanel } from './WordLibraryPanel'
+import { getWordSetEnrichmentSummary, reorderWordSetList, saveWordSetOrder, WordLibraryPanel } from './WordLibraryPanel'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -69,6 +69,51 @@ describe('WordLibraryPanel', () => {
       method: 'PUT',
       body: JSON.stringify({ word_set_ids: [8, 7] }),
     }))
+  })
+
+  it('shows a compact ready summary and hides zero-value exception states', async () => {
+    wordSets = [{ ...makeWordSets()[0], word_count: 50, status_counts: { ready: 50, pending: 0, processing: 0, failed: 0 } }]
+    render(<WordLibraryPanel />)
+
+    const summary = await screen.findByRole('group', { name: /就绪 50，等待 0，生成中 0，失败 0，完成 100%/ })
+    expect(within(summary).getByText('资料就绪')).toBeInTheDocument()
+    expect(within(summary).getByText('50 / 50')).toBeInTheDocument()
+    expect(within(summary).getByText('全部就绪')).toBeInTheDocument()
+    expect(within(summary).getByText('100%')).toBeInTheDocument()
+    expect(within(summary).queryByText('等待 0')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('生成中 0')).not.toBeInTheDocument()
+    expect(within(summary).queryByText('失败 0')).not.toBeInTheDocument()
+    expect(within(summary).getByRole('progressbar', { name: '资料就绪进度' })).toHaveAttribute('aria-valuenow', '50')
+  })
+
+  it('prioritizes failures and only shows non-zero exception states', async () => {
+    wordSets = [{ ...makeWordSets()[0], word_count: 50, status_counts: { ready: 35, pending: 8, processing: 4, failed: 3 } }]
+    render(<WordLibraryPanel />)
+
+    const summary = await screen.findByRole('group', { name: /就绪 35，等待 8，生成中 4，失败 3，完成 70%/ })
+    expect(within(summary).getByText('存在失败项')).toBeInTheDocument()
+    expect(within(summary).getByText('失败 3')).toHaveClass('status-failed')
+    expect(within(summary).getByText('生成中 4')).toHaveClass('status-processing', 'is-active')
+    expect(within(summary).getByText('等待 8')).toHaveClass('status-pending')
+    expect(within(summary).getByRole('progressbar')).toHaveAttribute('aria-valuetext', '70%')
+  })
+
+  it('handles empty sets and missing status fields safely', async () => {
+    expect(getWordSetEnrichmentSummary({ word_count: 4, status_counts: { ready: 2 } })).toMatchObject({
+      counts: { ready: 2, pending: 0, processing: 0, failed: 0 },
+      total: 4,
+      percent: 50,
+      state: 'incomplete',
+    })
+    expect(getWordSetEnrichmentSummary({ word_count: 1, status_counts: { ready: Number.NaN, failed: -2 } })).toMatchObject({
+      counts: { ready: 0, pending: 0, processing: 0, failed: 0 },
+      total: 1,
+      percent: 0,
+    })
+
+    render(<WordLibraryPanel />)
+    expect(await screen.findByRole('status', { name: '暂无单词；就绪 0，等待 0，生成中 0，失败 0' })).toHaveTextContent('暂无单词')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 
   it('provides an accessible drag handle for each word set', async () => {
