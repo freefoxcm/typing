@@ -7,6 +7,7 @@ frontend/dist/
 *.tsbuildinfo
 coverage/
 output/
+tmp/
 .env
 data/
 *.db
