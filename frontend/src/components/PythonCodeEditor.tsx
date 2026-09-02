@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FocusEvent } from 'react'
-import { Braces, LoaderCircle, Play, Search } from 'lucide-react'
+import { Braces, LoaderCircle, Play, Search, Sparkles } from 'lucide-react'
 import {
   acceptCompletion,
   autocompletion,
+  closeCompletion,
   closeBrackets,
   closeBracketsKeymap,
   completionKeymap,
@@ -339,14 +340,17 @@ export function createPyrightCompletionSource({
   sessionId,
   sessionItemId,
   onAvailability,
+  enabled = () => true,
   request = api as ApiRequester,
 }: {
   sessionId: () => number | undefined
   sessionItemId: () => number | undefined
   onAvailability: (state: CompletionAvailability) => void
+  enabled?: () => boolean
   request?: ApiRequester
 }) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    if (!enabled()) return null
     const currentSessionId = sessionId()
     const currentItemId = sessionItemId()
     if (!currentSessionId || !currentItemId) return null
@@ -364,7 +368,7 @@ export function createPyrightCompletionSource({
         context.addEventListener('abort', () => { window.clearTimeout(timer); resolve() })
       })
     }
-    if (context.aborted) return null
+    if (context.aborted || !enabled()) return null
 
     const line = context.state.doc.lineAt(context.pos)
     const code = context.state.doc.toString()
@@ -388,7 +392,7 @@ export function createPyrightCompletionSource({
           trigger_character: triggerCharacter,
         }),
       })
-      if (context.aborted) return null
+      if (context.aborted || !enabled()) return null
       onAvailability(response.available ? 'ready' : 'unavailable')
       if (!response.available || !response.items.length) return null
       const replacementFrom = documentPosition(context.state, response.items[0].replace?.start ?? { line: line.number - 1, character: (word?.from ?? context.pos) - line.from })
@@ -440,6 +444,7 @@ export function createPyrightCompletionSource({
 export function createCombinedPythonCompletionSource(options: Parameters<typeof createPyrightCompletionSource>[0]) {
   const pyrightSource = createPyrightCompletionSource(options)
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    if (options.enabled && !options.enabled()) return null
     const staticResult = pythonCompletionSource(context)
     const semanticResult = await pyrightSource(context)
     if (!semanticResult) return staticResult
@@ -568,7 +573,10 @@ export function PythonCodeEditor({
   onRun,
   runDisabled = false,
   runDisabledReason,
-  runLabel = '运行公开样例',
+  runLabel = '运行样例',
+  runLoading = false,
+  autoCompletionEnabled = true,
+  onAutoCompletionChange,
   autoSyntaxEnabled = true,
   onAutoSyntaxChange,
   onSyntaxCheck,
@@ -591,6 +599,9 @@ export function PythonCodeEditor({
   runDisabled?: boolean
   runDisabledReason?: string
   runLabel?: string
+  runLoading?: boolean
+  autoCompletionEnabled?: boolean
+  onAutoCompletionChange?: (enabled: boolean) => void
   autoSyntaxEnabled?: boolean
   onAutoSyntaxChange?: (enabled: boolean) => void
   onSyntaxCheck?: () => void
@@ -608,6 +619,7 @@ export function PythonCodeEditor({
   const [completionAvailability, setCompletionAvailability] = useState<CompletionAvailability>('ready')
   const syncingRef = useRef(false)
   const editableCompartmentRef = useRef(new Compartment())
+  const completionCompartmentRef = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onBlurRef = useRef(onBlur)
   const onFormatRef = useRef(onFormat)
@@ -616,6 +628,7 @@ export function PythonCodeEditor({
   const syntaxStatusRef = useRef(syntaxStatus)
   const sessionIdRef = useRef(sessionId)
   const sessionItemIdRef = useRef(sessionItemId)
+  const autoCompletionEnabledRef = useRef(autoCompletionEnabled)
   onChangeRef.current = onChange
   onBlurRef.current = onBlur
   onFormatRef.current = onFormat
@@ -624,10 +637,20 @@ export function PythonCodeEditor({
   syntaxStatusRef.current = syntaxStatus
   sessionIdRef.current = sessionId
   sessionItemIdRef.current = sessionItemId
+  autoCompletionEnabledRef.current = autoCompletionEnabled
 
   useEffect(() => {
     if (!hostRef.current) return
     const editable = editableCompartmentRef.current
+    const completion = completionCompartmentRef.current
+    const completionExtension = () => autocompletion({ override: [
+      createCombinedPythonCompletionSource({
+        sessionId: () => sessionIdRef.current,
+        sessionItemId: () => sessionItemIdRef.current,
+        enabled: () => autoCompletionEnabledRef.current,
+        onAvailability: setCompletionAvailability,
+      }),
+    ], activateOnTyping: true })
     const state = EditorState.create({
       doc: value,
       extensions: [
@@ -641,13 +664,7 @@ export function PythonCodeEditor({
         indentOnInput(),
         bracketMatching(),
         closeBrackets(),
-        autocompletion({ override: [
-          createCombinedPythonCompletionSource({
-            sessionId: () => sessionIdRef.current,
-            sessionItemId: () => sessionItemIdRef.current,
-            onAvailability: setCompletionAvailability,
-          }),
-        ], activateOnTyping: true }),
+        completion.of(autoCompletionEnabledRef.current ? completionExtension() : []),
         hoverTooltip(pythonDocumentationTooltip, { hoverTime: 250, hideOnChange: true }),
         python(),
         syntaxHighlighting(softDarkHighlightStyle, { fallback: true }),
@@ -706,11 +723,27 @@ export function PythonCodeEditor({
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
+    closeCompletion(view)
+    const extension = autoCompletionEnabled
+      ? autocompletion({ override: [createCombinedPythonCompletionSource({
+        sessionId: () => sessionIdRef.current,
+        sessionItemId: () => sessionItemIdRef.current,
+        enabled: () => autoCompletionEnabledRef.current,
+        onAvailability: setCompletionAvailability,
+      })], activateOnTyping: true })
+      : []
+    view.dispatch({ effects: completionCompartmentRef.current.reconfigure(extension) })
+    if (!autoCompletionEnabled) setCompletionAvailability('ready')
+  }, [autoCompletionEnabled])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
     view.dispatch(setDiagnostics(view.state, editorDiagnostics(view.state, diagnostics)))
   }, [diagnostics])
 
-  const showTools = !disabled && Boolean(onRun || onSyntaxCheck || onFormat)
-  const showAutomationTools = !disabled && Boolean(onAutoSyntaxChange || onAutoFormatChange)
+  const showTools = !disabled && Boolean(onRun)
+  const showAutomationTools = !disabled && Boolean(onAutoCompletionChange || onAutoSyntaxChange || onAutoFormatChange)
   const handleShellBlur = (event: FocusEvent<HTMLDivElement>) => {
     const shell = event.currentTarget
     const next = event.relatedTarget as Node | null
@@ -724,18 +757,17 @@ export function PythonCodeEditor({
     <header className="python-ide-tabbar">
       <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
       {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
-        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}><Play /></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
-        {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法（Ctrl/Cmd+Shift+Enter）'}</span></span>}
-        {onFormat && <span className="python-tool-wrap" tabIndex={formatDisabled || formatStatus === 'formatting' ? 0 : undefined}><button type="button" className="python-tool-button format" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button><span className="python-tool-tip" role="tooltip">{formatStatus === 'formatting' ? '正在格式化代码' : formatDisabled ? '当前不能格式化代码' : '立即格式化代码（Shift+Alt+F）'}</span></span>}
+        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}>{runLoading ? <LoaderCircle className="spin" /> : <Play />}</button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
       </div> : <span className="python-ide-runtime">Python 3.13</span>}
     </header>
     <div ref={hostRef} className="python-code-editor" />
     <footer className="python-ide-statusbar" aria-label="编辑器状态">
-      {showAutomationTools && <div className="python-status-automation" role="group" aria-label="自动检查与格式化">
-        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><Search /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">语法检查：{autoSyntaxEnabled ? '已开启' : '已关闭'}</span></span>}
-        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Braces /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">代码格式化：{autoFormatEnabled ? '已开启' : '已关闭'}</span></span>}
+      {showAutomationTools && <div className="python-status-automation" role="group" aria-label="编辑器自动功能">
+        {onAutoCompletionChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-completion ${autoCompletionEnabled ? 'active' : ''}`} aria-label="智能补全" aria-pressed={autoCompletionEnabled} onClick={() => onAutoCompletionChange(!autoCompletionEnabled)}><Sparkles /></button><span className="python-tool-tip" role="tooltip">智能补全：{autoCompletionEnabled ? '已开启' : '已关闭'}</span></span>}
+        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><Search /></button><span className="python-tool-tip" role="tooltip">语法检查：{autoSyntaxEnabled ? '已开启' : '已关闭'}</span></span>}
+        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Braces /></button><span className="python-tool-tip" role="tooltip">代码格式化：{autoFormatEnabled ? '已开启' : '已关闭'}</span></span>}
       </div>}
-      <div className="python-status-details"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></div>
+      <div className="python-status-details"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}{autoCompletionEnabled && completionAvailability !== 'ready' && <span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : '补全暂不可用'}</span>}<span>Python 3.13</span></div>
     </footer>
   </div>
 }

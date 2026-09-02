@@ -10,7 +10,7 @@ vi.mock('../api', async (importOriginal) => {
 })
 
 vi.mock('../components/PythonCodeEditor', () => ({
-  PythonCodeEditor: ({ value, disabled, diagnostics, onChange, onBlur, onRun, runDisabled, runLabel, autoSyntaxEnabled, onAutoSyntaxChange, onSyntaxCheck, syntaxCheckDisabled, autoFormatEnabled, onAutoFormatChange, onFormat, formatStatus }: {
+  PythonCodeEditor: ({ value, disabled, diagnostics, onChange, onBlur, onRun, runDisabled, runLabel, autoCompletionEnabled, onAutoCompletionChange, autoSyntaxEnabled, onAutoSyntaxChange, onSyntaxCheck, syntaxCheckDisabled, autoFormatEnabled, onAutoFormatChange, onFormat, formatStatus }: {
     value: string
     disabled: boolean
     diagnostics: unknown[]
@@ -19,6 +19,8 @@ vi.mock('../components/PythonCodeEditor', () => ({
     onRun?: () => void
     runDisabled?: boolean
     runLabel?: string
+    autoCompletionEnabled?: boolean
+    onAutoCompletionChange?: (enabled: boolean) => void
     autoSyntaxEnabled?: boolean
     onAutoSyntaxChange?: (enabled: boolean) => void
     onSyntaxCheck?: () => void
@@ -30,6 +32,7 @@ vi.mock('../components/PythonCodeEditor', () => ({
   }) => <div>
     <textarea aria-label="Python 3.13 代码" value={value} disabled={disabled} data-diagnostic-count={diagnostics.length} onChange={(event) => onChange(event.target.value)} onBlur={() => onBlur(value)} />
     {onRun && <button disabled={runDisabled} onClick={onRun}>{runLabel}</button>}
+    {onAutoCompletionChange && <button aria-label="智能补全" aria-pressed={autoCompletionEnabled} onClick={() => onAutoCompletionChange(!autoCompletionEnabled)}>智能补全</button>}
     {onAutoSyntaxChange && <button aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}>自动语法检查</button>}
     {onSyntaxCheck && <button aria-label="立即检查语法" disabled={syntaxCheckDisabled} onClick={onSyntaxCheck}>检查语法</button>}
     {onAutoFormatChange && <button aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}>自动格式化</button>}
@@ -304,7 +307,7 @@ describe('ExercisePage', () => {
     renderPage()
     const editor = await screen.findByLabelText('Python 3.13 代码')
     expect(editor).toHaveValue('for i in range(3):')
-    expect(screen.getByRole('button', { name: /运行公开样例/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /运行样例/ })).toBeEnabled()
     const limits = screen.getByLabelText('运行限制')
     expect(limits.querySelectorAll('section')).toHaveLength(2)
     expect(limits).toHaveTextContent('时间限制1000ms')
@@ -337,17 +340,26 @@ describe('ExercisePage', () => {
     expect(second.container.querySelector('.public-sample-explanation')).toBeNull()
   })
 
-  it('defaults to automatic syntax checking with formatting off and remembers both preferences', async () => {
+  it('defaults to completion and automatic syntax enabled with formatting off and remembers all preferences', async () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { valid: true, diagnostics: [] })
     renderPage()
-    expect(await screen.findByRole('button', { name: '自动语法检查' })).toHaveAttribute('aria-pressed', 'true')
+    const autoCompletion = await screen.findByRole('button', { name: '智能补全' })
+    expect(autoCompletion).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '自动语法检查' })).toHaveAttribute('aria-pressed', 'true')
     const autoFormat = screen.getByRole('button', { name: '自动格式化' })
     expect(autoFormat).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(autoFormat)
-    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: true, autoFormat: true }))
+    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoCompletion: true, autoSyntax: true, autoFormat: true }))
+    fireEvent.click(autoCompletion)
+    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoCompletion: false, autoSyntax: true, autoFormat: true }))
     fireEvent.click(screen.getByRole('button', { name: '自动语法检查' }))
-    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoSyntax: false, autoFormat: true }))
+    await waitFor(() => expect(readPythonEditorPreferences()).toEqual({ autoCompletion: false, autoSyntax: false, autoFormat: true }))
+  })
+
+  it('keeps smart completion enabled when loading older editor preferences', () => {
+    window.localStorage.setItem('kidtype-python-editor-preferences-v1', JSON.stringify({ autoSyntax: false, autoFormat: true }))
+    expect(readPythonEditorPreferences()).toEqual({ autoCompletion: true, autoSyntax: false, autoFormat: true })
   })
 
   it('stops pending syntax checks when automatic syntax is disabled', async () => {
@@ -420,7 +432,7 @@ describe('ExercisePage', () => {
     renderPage()
     const editor = await screen.findByLabelText('Python 3.13 代码')
     fireEvent.change(editor, { target: { value: 'print( 1 )' } })
-    fireEvent.click(screen.getByRole('button', { name: '运行公开样例' }))
+    fireEvent.click(screen.getByRole('button', { name: '运行样例' }))
     await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/sample-runs', expect.objectContaining({
       body: JSON.stringify({ session_item_id: 72, code: 'print(1)\n' }),
     })), { timeout: 2500 })
@@ -581,7 +593,7 @@ describe('ExercisePage', () => {
     })
     renderPage()
     const editor = await screen.findByLabelText('Python 3.13 代码')
-    const runButton = screen.getByRole('button', { name: /运行公开样例/ })
+    const runButton = screen.getByRole('button', { name: /运行样例/ })
     fireEvent.change(editor, { target: { value: 'print("once")' } })
     fireEvent.blur(editor)
     fireEvent.click(runButton)
