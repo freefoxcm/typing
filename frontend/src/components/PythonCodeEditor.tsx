@@ -709,7 +709,8 @@ export function PythonCodeEditor({
     view.dispatch(setDiagnostics(view.state, editorDiagnostics(view.state, diagnostics)))
   }, [diagnostics])
 
-  const showTools = !disabled && Boolean(onRun || onSyntaxCheck || onFormat || onAutoSyntaxChange || onAutoFormatChange)
+  const showTools = !disabled && Boolean(onRun || onSyntaxCheck || onFormat)
+  const showAutomationTools = !disabled && Boolean(onAutoSyntaxChange || onAutoFormatChange)
   const handleShellBlur = (event: FocusEvent<HTMLDivElement>) => {
     const shell = event.currentTarget
     const next = event.relatedTarget as Node | null
@@ -726,14 +727,15 @@ export function PythonCodeEditor({
         {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}><Play /></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
         {onSyntaxCheck && <span className="python-tool-wrap" tabIndex={syntaxCheckDisabled || syntaxStatus === 'checking' ? 0 : undefined}><button type="button" className="python-tool-button syntax" onClick={onSyntaxCheck} disabled={syntaxCheckDisabled || syntaxStatus === 'checking'} aria-label="立即检查语法">{syntaxStatus === 'checking' ? <LoaderCircle className="spin" /> : <Search />}</button><span className="python-tool-tip" role="tooltip">{syntaxStatus === 'checking' ? '正在检查 Python 语法' : syntaxCheckDisabled ? '当前不能检查语法' : '立即检查语法（Ctrl/Cmd+Shift+Enter）'}</span></span>}
         {onFormat && <span className="python-tool-wrap" tabIndex={formatDisabled || formatStatus === 'formatting' ? 0 : undefined}><button type="button" className="python-tool-button format" onClick={onFormat} disabled={formatDisabled || formatStatus === 'formatting'} aria-label="立即格式化代码">{formatStatus === 'formatting' ? <LoaderCircle className="spin" /> : <Braces />}</button><span className="python-tool-tip" role="tooltip">{formatStatus === 'formatting' ? '正在格式化代码' : formatDisabled ? '当前不能格式化代码' : '立即格式化代码（Shift+Alt+F）'}</span></span>}
-        {(onAutoSyntaxChange || onAutoFormatChange) && <span className="python-toolbar-separator" aria-hidden="true" />}
-        {(onAutoSyntaxChange || onAutoFormatChange) && <div className="python-automation-tools" role="group" aria-label="自动检查与格式化">
-          {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button python-auto-toggle auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><Search /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">自动语法检查：{autoSyntaxEnabled ? '已开启，停止输入后自动检查；点击关闭' : '已关闭；点击开启'}</span></span>}
-          {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-tool-button python-auto-toggle auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Braces /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">自动格式化代码：{autoFormatEnabled ? '已开启，离开编辑器或运行前自动格式化；点击关闭' : '已关闭；点击开启'}</span></span>}
-        </div>}
       </div> : <span className="python-ide-runtime">Python 3.13</span>}
     </header>
     <div ref={hostRef} className="python-code-editor" />
-    <footer className="python-ide-statusbar" aria-label="编辑器状态"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></footer>
+    <footer className="python-ide-statusbar" aria-label="编辑器状态">
+      {showAutomationTools && <div className="python-status-automation" role="group" aria-label="自动检查与格式化">
+        {onAutoSyntaxChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-syntax ${autoSyntaxEnabled ? 'active' : ''}`} aria-label="自动语法检查" aria-pressed={autoSyntaxEnabled} onClick={() => onAutoSyntaxChange(!autoSyntaxEnabled)}><Search /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">语法检查：{autoSyntaxEnabled ? '已开启' : '已关闭'}</span></span>}
+        {onAutoFormatChange && <span className="python-tool-wrap"><button type="button" className={`python-status-toggle auto-format ${autoFormatEnabled ? 'active' : ''}`} aria-label="自动格式化" aria-pressed={autoFormatEnabled} onClick={() => onAutoFormatChange(!autoFormatEnabled)}><Braces /><span className="python-toggle-track" aria-hidden="true"><span /></span></button><span className="python-tool-tip" role="tooltip">代码格式化：{autoFormatEnabled ? '已开启' : '已关闭'}</span></span>}
+      </div>}
+      <div className="python-status-details"><span>行 {cursorPosition.line}，列 {cursorPosition.column}</span><span className="python-status-secondary">空格：4</span><span className="python-status-secondary">UTF-8</span>{disabled && <span>只读</span>}{formatStatus !== 'idle' && <span className={`python-format-state ${formatStatus}`} role="status">{formatStatus === 'formatting' ? '格式化中…' : formatStatus === 'formatted' ? '已格式化' : formatStatus === 'unchanged' ? '格式已规范' : '格式化失败'}</span>}<span className={`python-completion-availability ${completionAvailability}`}>{completionAvailability === 'checking' ? '正在补全…' : completionAvailability === 'unavailable' ? '补全暂不可用' : '智能补全'}</span><span>Python 3.13</span></div>
+    </footer>
   </div>
 }

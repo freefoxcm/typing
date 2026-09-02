@@ -64,7 +64,7 @@ function makeProgrammingSession(): ExerciseSession {
       id: 72, sort_order: 0, points: 25,
       question: {
         id: 4, type: 'programming', stem_markdown: '循环输出', points: 25, sort_order: 0, options: [],
-        programming: { input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: 'for i in range(3):', time_limit_ms: 1000, memory_limit_mb: 128, cases: [{ id: 1, input_data: '3\n', expected_output: '0\n1\n2\n', is_sample: true, weight: 0 }] },
+        programming: { input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: 'for i in range(3):', time_limit_ms: 1000, memory_limit_mb: 128, cases: [{ id: 1, input_data: '3\n', expected_output: '0\n1\n2\n', is_sample: true, weight: 0, explanation_markdown: '循环输出 $H_1$。' }] },
       },
       answer: { selected_option_ids: [], bool_answer: null, code: '', status: 'unanswered' },
     }],
@@ -305,8 +305,10 @@ describe('ExercisePage', () => {
     const editor = await screen.findByLabelText('Python 3.13 代码')
     expect(editor).toHaveValue('for i in range(3):')
     expect(screen.getByRole('button', { name: /运行公开样例/ })).toBeEnabled()
-    expect(screen.getByLabelText('运行限制')).toHaveTextContent('时间限制：1000 ms')
-    expect(screen.getByLabelText('运行限制')).toHaveTextContent('内存限制：128 MB')
+    const limits = screen.getByLabelText('运行限制')
+    expect(limits.querySelectorAll('section')).toHaveLength(2)
+    expect(limits).toHaveTextContent('时间限制1000ms')
+    expect(limits).toHaveTextContent('内存限制128MB')
     expect(screen.getByText(/^3$/)).toBeInTheDocument()
     fireEvent.change(editor, { target: { value: 'for i in range(3):\n    print(i)' } })
     fireEvent.blur(editor)
@@ -316,6 +318,23 @@ describe('ExercisePage', () => {
     ))
     fireEvent.change(editor, { target: { value: '' } })
     expect(editor).toHaveValue('')
+  })
+
+  it('shows each public sample vertically as input, output, then optional explanation', async () => {
+    const programming = makeProgrammingSession()
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { ok: true })
+    const view = renderPage()
+    await screen.findByText('循环输出')
+    const sections = [...view.container.querySelectorAll('.public-sample-sections > section')]
+    expect(sections.map((section) => section.querySelector('h4')?.textContent)).toEqual(['标准输入', '期望输出', '样例解释'])
+    expect(sections[2].querySelector('.katex')).not.toBeNull()
+    view.unmount()
+
+    programming.items[0].question.programming!.cases[0].explanation_markdown = ''
+    mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { ok: true })
+    const second = renderPage()
+    await screen.findByText('循环输出')
+    expect(second.container.querySelector('.public-sample-explanation')).toBeNull()
   })
 
   it('defaults to automatic syntax checking with formatting off and remembers both preferences', async () => {

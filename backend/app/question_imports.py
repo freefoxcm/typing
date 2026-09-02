@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .job_control import progress_payload, register_active_job, unregister_active_job
 from .models import ProgrammingCase, ProgrammingSpec, Question, QuestionAsset, QuestionBlank, QuestionImportJob, QuestionOption, QuestionSet
+from .sample_explanations import structure_candidate_sample_explanations
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -177,7 +178,8 @@ async def _request_batch(
         '"blanks":[{"position":1,"accepted_answers":["答案","等价答案"]}],'
         '"programming":{"input_markdown":"","output_markdown":"","constraints_markdown":"",'
         '"starter_code":"","reference_solution":"","time_limit_ms":1000,"memory_limit_mb":128,'
-        '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":""}]}}]}。'
+        '"cases":[{"input_data":"","expected_output":"","is_sample":true,"weight":0,"note":"",'
+        '"explanation_markdown":""}]}}]}。'
         f"本次仅输出起始页为 {primary_pages} 的题目；其他页只是上下文，不得单独输出其上开始的题。"
         "page_inventory 必须逐个列出主页面上开始的题目，并与 questions 使用相同 candidate_id。"
         "一道编程题的题面、小问、代码、样例和续页必须合并为同一题，除非试卷明确印有新题号和独立分值。"
@@ -187,6 +189,7 @@ async def _request_batch(
         "判断题的 correct_bool 必须根据答案明确返回 true 或 false，不得返回 null；单选题必须且只能标记一个正确选项，多选题至少标记一个正确选项。"
         "每一道题无论 has_visual 是否为 true，都必须返回 crop_regions，且只覆盖该题的完整题面、选项、代码和样例；跨页题逐页返回裁剪区域。"
         "编程题隐藏用例只能作为未确认候选，is_sample=false，weight 可建议但不能标记确认。"
+        "编程题的每段样例解释必须写入对应公开样例的 explanation_markdown，不得混入 stem_markdown。"
         "必须使用标准 JSON：所有属性名和字符串使用英文双引号，字符串内换行和反斜杠必须转义，禁止尾逗号、注释和省略号。"
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": "请把这些连续试卷页面解析为结构化题库。" + schema}]
@@ -542,6 +545,7 @@ async def _request_focused_review(settings: Settings, document: Any, raw: dict[s
         "type": "text",
         "text": (
             "请对照高清原页复核这一道题。纠正题面、选项、答案、填空占位符、代码缩进和跨页范围，"
+            "编程题的样例解释必须写入对应公开样例的 explanation_markdown，不得混入题面。"
             "并重新给出覆盖完整题目的逐页 crop_regions。不得新增题目。只返回与原结构相同、questions 仅含一道题的严格 JSON。\n"
             + json.dumps({"questions": [raw]}, ensure_ascii=False, default=str)
         ),
@@ -584,6 +588,8 @@ async def _request_focused_review(settings: Settings, document: Any, raw: dict[s
 
 
 def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in group:
+        structure_candidate_sample_explanations(item)
     ordered = sorted(group, key=_candidate_score, reverse=True)
     result = deepcopy(ordered[0])
     result["source_page"] = min(_positive_int(item.get("source_page"), 1) for item in group)
@@ -618,7 +624,12 @@ def _merge_question_group(group: list[dict[str, Any]]) -> dict[str, Any]:
                     key = (bool(case.get("is_sample")), str(case.get("input_data") or "").strip())
                     previous = cases.get(key)
                     if previous is None or len(str(case.get("expected_output") or "")) > len(str(previous.get("expected_output") or "")):
-                        cases[key] = deepcopy(case)
+                        replacement = deepcopy(case)
+                        if previous and not str(replacement.get("explanation_markdown") or "").strip():
+                            replacement["explanation_markdown"] = previous.get("explanation_markdown", "")
+                        cases[key] = replacement
+                    elif not str(previous.get("explanation_markdown") or "").strip() and str(case.get("explanation_markdown") or "").strip():
+                        previous["explanation_markdown"] = case["explanation_markdown"]
             program["cases"] = list(cases.values())
             result["programming"] = program
     return result
@@ -1094,6 +1105,7 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
     for index, raw in enumerate(payload.get("questions", []), start=1):
         if not isinstance(raw, dict):
             continue
+        structure_candidate_sample_explanations(raw)
         kind = _question_type(raw.get("type"))
         points = _bounded_int(raw.get("points"), 25 if kind == "programming" else 2, 1, 10000)
         source_page = _positive_int(raw.get("source_page"), 1)
@@ -1164,6 +1176,7 @@ def materialize_draft(db: Session, settings: Settings, source_asset: QuestionAss
                     weight=0 if is_sample else _bounded_int(case.get("weight"), 0, 0, 10000),
                     confirmed=False,
                     note=_safe_markdown(case.get("note"), 1000),
+                    explanation_markdown=_safe_markdown(case.get("explanation_markdown"), 10000),
                 ))
             question.programming = spec
     return question_set

@@ -33,6 +33,7 @@ from .question_imports import (
     parse_pdf,
     repair_crop_regions,
 )
+from .sample_explanations import structure_candidate_sample_explanations
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -105,6 +106,7 @@ def _raw_from_question(question: Question) -> dict[str, Any]:
                     "weight": item.weight,
                     "confirmed": False,
                     "note": item.note,
+                    "explanation_markdown": item.explanation_markdown,
                 }
                 for item in question.programming.cases
             ],
@@ -113,6 +115,7 @@ def _raw_from_question(question: Question) -> dict[str, Any]:
 
 
 def _candidate_preview(raw: dict[str, Any], sort_order: int, asset_id: int | None) -> dict[str, Any]:
+    structure_candidate_sample_explanations(raw)
     kind = _question_type(raw.get("type"))
     program = raw.get("programming") if isinstance(raw.get("programming"), dict) else None
     source_page = _bounded_int(raw.get("source_page"), 1, 1, 10000)
@@ -172,6 +175,7 @@ def _candidate_preview(raw: dict[str, Any], sort_order: int, asset_id: int | Non
                     "weight": _bounded_int(item.get("weight"), 0, 0, 10000),
                     "confirmed": False,
                     "note": _safe_markdown(item.get("note"), 10000),
+                    "explanation_markdown": _safe_markdown(item.get("explanation_markdown"), 10000),
                 }
                 for item in _mapping_items(program.get("cases"))
             ],

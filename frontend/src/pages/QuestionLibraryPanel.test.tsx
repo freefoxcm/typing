@@ -628,4 +628,39 @@ describe('QuestionLibraryPanel', () => {
     expect(buttons.indexOf(recognize)).toBeLessThan(buttons.indexOf(remove))
     expect(recognize).toHaveTextContent('')
   })
+
+  it('edits and previews Markdown explanations for public samples only', async () => {
+    const programming = {
+      id: 401, question_set_id: 41, type: 'programming', stem_markdown: '输出数字', explanation_markdown: '', points: 10,
+      sort_order: 0, reviewed: false, source_asset_id: null, show_source_crop: false, options: [], blanks: [],
+      programming: {
+        input_markdown: '', output_markdown: '', constraints_markdown: '', starter_code: '', reference_solution: '', time_limit_ms: 1000, memory_limit_mb: 128,
+        cases: [
+          { id: 1, input_data: '1\n', expected_output: '1\n', is_sample: true, weight: 0, confirmed: false, note: '', explanation_markdown: '原解释' },
+          { id: 2, input_data: '2\n', expected_output: '2\n', is_sample: false, weight: 10, confirmed: true, note: '边界', explanation_markdown: '隐藏说明' },
+        ],
+      },
+    }
+    mockedApi.mockImplementation(async (path, options) => {
+      if (path === '/api/admin/question-sets') return [{ id: 41, title: '样例解释题套', description: '', status: 'draft', question_count: 1, total_points: 10, counts: { programming: 1 }, questions: [programming] }]
+      if (path === '/api/admin/question-imports' || path === '/api/admin/question-recognition-jobs') return []
+      if (path === '/api/admin/import-llm/status') return { configured: false, base_url: '', model: '', batch_pages: 3 }
+      if (path === '/api/admin/questions/401' && options?.method === 'PUT') return { ...programming, ...JSON.parse(String(options.body)) }
+      return { id: 1 }
+    })
+    render(<QuestionLibraryPanel />)
+    fireEvent.click(await screen.findByRole('button', { name: '展开习题集 样例解释题套' }))
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+
+    const explanation = screen.getByLabelText('样例解释')
+    expect(screen.getAllByText('样例解释')).toHaveLength(1)
+    fireEvent.change(explanation, { target: { value: '输出 $H_1$。' } })
+    const field = explanation.closest('.markdown-editor-field') as HTMLElement
+    fireEvent.click(within(field).getByText('渲染预览'))
+    expect(field.querySelector('.katex')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /保存草稿/ }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/admin/questions/401', expect.objectContaining({
+      method: 'PUT', body: expect.stringContaining('"explanation_markdown":"输出 $H_1$。"'),
+    })))
+  })
 })

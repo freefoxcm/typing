@@ -232,6 +232,7 @@ class ProgrammingCase(Base):
     weight: Mapped[int] = mapped_column(Integer, default=0)
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[str] = mapped_column(Text, default="")
+    explanation_markdown: Mapped[str] = mapped_column(Text, default="")
     programming: Mapped[ProgrammingSpec] = relationship(back_populates="cases")
 
 
