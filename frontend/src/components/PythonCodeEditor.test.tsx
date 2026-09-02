@@ -94,7 +94,7 @@ describe('PythonCodeEditor', () => {
     expect(pythonEditorKeyBindings.find((binding) => binding.key === 'Enter')?.run).toBe(acceptCompletion)
   })
 
-  it('renders a wide run control, keeps manual tools on shortcuts, and places automatic controls in the status bar', async () => {
+  it('renders an icon-only run control, keeps manual tools on shortcuts, and places automatic controls in the status bar', async () => {
     const onBlur = vi.fn()
     const onRun = vi.fn()
     const onFormat = vi.fn()
@@ -125,7 +125,8 @@ describe('PythonCodeEditor', () => {
     const toolbarButtons = Array.from(toolbar.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))
     expect(toolbarButtons).toEqual(['运行样例'])
     expect(run).toHaveClass('run')
-    expect(run).toHaveTextContent('运行样例')
+    expect(run).toHaveTextContent('')
+    expect(run.querySelector('svg')).toHaveClass('lucide-play')
     expect(screen.queryByRole('button', { name: '立即检查语法' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '立即格式化代码' })).not.toBeInTheDocument()
     const autoCompletion = screen.getByRole('button', { name: '智能补全' })

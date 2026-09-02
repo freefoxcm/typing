@@ -757,7 +757,7 @@ export function PythonCodeEditor({
     <header className="python-ide-tabbar">
       <div className="python-file-tab"><span className="python-file-icon" aria-hidden="true">Py</span><span>main.py</span></div>
       {showTools ? <div className="python-editor-toolbar" aria-label="代码编辑工具栏">
-        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}>{runLoading ? <LoaderCircle className="spin" /> : <Play />}<span>{runLabel}</span></button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
+        {onRun && <span className="python-tool-wrap" tabIndex={runDisabled ? 0 : undefined}><button type="button" className="python-tool-button run" disabled={runDisabled} onClick={onRun} aria-label={runLabel}>{runLoading ? <LoaderCircle className="spin" /> : <Play />}</button><span className="python-tool-tip" role="tooltip">{runDisabled ? runDisabledReason || '当前不能运行公开样例' : `${runLabel}：使用当前代码运行公开测试点`}</span></span>}
       </div> : <span className="python-ide-runtime">Python 3.13</span>}
     </header>
     <div ref={hostRef} className="python-code-editor" />
