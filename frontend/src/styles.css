@@ -189,7 +189,7 @@
 .python-tool-button{position:relative;display:grid;place-items:center;width:32px;height:32px;min-height:32px;margin:0;padding:0;border:1px solid #4b5263;border-radius:7px;background:#282c34;color:#abb2bf;box-shadow:none;transition:background .15s,border-color .15s,color .15s,transform .15s}
 .python-tool-button svg{width:16px;height:16px}.python-tool-button .spin{animation:spin .9s linear infinite}
 .python-tool-button:hover:not(:disabled){transform:none;color:#fff}.python-tool-button:focus-visible{outline:2px solid #528bff;outline-offset:2px}
-.python-tool-button.run{border-color:#3a7655;background:#28543d;color:#9bdfb8}.python-tool-button.run:hover:not(:disabled){background:#32684b;border-color:#9bdfb8}
+.python-tool-button.run{display:flex;width:auto;min-width:92px;padding:0 12px;gap:7px;border-color:#3a7655;background:#28543d;color:#9bdfb8;font-size:.68rem;font-weight:800;white-space:nowrap}.python-tool-button.run:hover:not(:disabled){background:#32684b;border-color:#9bdfb8}
 .python-tool-button.syntax{border-color:#477da5;background:#294b68;color:#8ac9f5}.python-tool-button.syntax:hover:not(:disabled){background:#345e80;border-color:#8ac9f5}
 .python-tool-button.format{border-color:#805b94;background:#51375e;color:#d59ae8}.python-tool-button.format:hover:not(:disabled){background:#674577;border-color:#d59ae8}
 .python-status-automation{display:flex;align-items:center;gap:7px;flex:0 0 auto}

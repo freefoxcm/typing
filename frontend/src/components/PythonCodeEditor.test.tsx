@@ -94,13 +94,14 @@ describe('PythonCodeEditor', () => {
     expect(pythonEditorKeyBindings.find((binding) => binding.key === 'Enter')?.run).toBe(acceptCompletion)
   })
 
-  it('renders run and formatting controls in the tab bar without treating toolbar focus as editor blur', async () => {
+  it('renders a wide run control, keeps manual tools on shortcuts, and places automatic controls in the status bar', async () => {
     const onBlur = vi.fn()
     const onRun = vi.fn()
     const onFormat = vi.fn()
     const onSyntaxCheck = vi.fn()
     const onAutoSyntaxChange = vi.fn()
     const onAutoFormatChange = vi.fn()
+    const onAutoCompletionChange = vi.fn()
     const view = render(<PythonCodeEditor
       value="print(1)"
       disabled={false}
@@ -110,56 +111,58 @@ describe('PythonCodeEditor', () => {
       onRun={onRun}
       onFormat={onFormat}
       onSyntaxCheck={onSyntaxCheck}
+      autoCompletionEnabled
+      onAutoCompletionChange={onAutoCompletionChange}
       autoSyntaxEnabled
       onAutoSyntaxChange={onAutoSyntaxChange}
       autoFormatEnabled={false}
       onAutoFormatChange={onAutoFormatChange}
     />)
     const editor = await screen.findByLabelText('Python 3.13 代码')
-    const run = screen.getByRole('button', { name: '运行公开样例' })
+    const run = screen.getByRole('button', { name: '运行样例' })
     expect(run.closest('.python-ide-tabbar')).not.toBeNull()
     const toolbar = screen.getByLabelText('代码编辑工具栏')
     const toolbarButtons = Array.from(toolbar.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))
-    expect(toolbarButtons).toEqual(['运行公开样例', '立即检查语法', '立即格式化代码'])
+    expect(toolbarButtons).toEqual(['运行样例'])
     expect(run).toHaveClass('run')
-    const manualSyntax = screen.getByRole('button', { name: '立即检查语法' })
-    const manualFormat = screen.getByRole('button', { name: '立即格式化代码' })
+    expect(run).toHaveTextContent('运行样例')
+    expect(screen.queryByRole('button', { name: '立即检查语法' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '立即格式化代码' })).not.toBeInTheDocument()
+    const autoCompletion = screen.getByRole('button', { name: '智能补全' })
     const autoSyntax = screen.getByRole('button', { name: '自动语法检查' })
     const autoFormat = screen.getByRole('button', { name: '自动格式化' })
-    expect(manualSyntax).toHaveClass('syntax')
-    expect(manualFormat).toHaveClass('format')
+    expect(autoCompletion).toHaveAttribute('aria-pressed', 'true')
     expect(autoSyntax).toHaveAttribute('aria-pressed', 'true')
     expect(autoFormat).toHaveAttribute('aria-pressed', 'false')
-    expect(manualSyntax.querySelector('svg')).toHaveClass('lucide-search')
+    expect(autoCompletion.closest('.python-ide-statusbar')).not.toBeNull()
     expect(autoSyntax.closest('.python-ide-statusbar')).not.toBeNull()
     expect(autoFormat.closest('.python-ide-statusbar')).not.toBeNull()
+    expect(autoCompletion.querySelector('svg')).toHaveClass('lucide-sparkles')
     expect(autoSyntax.querySelector('svg')).toHaveClass('lucide-search')
-    expect(manualFormat.querySelector('svg')).toHaveClass('lucide-braces')
     expect(autoFormat.querySelector('svg')).toHaveClass('lucide-braces')
-    expect(screen.getByRole('group', { name: '自动检查与格式化' })).toContainElement(autoSyntax)
+    const automaticGroup = screen.getByRole('group', { name: '编辑器自动功能' })
+    expect(Array.from(automaticGroup.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))).toEqual(['智能补全', '自动语法检查', '自动格式化'])
     expect(autoSyntax.querySelector('.python-toggle-track')).not.toBeNull()
     expect(autoFormat.querySelector('.python-toggle-track')).not.toBeNull()
-    expect(manualSyntax.querySelector('.python-toggle-track')).toBeNull()
+    expect(autoCompletion.querySelector('.python-toggle-track')).not.toBeNull()
+    expect(screen.getByRole('tooltip', { name: /智能补全：已开启/ })).toBeInTheDocument()
     expect(screen.getByRole('tooltip', { name: /语法检查：已开启/ })).toBeInTheDocument()
-    expect(screen.getByRole('tooltip', { name: /Ctrl\/Cmd\+Shift\+Enter/ })).toBeInTheDocument()
     fireEvent.blur(editor, { relatedTarget: run })
     fireEvent.focus(run)
     fireEvent.click(run)
     expect(onRun).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => window.setTimeout(resolve, 0))
     expect(onBlur).not.toHaveBeenCalled()
+    fireEvent.click(autoCompletion)
     fireEvent.click(screen.getByRole('button', { name: '自动语法检查' }))
     fireEvent.click(screen.getByRole('button', { name: '自动格式化' }))
+    expect(onAutoCompletionChange).toHaveBeenCalledWith(false)
     expect(onAutoSyntaxChange).toHaveBeenCalledWith(false)
     expect(onAutoFormatChange).toHaveBeenCalledWith(true)
-    fireEvent.click(screen.getByRole('button', { name: '立即检查语法' }))
-    expect(onSyntaxCheck).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(editor, { key: 'Enter', code: 'Enter', ctrlKey: true, shiftKey: true })
-    expect(onSyntaxCheck).toHaveBeenCalledTimes(2)
-    fireEvent.click(screen.getByRole('button', { name: '立即格式化代码' }))
-    expect(onFormat).toHaveBeenCalledTimes(1)
+    expect(onSyntaxCheck).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(editor, { key: 'f', code: 'KeyF', shiftKey: true, altKey: true })
-    expect(onFormat).toHaveBeenCalledTimes(2)
+    expect(onFormat).toHaveBeenCalledTimes(1)
 
     view.rerender(<PythonCodeEditor value="print(1)" disabled diagnostics={[]} onChange={vi.fn()} onBlur={onBlur} />)
     expect(screen.queryByLabelText('代码编辑工具栏')).not.toBeInTheDocument()
@@ -217,6 +220,21 @@ describe('PythonCodeEditor', () => {
     const state = EditorState.create({ doc: 'items.' })
     expect(await source(new CompletionContext(state, state.doc.length, false))).toBeNull()
     expect(availability).toHaveBeenLastCalledWith('unavailable')
+  })
+
+  it('disables both semantic and static completion without disabling hover documentation', async () => {
+    const request = vi.fn()
+    const source = createCombinedPythonCompletionSource({
+      sessionId: () => 7,
+      sessionItemId: () => 72,
+      enabled: () => false,
+      onAvailability: vi.fn(),
+      request: request as never,
+    })
+    const state = EditorState.create({ doc: 'pri' })
+    expect(await source(new CompletionContext(state, state.doc.length, true))).toBeNull()
+    expect(request).not.toHaveBeenCalled()
+    expect(pythonDocumentationTooltip({ state: EditorState.create({ doc: 'print(1)' }) } as never, 2)).not.toBeNull()
   })
 
   it('merges Pyright and static completions without duplicating built-ins', async () => {

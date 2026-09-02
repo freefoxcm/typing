@@ -11,15 +11,16 @@ type TextEdit = { value: string; selectionStart: number; selectionEnd: number }
 type SyntaxCheckResult = { valid: boolean; diagnostics: PythonSyntaxDiagnostic[] }
 type SyntaxCheckState = { status: 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable'; diagnostics: PythonSyntaxDiagnostic[] }
 type PythonFormatResult = { valid: boolean; formatted_code: string; changed: boolean; diagnostics: PythonSyntaxDiagnostic[] }
-type PythonEditorPreferences = { autoSyntax: boolean; autoFormat: boolean }
+type PythonEditorPreferences = { autoCompletion: boolean; autoSyntax: boolean; autoFormat: boolean }
 
 const PYTHON_EDITOR_PREFERENCES_KEY = 'kidtype-python-editor-preferences-v1'
-const DEFAULT_PYTHON_EDITOR_PREFERENCES: PythonEditorPreferences = { autoSyntax: true, autoFormat: false }
+const DEFAULT_PYTHON_EDITOR_PREFERENCES: PythonEditorPreferences = { autoCompletion: true, autoSyntax: true, autoFormat: false }
 
 export function readPythonEditorPreferences(storage: Pick<Storage, 'getItem'> = window.localStorage): PythonEditorPreferences {
   try {
     const parsed = JSON.parse(storage.getItem(PYTHON_EDITOR_PREFERENCES_KEY) || '{}')
     return {
+      autoCompletion: typeof parsed.autoCompletion === 'boolean' ? parsed.autoCompletion : true,
       autoSyntax: typeof parsed.autoSyntax === 'boolean' ? parsed.autoSyntax : true,
       autoFormat: typeof parsed.autoFormat === 'boolean' ? parsed.autoFormat : false,
     }
@@ -464,10 +465,12 @@ export function ExercisePage() {
           sampleResult={sampleResults[item.id]}
           syntaxCheck={syntaxChecks[item.id] ?? { status: 'idle', diagnostics: [] }}
           formatStatus={formatStates[item.id] ?? 'idle'}
+          autoCompletionEnabled={editorPreferences.autoCompletion}
           autoSyntaxEnabled={editorPreferences.autoSyntax}
           autoFormatEnabled={editorPreferences.autoFormat}
           onAutoSyntaxChange={(enabled) => updateAutoSyntax(enabled, item, codeDraftsRef.current[item.id] ?? codeDrafts[item.id] ?? item.answer.code ?? item.question.programming?.starter_code ?? '')}
           onAutoFormatChange={updateAutoFormat}
+          onAutoCompletionChange={(enabled) => setEditorPreferences((current) => ({ ...current, autoCompletion: enabled }))}
           onCodeChange={(code) => {
             codeDraftsRef.current = { ...codeDraftsRef.current, [item.id]: code }
             setCodeDrafts((current) => ({ ...current, [item.id]: code }))
@@ -508,7 +511,7 @@ function FillBlankStem({ item, complete, disabled, onChange }: { item: ExerciseS
   })}</div>
 }
 
-function ProgrammingAnswer({ sessionId, item, complete, sessionStatus, code, sampleResult, syntaxCheck, formatStatus, autoSyntaxEnabled, autoFormatEnabled, onAutoSyntaxChange, onAutoFormatChange, onCodeChange, onSave, onSyntaxCheck, onFormat, onRun }: {
+function ProgrammingAnswer({ sessionId, item, complete, sessionStatus, code, sampleResult, syntaxCheck, formatStatus, autoCompletionEnabled, autoSyntaxEnabled, autoFormatEnabled, onAutoCompletionChange, onAutoSyntaxChange, onAutoFormatChange, onCodeChange, onSave, onSyntaxCheck, onFormat, onRun }: {
   sessionId: number
   item: ExerciseSessionItem
   complete: boolean
@@ -517,8 +520,10 @@ function ProgrammingAnswer({ sessionId, item, complete, sessionStatus, code, sam
   sampleResult?: SampleResult
   syntaxCheck: SyntaxCheckState
   formatStatus: PythonFormatStatus
+  autoCompletionEnabled: boolean
   autoSyntaxEnabled: boolean
   autoFormatEnabled: boolean
+  onAutoCompletionChange: (enabled: boolean) => void
   onAutoSyntaxChange: (enabled: boolean) => void
   onAutoFormatChange: (enabled: boolean) => void
   onCodeChange: (code: string) => void
@@ -541,7 +546,10 @@ function ProgrammingAnswer({ sessionId, item, complete, sessionStatus, code, sam
     onRun={editable ? onRun : undefined}
     runDisabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'}
     runDisabledReason={!code.trim() ? '请先输入代码' : !samples.length ? '该题没有可运行的公开样例' : sampleResult?.status === 'queued' ? '公开样例正在运行' : undefined}
-    runLabel={sampleResult?.status === 'queued' ? '正在运行…' : '运行公开样例'}
+    runLabel={sampleResult?.status === 'queued' ? '运行中…' : '运行样例'}
+    runLoading={sampleResult?.status === 'queued'}
+    autoCompletionEnabled={autoCompletionEnabled}
+    onAutoCompletionChange={editable ? onAutoCompletionChange : undefined}
     autoSyntaxEnabled={autoSyntaxEnabled}
     onAutoSyntaxChange={editable ? onAutoSyntaxChange : undefined}
     onSyntaxCheck={editable ? onSyntaxCheck : undefined}
