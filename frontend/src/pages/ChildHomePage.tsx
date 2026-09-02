@@ -42,7 +42,12 @@ export function ChildHomePage({ me }: { me: Me }) {
     return next
   })
   const attempts = courses.flatMap((c) => c.lessons).reduce((sum, lesson) => sum + (lesson.attempts ?? 0), 0) + wordSets.reduce((sum, item) => sum + (item.attempts ?? 0), 0) + questionSets.reduce((sum, item) => sum + (item.attempts ?? 0), 0)
-  const best = Math.max(0, ...courses.flatMap((c) => c.lessons).map((lesson) => lesson.best_cpm ?? 0), ...wordSets.map((item) => item.best_cpm ?? 0))
+  const speedEntries = [
+    ...courses.flatMap((course) => course.lessons).map((lesson) => ({ cpm: lesson.best_cpm, version: lesson.best_cpm_version })),
+    ...wordSets.map((item) => ({ cpm: item.best_cpm, version: item.best_cpm_version })),
+  ].filter((item): item is { cpm: number; version: number | null | undefined } => item.cpm != null)
+  const bestEntry = speedEntries.reduce<{ cpm: number; version: number | null | undefined } | null>((best, item) => !best || item.cpm > best.cpm ? item : best, null)
+  const best = bestEntry?.cpm ?? 0
   const availableAreas: PracticeArea[] = [
     ...(wordSets.length > 0 ? ['words' as const] : []),
     ...(courses.length > 0 ? ['typing' as const] : []),
@@ -70,7 +75,7 @@ export function ChildHomePage({ me }: { me: Me }) {
       </section>
       <section className="quick-stats">
         <div><Target /><span><strong>{attempts}</strong>已完成练习</span></div>
-        <div><Gauge /><span><strong>{best}</strong>最快字符/分钟</span></div>
+        <div><Gauge /><span><strong>{best}</strong>{bestEntry?.version === 1 ? '历史最快字符/分钟' : '最快字符/分钟'}</span></div>
         <div><BookOpen /><span><strong>{courses.length + wordSets.length + questionSets.length}</strong>可选练习</span></div>
       </section>
       {error && <p className="notice error">{error}</p>}
@@ -86,7 +91,7 @@ export function ChildHomePage({ me }: { me: Me }) {
       {wordSets.length > 0 && <section className="practice-panel practice-theme-words word-set-section" role="tabpanel" id="practice-panel-words" aria-labelledby="practice-tab-words" hidden={selectedArea !== 'words'}>
         <header className="section-title practice-section-title"><div className="practice-title-copy"><span className="practice-title-icon" aria-hidden="true"><Languages /></span><div><p className="eyebrow">单词练习</p><h2>边输入，边记住单词</h2><p>看音标和释义，准确地敲出每个词。</p></div></div></header>
         <div className="word-set-grid">{wordSets.map((item) => <Link className="word-set-card" to={`/word-practice/${item.id}`} key={item.id}>
-          <Languages /><div className="grow"><h3>{item.title}</h3><p>{item.description || `${item.word_count} 个可练单词`}</p><span>{item.word_count} 词 · {item.attempts ? `已练 ${item.attempts} 次` : '尚未练习'}{item.best_cpm ? ` · 最佳 ${item.best_cpm} CPM` : ''}</span></div><ArrowRight />
+          <Languages /><div className="grow"><h3>{item.title}</h3><p>{item.description || `${item.word_count} 个可练单词`}</p><span>{item.word_count} 词 · {item.attempts ? `已练 ${item.attempts} 次` : '尚未练习'}{item.best_cpm != null ? ` · ${item.best_cpm_version === 1 ? '历史最佳' : '最佳'} ${item.best_cpm} CPM` : ''}</span></div><ArrowRight />
         </Link>)}</div>
       </section>}
       {courses.length > 0 && <section className="practice-panel practice-theme-typing typing-course-section" role="tabpanel" id="practice-panel-typing" aria-labelledby="practice-tab-typing" hidden={selectedArea !== 'typing'}>
@@ -102,7 +107,7 @@ export function ChildHomePage({ me }: { me: Me }) {
               {course.lessons.map((lesson) => (
                 <Link className="lesson-card" to={`/practice/${lesson.id}`} key={lesson.id}>
                   <div><h3>{lesson.title}</h3><p>{lesson.description || `${lesson.prompt_count} 条练习`}</p></div>
-                  <div className="lesson-meta"><span>{lesson.attempts ? `练习 ${lesson.attempts} 次` : '尚未练习'}</span>{lesson.best_cpm ? <span>最佳 {lesson.best_cpm} CPM</span> : null}<ArrowRight /></div>
+                  <div className="lesson-meta"><span>{lesson.attempts ? `练习 ${lesson.attempts} 次` : '尚未练习'}</span>{lesson.best_cpm != null ? <span>{lesson.best_cpm_version === 1 ? '历史最佳' : '最佳'} {lesson.best_cpm} CPM</span> : null}<ArrowRight /></div>
                 </Link>
               ))}
             </div>}

@@ -14,6 +14,7 @@ from ..imports import parse_import
 from ..models import AttemptError, AuthSession, ChildProfile, Course, ExerciseSession, Lesson, PracticeAttempt, Prompt, WrongQuestion
 from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LearningDataReset, LessonWrite, PromptWrite
 from ..security import Principal, hash_secret, require_admin
+from ..typing_stats import preferred_speed_metrics
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -341,6 +342,7 @@ def _report_overview_rows(db: Session, days: int) -> list[dict]:
         completed = [item for item in child_sessions if item.status == "completed"]
         total_chars = sum(item.char_count for item in child_attempts)
         total_errors = sum(item.error_count for item in child_attempts)
+        average_cpm, cpm_metric_version, cpm_attempt_count = preferred_speed_metrics(child_attempts)
         rows.append({
             "child_id": child.id,
             "child_name": child.name,
@@ -348,7 +350,9 @@ def _report_overview_rows(db: Session, days: int) -> list[dict]:
             "course_attempt_count": sum(item.word_id is None for item in child_attempts),
             "word_attempt_count": sum(item.word_id is not None for item in child_attempts),
             "practice_minutes": round(sum(item.duration_ms for item in child_attempts) / 60000, 1),
-            "average_cpm": round(sum(item.cpm for item in child_attempts) / len(child_attempts)) if child_attempts else 0,
+            "average_cpm": average_cpm,
+            "cpm_metric_version": cpm_metric_version,
+            "cpm_attempt_count": cpm_attempt_count,
             "accuracy": round(total_chars / max(1, total_chars + total_errors) * 100, 2),
             "exercise_total": len(child_sessions),
             "exercise_completed": len(completed),
@@ -373,10 +377,13 @@ def report_summary(child_id: int | None = None, days: int = Query(default=30, ge
             weak[error.expected_char] += error.count
     total_chars = sum(item.char_count for item in attempts)
     total_errors = sum(item.error_count for item in attempts)
+    average_cpm, cpm_metric_version, cpm_attempt_count = preferred_speed_metrics(attempts)
     return {
         "attempt_count": len(attempts),
         "practice_minutes": round(sum(item.duration_ms for item in attempts) / 60000, 1),
-        "average_cpm": round(sum(item.cpm for item in attempts) / len(attempts)) if attempts else 0,
+        "average_cpm": average_cpm,
+        "cpm_metric_version": cpm_metric_version,
+        "cpm_attempt_count": cpm_attempt_count,
         "accuracy": round(total_chars / max(1, total_chars + total_errors) * 100, 2),
         "weak_keys": [{"char": char, "count": count} for char, count in sorted(weak.items(), key=lambda pair: pair[1], reverse=True)[:12]],
         "attempts": [{
@@ -387,6 +394,8 @@ def report_summary(child_id: int | None = None, days: int = Query(default=30, ge
             "word_id": item.word_id,
             "mode": "word" if item.word_id else "course",
             "cpm": item.cpm,
+            "speed_char_count": item.speed_char_count,
+            "metric_version": item.metric_version,
             "accuracy": item.accuracy,
             "errors": item.error_count,
             "duration_ms": item.duration_ms,
@@ -406,9 +415,9 @@ def export_report(
     output = io.StringIO()
     writer = csv.writer(output)
     if view == "overview":
-        writer.writerow(["child_id", "child_name", "course_attempts", "word_attempts", "practice_minutes", "average_cpm", "accuracy", "exercise_completed", "exercise_total", "exercise_completion_rate", "exercise_average_percent", "unresolved_wrong_count"])
+        writer.writerow(["child_id", "child_name", "course_attempts", "word_attempts", "practice_minutes", "average_cpm", "cpm_metric_version", "cpm_attempts", "accuracy", "exercise_completed", "exercise_total", "exercise_completion_rate", "exercise_average_percent", "unresolved_wrong_count"])
         for item in _report_overview_rows(db, days):
-            writer.writerow([item["child_id"], item["child_name"], item["course_attempt_count"], item["word_attempt_count"], item["practice_minutes"], item["average_cpm"], item["accuracy"], item["exercise_completed"], item["exercise_total"], item["exercise_completion_rate"], item["exercise_average_percent"], item["unresolved_wrong_count"]])
+            writer.writerow([item["child_id"], item["child_name"], item["course_attempt_count"], item["word_attempt_count"], item["practice_minutes"], item["average_cpm"], item["cpm_metric_version"], item["cpm_attempt_count"], item["accuracy"], item["exercise_completed"], item["exercise_total"], item["exercise_completion_rate"], item["exercise_average_percent"], item["unresolved_wrong_count"]])
     elif view == "exercise":
         since = datetime.utcnow() - timedelta(days=days)
         query = select(ExerciseSession).where(ExerciseSession.created_at >= since)
@@ -422,9 +431,9 @@ def export_report(
     else:
         selected_mode = view if view in {"course", "word"} else mode
         attempts = _report_query(db, child_id, days, selected_mode)
-        writer.writerow(["attempt_id", "child_id", "mode", "course_id", "lesson_id", "word_set_id", "word_id", "created_at", "duration_ms", "characters", "errors", "cpm", "accuracy"])
+        writer.writerow(["attempt_id", "child_id", "mode", "course_id", "lesson_id", "word_set_id", "word_id", "created_at", "duration_ms", "characters", "speed_characters", "metric_version", "errors", "cpm", "accuracy"])
         for item in attempts:
-            writer.writerow([item.id, item.child_id, "word" if item.word_id else "course", item.course_id, item.lesson_id, item.word_set_id, item.word_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.error_count, item.cpm, item.accuracy])
+            writer.writerow([item.id, item.child_id, "word" if item.word_id else "course", item.course_id, item.lesson_id, item.word_set_id, item.word_id, item.created_at.isoformat(), item.duration_ms, item.char_count, item.speed_char_count, item.metric_version, item.error_count, item.cpm, item.accuracy])
     data = output.getvalue().encode("utf-8-sig")
     return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kidtype-report.csv"})
 

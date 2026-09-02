@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.typing_stats import calculate_cpm
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -64,6 +65,71 @@ def test_child_practice_and_report_flow(tmp_path):
         exported = client.get('/api/admin/reports/export.csv?view=overview&days=30')
         assert exported.status_code == 200
         assert 'course_attempts' in exported.content.decode('utf-8-sig')
+
+
+def test_current_speed_metrics_exclude_the_untimed_first_character_and_weight_reports(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        child_id = client.post('/api/admin/children', json={'name': '测速学生', 'pin': '1234', 'active': True}).json()['id']
+        course_id = client.post('/api/admin/courses', json={'title': '测速课程', 'description': '', 'sort_order': 99, 'active': True}).json()['id']
+        lesson_id = client.post('/api/admin/lessons', json={'course_id': course_id, 'title': '测速关卡', 'description': '', 'sort_order': 0, 'active': True}).json()['id']
+        prompt_five = client.post('/api/admin/prompts', json={'lesson_id': lesson_id, 'content': 'abcde', 'sort_order': 0, 'active': True}).json()['id']
+        prompt_nine = client.post('/api/admin/prompts', json={'lesson_id': lesson_id, 'content': 'abcdefghi', 'sort_order': 1, 'active': True}).json()['id']
+        client.post('/api/auth/logout')
+        assert client.post('/api/auth/child/login', json={'name': '测速学生', 'pin': '1234'}).status_code == 200
+
+        legacy = client.post('/api/practice/attempts', json={'prompt_id': prompt_five, 'duration_ms': 500, 'errors': []})
+        first = client.post('/api/practice/attempts', json={'prompt_id': prompt_five, 'duration_ms': 800, 'speed_char_count': 4, 'errors': []})
+        second = client.post('/api/practice/attempts', json={'prompt_id': prompt_nine, 'duration_ms': 3200, 'speed_char_count': 8, 'errors': []})
+
+        assert legacy.json()['metric_version'] == 1
+        assert legacy.json()['cpm'] == 600
+        assert first.json()['cpm'] == 300
+        assert first.json()['speed_char_count'] == 4
+        assert second.json()['cpm'] == 150
+        invalid = client.post('/api/practice/attempts', json={'prompt_id': prompt_five, 'duration_ms': 800, 'speed_char_count': 2, 'errors': []})
+        assert invalid.status_code == 422
+
+        courses = client.get('/api/library/courses').json()
+        lesson = next(item for course in courses for item in course['lessons'] if item['id'] == lesson_id)
+        assert lesson['best_cpm'] == 300
+        assert lesson['best_cpm_version'] == 2
+
+        client.post('/api/auth/logout')
+        admin_login(client)
+        report = client.get(f'/api/admin/reports/summary?child_id={child_id}&days=30&mode=course').json()
+        assert report['attempt_count'] == 3
+        assert report['average_cpm'] == 180
+        assert report['cpm_metric_version'] == 2
+        assert report['cpm_attempt_count'] == 2
+        assert {item['metric_version'] for item in report['attempts']} == {1, 2}
+        exported = client.get(f'/api/admin/reports/export.csv?view=course&child_id={child_id}&days=30')
+        header = exported.content.decode('utf-8-sig').splitlines()[0]
+        assert 'speed_characters' in header and 'metric_version' in header
+
+
+def test_unmeasurable_single_character_attempt_has_no_cpm(tmp_path):
+    with make_client(tmp_path) as client:
+        admin_login(client)
+        client.post('/api/admin/children', json={'name': '单字符学生', 'pin': '1234', 'active': True})
+        course_id = client.post('/api/admin/courses', json={'title': '单字符课程', 'description': '', 'sort_order': 99, 'active': True}).json()['id']
+        lesson_id = client.post('/api/admin/lessons', json={'course_id': course_id, 'title': '单字符关卡', 'description': '', 'sort_order': 0, 'active': True}).json()['id']
+        prompt_id = client.post('/api/admin/prompts', json={'lesson_id': lesson_id, 'content': 'a', 'sort_order': 0, 'active': True}).json()['id']
+        client.post('/api/auth/logout')
+        client.post('/api/auth/child/login', json={'name': '单字符学生', 'pin': '1234'})
+
+        saved = client.post('/api/practice/attempts', json={'prompt_id': prompt_id, 'duration_ms': 100, 'speed_char_count': 0, 'errors': []})
+        assert saved.status_code == 200
+        assert saved.json()['cpm'] is None
+        assert saved.json()['metric_version'] == 2
+        courses = client.get('/api/library/courses').json()
+        lesson = next(item for course in courses for item in course['lessons'] if item['id'] == lesson_id)
+        assert lesson['best_cpm'] is None
+        assert lesson['best_cpm_version'] is None
+
+
+def test_cpm_uses_half_up_rounding():
+    assert calculate_cpm(1, 960) == 63
 
 
 def test_child_login_uses_name_without_exposing_roster(tmp_path):

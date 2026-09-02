@@ -30,7 +30,9 @@ const courses: Course[] = [
 const report: Report = {
   attempt_count: 0,
   practice_minutes: 0,
-  average_cpm: 0,
+  average_cpm: null,
+  cpm_metric_version: null,
+  cpm_attempt_count: 0,
   accuracy: 0,
   weak_keys: [],
   attempts: [],
@@ -45,7 +47,7 @@ describe('AdminPage', () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/children') return [{ id: 1, name: '小宇', active: true }]
       if (path === '/api/admin/library') return courses
-      if (path.startsWith('/api/admin/reports/overview')) return { days: 30, students: [{ child_id: 1, child_name: '小宇', active: true, course_attempt_count: 2, word_attempt_count: 1, practice_minutes: 8, average_cpm: 88, accuracy: 96, exercise_total: 3, exercise_completed: 2, exercise_completion_rate: 66.7, exercise_average_percent: 85, unresolved_wrong_count: 1 }] }
+      if (path.startsWith('/api/admin/reports/overview')) return { days: 30, students: [{ child_id: 1, child_name: '小宇', active: true, course_attempt_count: 2, word_attempt_count: 1, practice_minutes: 8, average_cpm: 88, cpm_metric_version: 1, cpm_attempt_count: 3, accuracy: 96, exercise_total: 3, exercise_completed: 2, exercise_completion_rate: 66.7, exercise_average_percent: 85, unresolved_wrong_count: 1 }] }
       if (path.startsWith('/api/admin/reports/summary')) return report
       if (path.startsWith('/api/admin/exercise-reports/summary')) return { session_count: 2, total_session_count: 3, status_counts: { in_progress: 0, judging: 0, completed: 2, abandoned: 1 }, completion_rate: 66.7, average_percent: 85, unresolved_wrong_count: 1, recent: [{ id: 9, child_id: 1, mode: 'set', status: 'abandoned', title: '未完成题套', score: 0, max_score: 10, created_at: '2026-07-22T08:00:00', completed_at: null }] }
       return {}
@@ -81,6 +83,7 @@ describe('AdminPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '学习报告' }))
     const student = await screen.findByRole('button', { name: /小宇/ })
     expect(screen.getByText('2 / 1')).toBeInTheDocument()
+    expect(student).toHaveTextContent('历史口径 · 3 次 · 96%')
     fireEvent.click(student)
     expect(await screen.findByLabelText('学生')).toHaveValue('1')
     expect(screen.getByRole('tab', { name: '打字练习' })).toHaveAttribute('aria-selected', 'true')

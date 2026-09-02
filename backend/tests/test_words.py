@@ -81,12 +81,18 @@ def test_word_api_visibility_attempts_and_report_modes(tmp_path):
         })
         assert saved.status_code == 200
         assert saved.json()["cpm"] == 100
+        updated_summary = client.get("/api/library/word-sets").json()[0]
+        assert updated_summary["best_cpm"] == 100
+        assert updated_summary["best_cpm_version"] == 1
         assert client.post("/api/practice/word-attempts", json={"word_id": pending.json()["id"], "duration_ms": 3000, "errors": []}).status_code == 404
         client.post("/api/auth/logout")
         login_admin(client)
         word_report = client.get("/api/admin/reports/summary?mode=word&days=30").json()
         course_report = client.get("/api/admin/reports/summary?mode=course&days=30").json()
         assert word_report["attempt_count"] == 1
+        assert word_report["average_cpm"] == 100
+        assert word_report["cpm_metric_version"] == 1
+        assert word_report["cpm_attempt_count"] == 1
         assert word_report["attempts"][0]["mode"] == "word"
         assert course_report["attempt_count"] == 0
 

@@ -5,8 +5,33 @@ from ..database import get_db
 from ..models import AttemptError, Lesson, PracticeAttempt, Prompt, Word
 from ..schemas import AttemptCreate, WordAttemptCreate
 from ..security import Principal, require_child
+from ..typing_stats import CURRENT_METRIC_VERSION, LEGACY_METRIC_VERSION, calculate_cpm
 
 router = APIRouter(prefix="/api/practice", tags=["practice"])
+
+
+def _speed_fields(requested: int | None, char_count: int, duration_ms: int) -> tuple[int, int, int | None]:
+    if requested is None:
+        speed_char_count = char_count
+        metric_version = LEGACY_METRIC_VERSION
+    else:
+        if requested not in {char_count, char_count - 1}:
+            raise HTTPException(status_code=422, detail="测速字符数必须等于完整字符数或少 1")
+        speed_char_count = requested
+        metric_version = CURRENT_METRIC_VERSION
+    return speed_char_count, metric_version, calculate_cpm(speed_char_count, duration_ms)
+
+
+def _attempt_result(attempt: PracticeAttempt) -> dict:
+    return {
+        "id": attempt.id,
+        "cpm": attempt.cpm,
+        "accuracy": attempt.accuracy,
+        "errors": attempt.error_count,
+        "duration_ms": attempt.duration_ms,
+        "speed_char_count": attempt.speed_char_count,
+        "metric_version": attempt.metric_version,
+    }
 
 
 @router.post("/attempts")
@@ -19,7 +44,7 @@ def save_attempt(payload: AttemptCreate, principal: Principal = Depends(require_
         raise HTTPException(status_code=404, detail="关卡不可用")
     char_count = len(prompt.content)
     error_count = sum(item.count for item in payload.errors)
-    cpm = round(char_count * 60_000 / payload.duration_ms)
+    speed_char_count, metric_version, cpm = _speed_fields(payload.speed_char_count, char_count, payload.duration_ms)
     accuracy = round(char_count / max(1, char_count + error_count) * 100, 2)
     attempt = PracticeAttempt(
         child_id=principal.actor_id,
@@ -29,6 +54,8 @@ def save_attempt(payload: AttemptCreate, principal: Principal = Depends(require_
         prompt_snapshot=prompt.content,
         duration_ms=payload.duration_ms,
         char_count=char_count,
+        speed_char_count=speed_char_count,
+        metric_version=metric_version,
         error_count=error_count,
         cpm=cpm,
         accuracy=accuracy,
@@ -41,7 +68,7 @@ def save_attempt(payload: AttemptCreate, principal: Principal = Depends(require_
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
-    return {"id": attempt.id, "cpm": cpm, "accuracy": accuracy, "errors": error_count, "duration_ms": payload.duration_ms}
+    return _attempt_result(attempt)
 
 
 @router.post("/word-attempts")
@@ -51,7 +78,7 @@ def save_word_attempt(payload: WordAttemptCreate, principal: Principal = Depends
         raise HTTPException(status_code=404, detail="单词不可用")
     char_count = len(word.spelling)
     error_count = sum(item.count for item in payload.errors)
-    cpm = round(char_count * 60_000 / payload.duration_ms)
+    speed_char_count, metric_version, cpm = _speed_fields(payload.speed_char_count, char_count, payload.duration_ms)
     accuracy = round(char_count / max(1, char_count + error_count) * 100, 2)
     attempt = PracticeAttempt(
         child_id=principal.actor_id,
@@ -60,6 +87,8 @@ def save_word_attempt(payload: WordAttemptCreate, principal: Principal = Depends
         prompt_snapshot=word.spelling,
         duration_ms=payload.duration_ms,
         char_count=char_count,
+        speed_char_count=speed_char_count,
+        metric_version=metric_version,
         error_count=error_count,
         cpm=cpm,
         accuracy=accuracy,
@@ -72,5 +101,5 @@ def save_word_attempt(payload: WordAttemptCreate, principal: Principal = Depends
     db.add(attempt)
     db.commit()
     db.refresh(attempt)
-    return {"id": attempt.id, "cpm": cpm, "accuracy": accuracy, "errors": error_count, "duration_ms": payload.duration_ms}
+    return _attempt_result(attempt)
 

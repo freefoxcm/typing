@@ -11,7 +11,7 @@ const detailTabs: { id: DetailTab; label: string; icon: typeof BookOpen }[] = [
   { id: 'word', label: '单词练习', icon: Languages },
   { id: 'exercise', label: '习题练习', icon: FileQuestion },
 ]
-const emptyReport: Report = { attempt_count: 0, practice_minutes: 0, average_cpm: 0, accuracy: 0, weak_keys: [], attempts: [] }
+const emptyReport: Report = { attempt_count: 0, practice_minutes: 0, average_cpm: null, cpm_metric_version: null, cpm_attempt_count: 0, accuracy: 0, weak_keys: [], attempts: [] }
 const emptyExercise: ExerciseAdminReport = {
   session_count: 0, total_session_count: 0, status_counts: { in_progress: 0, judging: 0, completed: 0, abandoned: 0 },
   completion_rate: 0, average_percent: 0, unresolved_wrong_count: 0, recent: [],
@@ -128,7 +128,7 @@ function StudentOverview({ rows, onSelect }: { rows: ReportOverviewRow[]; onSele
   return <div className="student-report-list"><div className="student-report-head"><span>学生</span><span>打字 / 单词</span><span>速度 / 准确率</span><span>习题完成</span><span>平均成绩</span><span>未掌握错题</span></div>{rows.map((row) => <button className="student-report-row" onClick={() => onSelect(row.child_id)} key={row.child_id}>
     <span><strong>{row.child_name}</strong><small>{row.active ? '正常使用' : '已停用'}</small></span>
     <span><strong>{row.course_attempt_count} / {row.word_attempt_count}</strong><small>{row.practice_minutes} 分钟</small></span>
-    <span><strong>{row.average_cpm} CPM</strong><small>{row.accuracy}%</small></span>
+    <span><strong>{row.average_cpm ?? '—'} CPM</strong><small>{speedMetricLabel(row.cpm_metric_version, row.cpm_attempt_count)} · {row.accuracy}%</small></span>
     <span><strong>{row.exercise_completed} / {row.exercise_total}</strong><small>{row.exercise_completion_rate}%</small></span>
     <span><strong>{row.exercise_average_percent}%</strong><small>已完成练习</small></span>
     <span><strong>{row.unresolved_wrong_count}</strong><small>当前存量</small></span>
@@ -136,7 +136,12 @@ function StudentOverview({ rows, onSelect }: { rows: ReportOverviewRow[]; onSele
 }
 
 function TypingDetail({ report, mode }: { report: Report; mode: 'course' | 'word' }) {
-  return <div role="tabpanel" aria-labelledby={`report-tab-${mode}`}><div className="report-metrics"><div><span>练习次数</span><strong>{report.attempt_count}</strong></div><div><span>练习分钟</span><strong>{report.practice_minutes}</strong></div><div><span>平均速度</span><strong>{report.average_cpm} <small>CPM</small></strong></div><div><span>整体准确率</span><strong>{report.accuracy}%</strong></div></div><div className="report-columns"><section className="card"><h3>薄弱按键</h3>{report.weak_keys.length ? report.weak_keys.map((item) => <div className="weak-row" key={item.char}><kbd>{errorLabel(item.char)}</kbd><div><i style={{ width: `${Math.max(8, item.count / report.weak_keys[0].count * 100)}%` }} /></div><span>{item.count} 次</span></div>) : <p className="muted">还没有错误记录，继续保持！</p>}</section><section className="card"><h3>最近练习</h3>{report.attempts.length ? <div className="attempt-table">{report.attempts.slice(0, 12).map((item) => <div key={item.id}><time>{new Date(item.created_at).toLocaleDateString()}</time><strong>{item.cpm} CPM</strong><span>{item.accuracy}%</span><span>{item.errors} 错</span></div>)}</div> : <p className="muted">该时间范围内暂无练习。</p>}</section></div></div>
+  return <div role="tabpanel" aria-labelledby={`report-tab-${mode}`}><div className="report-metrics"><div><span>练习次数</span><strong>{report.attempt_count}</strong></div><div><span>练习分钟</span><strong>{report.practice_minutes}</strong></div><div><span>平均速度</span><strong>{report.average_cpm ?? '—'} <small>CPM</small></strong><small>{speedMetricLabel(report.cpm_metric_version, report.cpm_attempt_count)}</small></div><div><span>整体准确率</span><strong>{report.accuracy}%</strong></div></div><div className="report-columns"><section className="card"><h3>薄弱按键</h3>{report.weak_keys.length ? report.weak_keys.map((item) => <div className="weak-row" key={item.char}><kbd>{errorLabel(item.char)}</kbd><div><i style={{ width: `${Math.max(8, item.count / report.weak_keys[0].count * 100)}%` }} /></div><span>{item.count} 次</span></div>) : <p className="muted">还没有错误记录，继续保持！</p>}</section><section className="card"><h3>最近练习</h3>{report.attempts.length ? <div className="attempt-table">{report.attempts.slice(0, 12).map((item) => <div key={item.id}><time>{new Date(item.created_at).toLocaleDateString()}</time><strong>{item.cpm ?? '—'} CPM{item.metric_version === 1 && <small> · 历史口径</small>}</strong><span>{item.accuracy}%</span><span>{item.errors} 错</span></div>)}</div> : <p className="muted">该时间范围内暂无练习。</p>}</section></div></div>
+}
+
+function speedMetricLabel(version: number | null, count: number): string {
+  if (!version || count === 0) return '暂无测速'
+  return `${version === 1 ? '历史口径' : '当前口径'} · ${count} 次`
 }
 
 function ExerciseDetail({ report }: { report: ExerciseAdminReport }) {
