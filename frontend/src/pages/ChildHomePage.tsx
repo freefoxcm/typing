@@ -46,7 +46,9 @@ export function ChildHomePage({ me }: { me: Me }) {
     ...courses.flatMap((course) => course.lessons).map((lesson) => ({ cpm: lesson.best_cpm, version: lesson.best_cpm_version })),
     ...wordSets.map((item) => ({ cpm: item.best_cpm, version: item.best_cpm_version })),
   ].filter((item): item is { cpm: number; version: number | null | undefined } => item.cpm != null)
-  const bestEntry = speedEntries.reduce<{ cpm: number; version: number | null | undefined } | null>((best, item) => !best || item.cpm > best.cpm ? item : best, null)
+  const currentSpeedEntries = speedEntries.filter((item) => item.version === 2)
+  const preferredSpeedEntries = currentSpeedEntries.length > 0 ? currentSpeedEntries : speedEntries
+  const bestEntry = preferredSpeedEntries.reduce<{ cpm: number; version: number | null | undefined } | null>((best, item) => !best || item.cpm > best.cpm ? item : best, null)
   const best = bestEntry?.cpm ?? 0
   const availableAreas: PracticeArea[] = [
     ...(wordSets.length > 0 ? ['words' as const] : []),

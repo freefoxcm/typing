@@ -63,6 +63,22 @@ describe('ChildHomePage', () => {
     expect(screen.getByText(/12 词/)).toBeInTheDocument()
     expect(wordSetLink).toHaveTextContent('已练 3 次')
     expect(wordSetLink).toHaveTextContent('历史最佳 80 CPM')
+    expect(screen.getByText('历史最快字符/分钟')).toBeInTheDocument()
+  })
+
+  it('prefers current metric results for the overall fastest speed', async () => {
+    const mixedCourses: Course[] = [{
+      ...courses[0],
+      lessons: [{ ...courses[0].lessons[0], attempts: 1, best_cpm: 120, best_cpm_version: 2 }],
+    }]
+    const fasterLegacyWordSets = [{ ...wordSets[0], best_cpm: 800 }]
+    mockedApi.mockImplementation(async (path) => path === '/api/library/courses' ? mixedCourses : path === '/api/library/word-sets' ? fasterLegacyWordSets : [])
+
+    render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
+
+    expect(await screen.findByText('最快字符/分钟')).toBeInTheDocument()
+    expect(screen.getByText('120')).toBeInTheDocument()
+    expect(screen.queryByText('历史最快字符/分钟')).not.toBeInTheDocument()
   })
 
   it('switches accessible practice tabs in order and preserves course expansion', async () => {
