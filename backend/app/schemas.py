@@ -92,12 +92,14 @@ class ErrorItem(BaseModel):
 class AttemptCreate(BaseModel):
     prompt_id: int
     duration_ms: int = Field(ge=100, le=86_400_000)
+    speed_char_count: int | None = Field(default=None, ge=0, le=5000)
     errors: list[ErrorItem] = Field(default_factory=list, max_length=500)
 
 
 class WordAttemptCreate(BaseModel):
     word_id: int = Field(gt=0)
     duration_ms: int = Field(ge=100, le=86_400_000)
+    speed_char_count: int | None = Field(default=None, ge=0, le=120)
     errors: list[ErrorItem] = Field(default_factory=list, max_length=500)
 
 

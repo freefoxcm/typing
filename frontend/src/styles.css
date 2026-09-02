@@ -212,3 +212,6 @@
 
 /* Programming resource limits use the same cards as input and output formats. */
 .program-limit-value{display:flex;align-items:baseline;gap:6px;margin:.55em 0 0;line-height:1.8}.program-limit-value b{font-family:'DM Mono',monospace;font-size:1rem;color:var(--ink)}.program-limit-value span{color:var(--muted);font-size:.78rem;font-weight:700}
+
+/* Versioned typing speed labels */
+.attempt-table>div{grid-template-columns:1fr 125px 70px 55px}.attempt-table strong small{display:block;color:var(--muted);font-weight:500}

@@ -583,17 +583,18 @@ def test_admin_can_reset_one_students_learning_data_without_touching_profile_or_
 
             typing_attempt = PracticeAttempt(
                 child_id=child_id, prompt_snapshot="asdf", duration_ms=60000, char_count=80,
-                error_count=1, cpm=80, accuracy=98.8,
+                speed_char_count=80, metric_version=1, error_count=1, cpm=80, accuracy=98.8,
                 errors=[AttemptError(expected_char="a", actual_char="s", count=1)],
             )
             word_attempt = PracticeAttempt(
                 child_id=child_id, word_set_id=word_set.id, word_id=word.id, prompt_snapshot="reset",
-                duration_ms=30000, char_count=25, error_count=1, cpm=50, accuracy=96,
+                duration_ms=30000, char_count=25, speed_char_count=25, metric_version=1,
+                error_count=1, cpm=50, accuracy=96,
                 errors=[AttemptError(expected_char="e", actual_char="r", count=1)],
             )
             other_attempt = PracticeAttempt(
                 child_id=other_id, prompt_snapshot="keep", duration_ms=30000, char_count=30,
-                error_count=0, cpm=60, accuracy=100,
+                speed_char_count=30, metric_version=1, error_count=0, cpm=60, accuracy=100,
             )
             db.add_all([typing_attempt, word_attempt, other_attempt])
 

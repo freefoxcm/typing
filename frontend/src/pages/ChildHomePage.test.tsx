@@ -15,7 +15,7 @@ const courses: Course[] = [
   { id: 1, title: '入门课程', description: '基础练习', lessons: [{ id: 11, title: '字母练习', description: '', prompt_count: 3 }] },
   { id: 2, title: '代码课程', description: '符号练习', lessons: [{ id: 21, title: '符号练习', description: '', prompt_count: 4 }] },
 ]
-const wordSets = [{ id: 9, title: '计算机英语', description: '', word_count: 12, attempts: 3, best_cpm: 80 }]
+const wordSets = [{ id: 9, title: '计算机英语', description: '', word_count: 12, attempts: 3, best_cpm: 80, best_cpm_version: 1 }]
 const questionSets = [{ id: 8, title: 'Python 练习', description: '', status: 'published' as const, question_count: 2, total_points: 4, counts: { single_choice: 1, multiple_choice: 0, true_false: 1, programming: 0 } }]
 const activeExercises: ExerciseSessionSummary[] = [{
   id: 77, title: '未完成的 Python 练习', mode: 'set', status: 'in_progress', answered_count: 1, total_count: 4,
@@ -62,6 +62,23 @@ describe('ChildHomePage', () => {
     expect(wordSetLink).toHaveAttribute('href', '/word-practice/9')
     expect(screen.getByText(/12 词/)).toBeInTheDocument()
     expect(wordSetLink).toHaveTextContent('已练 3 次')
+    expect(wordSetLink).toHaveTextContent('历史最佳 80 CPM')
+    expect(screen.getByText('历史最快字符/分钟')).toBeInTheDocument()
+  })
+
+  it('prefers current metric results for the overall fastest speed', async () => {
+    const mixedCourses: Course[] = [{
+      ...courses[0],
+      lessons: [{ ...courses[0].lessons[0], attempts: 1, best_cpm: 120, best_cpm_version: 2 }],
+    }]
+    const fasterLegacyWordSets = [{ ...wordSets[0], best_cpm: 800 }]
+    mockedApi.mockImplementation(async (path) => path === '/api/library/courses' ? mixedCourses : path === '/api/library/word-sets' ? fasterLegacyWordSets : [])
+
+    render(<MemoryRouter><ChildHomePage me={me} /></MemoryRouter>)
+
+    expect(await screen.findByText('最快字符/分钟')).toBeInTheDocument()
+    expect(screen.getByText('120')).toBeInTheDocument()
+    expect(screen.queryByText('历史最快字符/分钟')).not.toBeInTheDocument()
   })
 
   it('switches accessible practice tabs in order and preserves course expansion', async () => {

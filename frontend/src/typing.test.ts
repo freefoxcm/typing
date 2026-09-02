@@ -16,7 +16,9 @@ describe('typing helpers', () => {
   it('calculates CPM and accuracy with duration protection', () => {
     expect(calculateStats(60, 0, 60_000)).toEqual({ cpm: 60, accuracy: 100 })
     expect(calculateStats(8, 2, 10_000).accuracy).toBe(80)
-    expect(calculateStats(1, 0, 0).cpm).toBe(600)
+    expect(calculateStats(5, 0, 800, 4).cpm).toBe(300)
+    expect(calculateStats(1, 0, 960, 1).cpm).toBe(63)
+    expect(calculateStats(1, 0, 0, 0).cpm).toBeNull()
   })
 
   it('returns every bag item exactly once', () => {
@@ -25,4 +27,3 @@ describe('typing helpers', () => {
     expect(result).toHaveLength(4)
   })
 })
-

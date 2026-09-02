@@ -43,13 +43,16 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const startRef = useRef<number | null>(null)
   const pauseRef = useRef<number | null>(null)
   const pausedTotalRef = useRef(0)
+  const firstKeyCorrectRef = useRef<boolean | null>(null)
   const nextTimerRef = useRef<number | null>(null)
   const roundCharsRef = useRef(0)
+  const roundSpeedCharsRef = useRef(0)
   const roundErrorsRef = useRef(0)
   const roundDurationRef = useRef(0)
   const current = bag[bagIndex]
   const totalErrors = useMemo(() => [...errors.values()].reduce((sum, count) => sum + count, 0), [errors])
-  const liveStats = calculateStats(charIndex, totalErrors, elapsed)
+  const liveSpeedChars = Math.max(0, charIndex - (firstKeyCorrectRef.current ? 1 : 0))
+  const liveStats = calculateStats(charIndex, totalErrors, elapsed, liveSpeedChars)
 
   useEffect(() => {
     setTimeout(() => surfaceRef.current?.focus(), 0)
@@ -65,7 +68,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const resetPrompt = useCallback(() => {
     if (nextTimerRef.current) window.clearTimeout(nextTimerRef.current)
     setCharIndex(0); setErrors(new Map()); setElapsed(0); setResult(null); setMessage(''); setRunState('ready')
-    startRef.current = null; pauseRef.current = null; pausedTotalRef.current = 0
+    startRef.current = null; pauseRef.current = null; pausedTotalRef.current = 0; firstKeyCorrectRef.current = null
     setTimeout(() => surfaceRef.current?.focus(), 0)
   }, [])
 
@@ -75,7 +78,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
     else {
       const nextBag = shuffleBag(items)
       if (nextBag.length > 1 && nextBag[0].id === current.id) [nextBag[0], nextBag[1]] = [nextBag[1], nextBag[0]]
-      roundCharsRef.current = 0; roundErrorsRef.current = 0; roundDurationRef.current = 0
+      roundCharsRef.current = 0; roundSpeedCharsRef.current = 0; roundErrorsRef.current = 0; roundDurationRef.current = 0
       setBag(nextBag); setBagIndex(0)
     }
     resetPrompt()
@@ -85,17 +88,19 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
     if (!current) return
     setRunState('saving')
     try {
+      const speedCharCount = Math.max(0, current.content.length - (firstKeyCorrectRef.current ? 1 : 0))
       const saved = await api<AttemptResult>(savePath, {
         method: 'POST',
-        ...jsonBody({ [saveIdKey]: current.id, duration_ms: Math.max(100, Math.round(duration)), errors: errorsToList(currentErrors) }),
+        ...jsonBody({ [saveIdKey]: current.id, duration_ms: Math.max(100, Math.round(duration)), speed_char_count: speedCharCount, errors: errorsToList(currentErrors) }),
       })
       const nextChars = roundCharsRef.current + current.content.length
+      const nextSpeedChars = roundSpeedCharsRef.current + saved.speed_char_count
       const nextErrors = roundErrorsRef.current + saved.errors
       const nextDuration = roundDurationRef.current + saved.duration_ms
-      roundCharsRef.current = nextChars; roundErrorsRef.current = nextErrors; roundDurationRef.current = nextDuration
+      roundCharsRef.current = nextChars; roundSpeedCharsRef.current = nextSpeedChars; roundErrorsRef.current = nextErrors; roundDurationRef.current = nextDuration
       if (bagIndex + 1 === bag.length) {
-        const roundStats = calculateStats(nextChars, nextErrors, nextDuration)
-        setResult({ ...saved, ...roundStats, errors: nextErrors, duration_ms: nextDuration }); setRunState('complete')
+        const roundStats = calculateStats(nextChars, nextErrors, nextDuration, nextSpeedChars)
+        setResult({ ...saved, ...roundStats, errors: nextErrors, duration_ms: nextDuration, speed_char_count: nextSpeedChars }); setRunState('complete')
         nextTimerRef.current = window.setTimeout(advancePrompt, ROUND_TRANSITION_DELAY_MS)
       } else {
         setRunState('transitioning')
@@ -124,7 +129,11 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
     if (actual === null) return
     event.preventDefault()
     const now = performance.now()
-    if (startRef.current === null) { startRef.current = now; setRunState('running') }
+    if (startRef.current === null) {
+      startRef.current = now
+      firstKeyCorrectRef.current = actual === expected
+      setRunState('running')
+    }
     const duration = now - (startRef.current ?? now) - pausedTotalRef.current
     setElapsed(duration)
     if (actual === expected) {
@@ -167,7 +176,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
     <div className={`practice-stage ${showHints ? 'with-finger-guide' : ''}`}>
       <div className="practice-main">
         <div className="metric-strip">
-          <div><span>速度</span><strong>{liveStats.cpm}</strong><small>字符/分钟</small></div>
+          <div><span>速度</span><strong>{liveStats.cpm ?? '—'}</strong><small>字符/分钟</small></div>
           <div><span>准确率</span><strong>{liveStats.accuracy.toFixed(1)}%</strong></div>
           <div><span>错误</span><strong className={totalErrors ? 'danger' : ''}>{totalErrors}</strong><small>次</small></div>
           <div><span>时间</span><strong>{(elapsed / 1000).toFixed(1)}</strong><small>秒</small></div>
@@ -179,7 +188,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
             {runState === 'paused' && <div className="surface-message"><Pause /> 已暂停，按 Esc 或点击“继续”</div>}
             {runState === 'saving' && <div className="surface-message">正在保存成绩…</div>}
             {runState === 'transitioning' && <div className="surface-message">本条完成，准备下一条…</div>}
-            {runState === 'complete' && result && <div className="result-pop"><strong>本轮完成！</strong><span>{result.cpm} CPM · {result.accuracy}% 准确率</span><small>5 秒后自动进入下一轮</small><button onClick={advancePrompt}>下一轮</button></div>}
+            {runState === 'complete' && result && <div className="result-pop"><strong>本轮完成！</strong><span>{result.cpm ?? '—'} CPM · {result.accuracy}% 准确率</span><small>5 秒后自动进入下一轮</small><button onClick={advancePrompt}>下一轮</button></div>}
           </div>
           {renderInfo && renderInfo(current)}
         </div>

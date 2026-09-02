@@ -10,6 +10,7 @@ export type Lesson = {
   active?: boolean
   prompt_count?: number
   best_cpm?: number | null
+  best_cpm_version?: number | null
   best_accuracy?: number | null
   attempts?: number
   prompts?: Prompt[]
@@ -30,7 +31,7 @@ export type LessonDetail = {
   prompts: Prompt[]
 }
 export type ErrorCount = { expected_char: string; actual_char: string; count: number }
-export type AttemptResult = { id: number; cpm: number; accuracy: number; errors: number; duration_ms: number }
+export type AttemptResult = { id: number; cpm: number | null; accuracy: number; errors: number; duration_ms: number; speed_char_count: number; metric_version: number }
 export type WordEntry = {
   id: number
   word_set_id?: number
@@ -52,6 +53,7 @@ export type WordSetSummary = {
   word_count: number
   attempts?: number
   best_cpm?: number | null
+  best_cpm_version?: number | null
   best_accuracy?: number | null
   status_counts?: Record<string, number>
   words?: WordEntry[]
@@ -61,10 +63,12 @@ export type LlmStatus = { configured: boolean; base_url: string; model: string; 
 export type Report = {
   attempt_count: number
   practice_minutes: number
-  average_cpm: number
+  average_cpm: number | null
+  cpm_metric_version: number | null
+  cpm_attempt_count: number
   accuracy: number
   weak_keys: { char: string; count: number }[]
-  attempts: { id: number; child_id: number; lesson_id: number | null; word_set_id?: number | null; word_id?: number | null; mode?: 'course' | 'word'; cpm: number; accuracy: number; errors: number; duration_ms: number; created_at: string }[]
+  attempts: { id: number; child_id: number; lesson_id: number | null; word_set_id?: number | null; word_id?: number | null; mode?: 'course' | 'word'; cpm: number | null; accuracy: number; errors: number; duration_ms: number; speed_char_count: number; metric_version: number; created_at: string }[]
 }
 
 export type ReportOverviewRow = {
@@ -74,7 +78,9 @@ export type ReportOverviewRow = {
   course_attempt_count: number
   word_attempt_count: number
   practice_minutes: number
-  average_cpm: number
+  average_cpm: number | null
+  cpm_metric_version: number | null
+  cpm_attempt_count: number
   accuracy: number
   exercise_total: number
   exercise_completed: number

@@ -9,6 +9,23 @@ from ..security import Principal, require_child
 router = APIRouter(prefix="/api/library", tags=["library"])
 
 
+def _best_attempts(rows) -> dict[int, dict]:
+    best: dict[int, dict] = {}
+    for group_id, metric_version, best_cpm, best_accuracy, count in rows:
+        item = best.setdefault(group_id, {
+            "best_cpm": None,
+            "best_cpm_version": None,
+            "best_accuracy": None,
+            "attempts": 0,
+        })
+        item["attempts"] += count
+        item["best_accuracy"] = max(item["best_accuracy"] or 0, best_accuracy)
+        if best_cpm is not None and (item["best_cpm_version"] is None or metric_version > item["best_cpm_version"]):
+            item["best_cpm"] = best_cpm
+            item["best_cpm_version"] = metric_version
+    return best
+
+
 @router.get("/courses")
 def list_courses(principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
     courses = db.scalars(
@@ -17,12 +34,17 @@ def list_courses(principal: Principal = Depends(require_child), db: Session = De
         .options(selectinload(Course.lessons).selectinload(Lesson.prompts))
         .order_by(Course.sort_order, Course.id)
     ).all()
-    best_rows = db.execute(
-        select(PracticeAttempt.lesson_id, func.max(PracticeAttempt.cpm), func.max(PracticeAttempt.accuracy), func.count(PracticeAttempt.id))
-        .where(PracticeAttempt.child_id == principal.actor_id)
-        .group_by(PracticeAttempt.lesson_id)
-    ).all()
-    best = {row[0]: {"best_cpm": row[1], "best_accuracy": row[2], "attempts": row[3]} for row in best_rows}
+    best = _best_attempts(db.execute(
+        select(
+            PracticeAttempt.lesson_id,
+            PracticeAttempt.metric_version,
+            func.max(PracticeAttempt.cpm),
+            func.max(PracticeAttempt.accuracy),
+            func.count(PracticeAttempt.id),
+        )
+        .where(PracticeAttempt.child_id == principal.actor_id, PracticeAttempt.lesson_id.is_not(None))
+        .group_by(PracticeAttempt.lesson_id, PracticeAttempt.metric_version)
+    ).all())
     return [{
         "id": course.id,
         "title": course.title,
@@ -32,7 +54,7 @@ def list_courses(principal: Principal = Depends(require_child), db: Session = De
             "title": lesson.title,
             "description": lesson.description,
             "prompt_count": sum(1 for prompt in lesson.prompts if prompt.active),
-            **best.get(lesson.id, {"best_cpm": None, "best_accuracy": None, "attempts": 0}),
+            **best.get(lesson.id, {"best_cpm": None, "best_cpm_version": None, "best_accuracy": None, "attempts": 0}),
         } for lesson in course.lessons if lesson.active and any(prompt.active for prompt in lesson.prompts)],
     } for course in courses if any(lesson.active and any(prompt.active for prompt in lesson.prompts) for lesson in course.lessons)]
 
@@ -66,12 +88,17 @@ def list_word_sets(principal: Principal = Depends(require_child), db: Session = 
         .options(selectinload(WordSet.words))
         .order_by(WordSet.sort_order, WordSet.id)
     ).all()
-    best_rows = db.execute(
-        select(PracticeAttempt.word_set_id, func.max(PracticeAttempt.cpm), func.max(PracticeAttempt.accuracy), func.count(PracticeAttempt.id))
+    best = _best_attempts(db.execute(
+        select(
+            PracticeAttempt.word_set_id,
+            PracticeAttempt.metric_version,
+            func.max(PracticeAttempt.cpm),
+            func.max(PracticeAttempt.accuracy),
+            func.count(PracticeAttempt.id),
+        )
         .where(PracticeAttempt.child_id == principal.actor_id, PracticeAttempt.word_set_id.is_not(None))
-        .group_by(PracticeAttempt.word_set_id)
-    ).all()
-    best = {row[0]: {"best_cpm": row[1], "best_accuracy": row[2], "attempts": row[3]} for row in best_rows}
+        .group_by(PracticeAttempt.word_set_id, PracticeAttempt.metric_version)
+    ).all())
     result = []
     for item in items:
         ready_count = sum(word.active and word.enrichment_status == "ready" for word in item.words)
@@ -81,7 +108,7 @@ def list_word_sets(principal: Principal = Depends(require_child), db: Session = 
                 "title": item.title,
                 "description": item.description,
                 "word_count": ready_count,
-                **best.get(item.id, {"best_cpm": None, "best_accuracy": None, "attempts": 0}),
+                **best.get(item.id, {"best_cpm": None, "best_cpm_version": None, "best_accuracy": None, "attempts": 0}),
             })
     return result
 
@@ -126,6 +153,8 @@ def recent_attempts(principal: Principal = Depends(require_child), db: Session =
         "word_set_id": item.word_set_id,
         "mode": "word" if item.word_id else "course",
         "cpm": item.cpm,
+        "speed_char_count": item.speed_char_count,
+        "metric_version": item.metric_version,
         "accuracy": item.accuracy,
         "errors": item.error_count,
         "created_at": item.created_at,

@@ -8,10 +8,10 @@ export function keyToCharacter(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'a
   return null
 }
 
-export function calculateStats(chars: number, errors: number, durationMs: number) {
+export function calculateStats(chars: number, errors: number, durationMs: number, speedChars: number = chars) {
   const safeDuration = Math.max(100, durationMs)
   return {
-    cpm: Math.round((chars * 60_000) / safeDuration),
+    cpm: speedChars > 0 ? Math.round((speedChars * 60_000) / safeDuration) : null,
     accuracy: Math.round((chars / Math.max(1, chars + errors)) * 10_000) / 100,
   }
 }
@@ -38,4 +38,3 @@ export function errorLabel(char: string): string {
   if (char === '\t') return 'Tab'
   return char
 }
-
