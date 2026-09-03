@@ -99,6 +99,81 @@ export type ExerciseAdminReport = {
   recent: { id: number; child_id: number; mode: string; status: string; title: string; score: number; max_score: number; created_at: string; completed_at: string | null }[]
 }
 
+export type LearningAnalysisTrend = {
+  current: number
+  previous: number | null
+  delta: number | null
+  unit: 'percentage_point' | 'count'
+}
+export type LearningAnalysisStudent = { child_id: number; child_name: string; count: number; last_at: string }
+export type LearningAnalysisIssue = {
+  affected_student_count: number
+  small_sample: boolean
+  students: LearningAnalysisStudent[]
+  trend: LearningAnalysisTrend
+  recommendation: string
+}
+export type LearningAnalysisTypingIssue = LearningAnalysisIssue & {
+  expected_char: string
+  actual_char?: string
+  error_count: number
+  error_share: number
+  sample_size: number
+}
+export type LearningAnalysisWordIssue = LearningAnalysisIssue & {
+  word_key: string
+  word_id: number | null
+  word: string
+  word_set_id: number | null
+  word_set_title: string
+  attempt_count: number
+  wrong_attempt_count: number
+  wrong_rate: number
+  average_accuracy: number
+  error_count: number
+  top_confusions: { expected_char: string; actual_char: string; count: number }[]
+}
+export type LearningAnalysisQuestionIssue = LearningAnalysisIssue & {
+  question_key: string
+  question_id: number | null
+  question_set_title: string
+  question_type: string
+  stem_markdown: string
+  correct_answer: string
+  attempt_count: number
+  wrong_count: number
+  wrong_rate: number
+  current_unmastered_count: number
+  common_wrong_answers: { label: string; count: number }[]
+}
+export type LearningAnalysisProgrammingFailure = LearningAnalysisIssue & {
+  status: string
+  attempt_count: number
+  question_count: number
+}
+export type LearningAnalysis = {
+  period: { days: number; current_start: string; current_end: string; previous_start: string; previous_end: string }
+  summary: {
+    participating_students: number
+    typing_attempts: number
+    word_attempts: number
+    practice_attempts: number
+    practice_minutes: number
+    overall_accuracy: number
+    completed_exercise_sessions: number
+    exercise_question_attempts: number
+    exercise_wrong_rate: number
+  }
+  insights: { category: 'typing' | 'word' | 'exercise'; title: string; description: string; recommendation: string }[]
+  typing: { weak_keys: LearningAnalysisTypingIssue[]; confusion_pairs: LearningAnalysisTypingIssue[] }
+  words: { difficult_words: LearningAnalysisWordIssue[] }
+  exercises: {
+    difficult_questions: LearningAnalysisQuestionIssue[]
+    persistent_questions: LearningAnalysisQuestionIssue[]
+    programming_failures: LearningAnalysisProgrammingFailure[]
+  }
+}
+
 export type ExerciseQuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'fill_blank' | 'programming'
 export type QuestionOption = { id?: number; label: string; content_markdown: string; correct?: boolean; sort_order: number }
 export type QuestionBlank = { id?: number; position: number; accepted_answers?: string[] }

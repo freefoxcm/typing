@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api, downloadApi, saveDownload } from '../api'
-import type { Course, Report } from '../types'
+import type { Course, LearningAnalysis, Report } from '../types'
 import { AdminPage, reorderCourseList, saveCourseOrder } from './AdminPage'
 
 vi.mock('../api', async (importOriginal) => {
@@ -37,6 +37,21 @@ const report: Report = {
   weak_keys: [],
   attempts: [],
 }
+const analysis: LearningAnalysis = {
+  period: { days: 30, current_start: '2026-08-04', current_end: '2026-09-03', previous_start: '2026-07-05', previous_end: '2026-08-04' },
+  summary: { participating_students: 2, typing_attempts: 12, word_attempts: 8, practice_attempts: 20, practice_minutes: 30, overall_accuracy: 91, completed_exercise_sessions: 4, exercise_question_attempts: 10, exercise_wrong_rate: 40 },
+  insights: [{ category: 'typing', title: '薄弱键：p', description: '影响 2 名学生。', recommendation: '安排 p 键专项练习。' }],
+  typing: {
+    weak_keys: [{ expected_char: 'p', error_count: 6, error_share: 30, sample_size: 4, affected_student_count: 2, small_sample: false, students: [{ child_id: 1, child_name: '小宇', count: 4, last_at: '2026-09-02T08:00:00' }], trend: { current: 30, previous: 20, delta: 10, unit: 'percentage_point' }, recommendation: '安排 p 键专项练习。' }],
+    confusion_pairs: [{ expected_char: 'p', actual_char: 'o', error_count: 4, error_share: 20, sample_size: 2, affected_student_count: 1, small_sample: true, students: [{ child_id: 1, child_name: '小宇', count: 4, last_at: '2026-09-02T08:00:00' }], trend: { current: 20, previous: null, delta: null, unit: 'percentage_point' }, recommendation: '对比 p 和 o 的键位。' }],
+  },
+  words: { difficult_words: [{ word_key: 'id:1', word_id: 1, word: 'python', word_set_id: 1, word_set_title: '技术单词', attempt_count: 5, wrong_attempt_count: 3, wrong_rate: 60, average_accuracy: 88, error_count: 4, affected_student_count: 2, small_sample: false, students: [], top_confusions: [{ expected_char: 'p', actual_char: 'o', count: 2 }], trend: { current: 60, previous: 40, delta: 20, unit: 'percentage_point' }, recommendation: '分段拼写 python。' }] },
+  exercises: {
+    difficult_questions: [{ question_key: 'id:1', question_id: 1, question_set_title: 'Python 基础', question_type: 'single_choice', stem_markdown: '**输入函数**是？', correct_answer: 'B input', attempt_count: 5, wrong_count: 3, wrong_rate: 60, affected_student_count: 2, current_unmastered_count: 2, small_sample: false, students: [], common_wrong_answers: [{ label: '误选 A：print', count: 3 }], trend: { current: 60, previous: 20, delta: 40, unit: 'percentage_point' }, recommendation: '讲解 input 与 print 的区别。' }],
+    persistent_questions: [],
+    programming_failures: [{ status: 'WA', attempt_count: 3, question_count: 1, affected_student_count: 2, small_sample: false, students: [], trend: { current: 3, previous: 1, delta: 2, unit: 'count' }, recommendation: '讲解边界条件。' }],
+  },
+}
 
 describe('AdminPage', () => {
   beforeEach(() => {
@@ -47,6 +62,7 @@ describe('AdminPage', () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === '/api/admin/children') return [{ id: 1, name: '小宇', active: true }]
       if (path === '/api/admin/library') return courses
+      if (path.startsWith('/api/admin/learning-analysis')) return analysis
       if (path.startsWith('/api/admin/reports/overview')) return { days: 30, students: [{ child_id: 1, child_name: '小宇', active: true, course_attempt_count: 2, word_attempt_count: 1, practice_minutes: 8, average_cpm: 88, cpm_metric_version: 1, cpm_attempt_count: 3, accuracy: 96, exercise_total: 3, exercise_completed: 2, exercise_completion_rate: 66.7, exercise_average_percent: 85, unresolved_wrong_count: 1 }] }
       if (path.startsWith('/api/admin/reports/summary')) return report
       if (path.startsWith('/api/admin/exercise-reports/summary')) return { session_count: 2, total_session_count: 3, status_counts: { in_progress: 0, judging: 0, completed: 2, abandoned: 1 }, completion_rate: 66.7, average_percent: 85, unresolved_wrong_count: 1, recent: [{ id: 9, child_id: 1, mode: 'set', status: 'abandoned', title: '未完成题套', score: 0, max_score: 10, created_at: '2026-07-22T08:00:00', completed_at: null }] }
@@ -81,6 +97,8 @@ describe('AdminPage', () => {
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '学习报告' }))
+    expect(await screen.findByRole('tab', { name: '全局学情' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: '学生分析' }))
     const student = await screen.findByRole('button', { name: /小宇/ })
     expect(screen.getByText('2 / 1')).toBeInTheDocument()
     expect(student).toHaveTextContent('历史口径 · 3 次 · 96%')
@@ -93,6 +111,25 @@ describe('AdminPage', () => {
     expect(await screen.findAllByText('已放弃')).not.toHaveLength(0)
     expect(screen.getByText('未完成题套')).toBeInTheDocument()
     expect(screen.queryByText(/孩子/)).not.toBeInTheDocument()
+  })
+
+  it('opens the global analysis by default and switches analysis categories', async () => {
+    render(<AdminPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '学习报告' }))
+
+    expect(await screen.findByText('全局学情分析')).toBeInTheDocument()
+    expect(screen.getByText('薄弱键：p')).toBeInTheDocument()
+    expect(screen.getByText('较上期 +10 个百分点')).toBeInTheDocument()
+    expect(screen.getByText('小样本')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('影响 1 名学生'))
+    expect(screen.getAllByText('小宇')).not.toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('tab', { name: '单词分析' }))
+    expect(screen.getByText('python')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '导出当前视图' })).toHaveAttribute('href', '/api/admin/learning-analysis/export.csv?days=30&section=word')
+    fireEvent.click(screen.getByRole('tab', { name: '习题分析' }))
+    expect(screen.getByText('高频易错题')).toBeInTheDocument()
+    expect(screen.getByText('WA')).toBeInTheDocument()
   })
 
   it('edits a student PIN in an accessible modal and reports success without shifting content', async () => {
@@ -156,6 +193,7 @@ describe('AdminPage', () => {
 
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '学习报告' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '学生分析' }))
     expect(screen.queryByRole('button', { name: '重置学习数据' })).not.toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: /小宇/ }))
     const trigger = await screen.findByRole('button', { name: '重置学习数据' })
@@ -205,6 +243,7 @@ describe('AdminPage', () => {
 
     render(<AdminPage />)
     fireEvent.click(await screen.findByRole('button', { name: '学习报告' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '学生分析' }))
     fireEvent.click(await screen.findByRole('button', { name: /小宇/ }))
     fireEvent.click(await screen.findByRole('button', { name: '重置学习数据' }))
     const nameInput = screen.getByLabelText(/请输入学生姓名/)

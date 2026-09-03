@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..imports import parse_import
+from ..learning_analysis import build_learning_analysis, learning_analysis_csv
 from ..models import AttemptError, AuthSession, ChildProfile, Course, ExerciseSession, Lesson, PracticeAttempt, Prompt, WrongQuestion
 from ..schemas import ChildCreate, ChildUpdate, CourseOrder, CourseWrite, ImportRequest, LearningDataReset, LessonWrite, PromptWrite
 from ..security import Principal, hash_secret, require_admin
@@ -366,6 +367,21 @@ def _report_overview_rows(db: Session, days: int) -> list[dict]:
 @router.get("/reports/overview")
 def report_overview(days: int = Query(default=30, ge=1, le=3650), db: Session = Depends(get_db)):
     return {"days": days, "students": _report_overview_rows(db, days)}
+
+
+@router.get("/learning-analysis")
+def learning_analysis(days: int = Query(default=30, ge=1, le=3650), db: Session = Depends(get_db)):
+    return build_learning_analysis(db, days)
+
+
+@router.get("/learning-analysis/export.csv")
+def export_learning_analysis(
+    days: int = Query(default=30, ge=1, le=3650),
+    section: str = Query(default="typing", pattern=r"^(typing|word|exercise)$"),
+    db: Session = Depends(get_db),
+):
+    data = learning_analysis_csv(build_learning_analysis(db, days, limit=None), section)
+    return StreamingResponse(iter([data]), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename=learning-analysis-{section}.csv"})
 
 
 @router.get("/reports/summary")
