@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements-cn.txt
 COPY backend/ /app/backend/
 COPY --from=frontend-build /build/frontend/dist/ /app/frontend/dist/
 COPY --from=frontend-build /build/frontend/node_modules/pyright/ /opt/pyright/
-RUN chmod +x /app/backend/entrypoint.sh && chown -R kidtype:kidtype /app
+RUN sed -i 's/\r$//' /app/backend/entrypoint.sh && chmod +x /app/backend/entrypoint.sh && chown -R kidtype:kidtype /app
 USER kidtype
 EXPOSE 8080
 VOLUME ["/data"]
