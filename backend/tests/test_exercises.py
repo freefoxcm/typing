@@ -919,7 +919,8 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
                 "starter_code": "", "reference_solution": "a,b=map(int,input().split());print(a+b)", "time_limit_ms": 1000, "memory_limit_mb": 128,
                 "cases": [
                     {"input_data": "1 2\n", "expected_output": "3\n", "is_sample": True, "weight": 0, "confirmed": False, "note": "", "explanation_markdown": "将 $1+2$ 相加。"},
-                    {"input_data": "10 20\n", "expected_output": "30\n", "is_sample": False, "weight": 25, "confirmed": True, "note": "", "explanation_markdown": "不得公开"},
+                    {"input_data": "10 20\n", "expected_output": "30\n", "is_sample": False, "weight": 10, "confirmed": True, "note": "边界一", "explanation_markdown": "不得公开"},
+                    {"input_data": "2 3\n", "expected_output": "5\n", "is_sample": False, "weight": 15, "confirmed": True, "note": "边界二", "explanation_markdown": "仍不得公开"},
                 ],
             },
         })
@@ -945,22 +946,37 @@ def test_programming_submission_uses_queue_and_weighted_result(tmp_path):
         client.patch(f"/api/exercises/sessions/{session['id']}/answers/{item['id']}", json={"selected_option_ids": [], "bool_answer": None, "code": "a,b=map(int,input().split());print(a+b)"})
         assert client.post(f"/api/exercises/sessions/{session['id']}/submit").json()["status"] == "judging"
 
+        judging = client.get(f"/api/exercises/sessions/{session['id']}").json()
+        assert judging["status"] == "judging"
+        assert all(case["is_sample"] for case in judging["items"][0]["question"]["programming"]["cases"])
+        assert "details" not in judging["items"][0]["answer"]
+
         incoming = next((tmp_path / "judge" / "incoming").glob("*.json"))
         job = json.loads(incoming.read_text(encoding="utf-8"))
         assert job["cases"][0]["input"] == "10 20\n"
-        assert job["cases"][0]["weight"] == 25
+        assert [case["weight"] for case in job["cases"]] == [10, 15]
         outgoing = tmp_path / "judge" / "outgoing"
         outgoing.mkdir(parents=True, exist_ok=True)
         (outgoing / f"{job['job_id']}.json").write_text(json.dumps({
-            "job_id": job["job_id"], "status": "complete", "cases": [{"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 25, "stdout": "30\n"}],
+            "job_id": job["job_id"], "status": "complete", "cases": [
+                {"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 10, "stdout": "30\n", "stderr": ""},
+                {"id": job["cases"][1]["id"], "status": "WA", "duration_ms": 5, "weight": 15, "stdout": "6\n", "stderr": "debug\n"},
+            ],
         }), encoding="utf-8")
         result = client.get(f"/api/exercises/sessions/{session['id']}/result").json()
         assert result["status"] == "completed"
-        assert result["score"] == 25
-        hidden_result = next(case for case in result["items"][0]["question"]["programming"]["cases"] if not case["is_sample"])
-        assert "input_data" not in hidden_result and "expected_output" not in hidden_result
-        assert "explanation_markdown" not in hidden_result
-        assert result["items"][0]["answer"]["details"] == {"cases": [{"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 25}], "passed": 1, "total": 1}
+        assert result["score"] == 10
+        hidden_results = [case for case in result["items"][0]["question"]["programming"]["cases"] if not case["is_sample"]]
+        assert [(case["input_data"], case["expected_output"], case["weight"]) for case in hidden_results] == [("10 20\n", "30\n", 10), ("2 3\n", "5\n", 15)]
+        assert all("note" not in case and "confirmed" not in case and "explanation_markdown" not in case for case in hidden_results)
+        assert result["items"][0]["answer"]["details"] == {
+            "cases": [
+                {"id": job["cases"][0]["id"], "status": "AC", "duration_ms": 4, "weight": 10, "stdout": "30\n", "stderr": ""},
+                {"id": job["cases"][1]["id"], "status": "WA", "duration_ms": 5, "weight": 15, "stdout": "6\n", "stderr": "debug\n"},
+            ],
+            "passed": 1,
+            "total": 2,
+        }
 
 
 def test_programming_set_cannot_publish_with_empty_sample_placeholder(tmp_path):

@@ -115,8 +115,6 @@ def _public_snapshot(snapshot: dict[str, Any], reveal: bool) -> dict[str, Any]:
     elif program:
         for case in program.get("cases", []):
             if not case.get("is_sample"):
-                case.pop("input_data", None)
-                case.pop("expected_output", None)
                 case.pop("note", None)
                 case.pop("explanation_markdown", None)
                 case.pop("confirmed", None)
@@ -644,7 +642,14 @@ def _reconcile(session: ExerciseSession, db: Session, settings: Settings) -> Non
         answer.awarded_points = sum(int(case.get("weight") or 0) for case in cases if case.get("status") == "AC")
         answer.status = "AC" if answer.awarded_points == item.points else next((str(case.get("status")) for case in cases if case.get("status") != "AC"), "WA")
         answer.details_json = json.dumps({
-            "cases": [{"id": case.get("id"), "status": case.get("status"), "duration_ms": case.get("duration_ms"), "weight": case.get("weight")} for case in cases],
+            "cases": [{
+                "id": case.get("id"),
+                "status": case.get("status"),
+                "duration_ms": case.get("duration_ms"),
+                "weight": case.get("weight"),
+                "stdout": str(case.get("stdout") or ""),
+                "stderr": str(case.get("stderr") or ""),
+            } for case in cases],
             "passed": sum(case.get("status") == "AC" for case in cases),
             "total": len(cases),
         }, ensure_ascii=False)

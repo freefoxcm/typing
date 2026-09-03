@@ -582,7 +582,29 @@ function SampleResults({ result }: { result?: SampleResult }) {
   return <div className="sample-results"><h3>样例运行结果</h3>{indentationError && <p className="code-hint">Python 的 for、if、while 或 def 语句后的代码需要缩进。可以在编辑器中按 Tab 添加 4 个空格。</p>}{eofError && <p className="code-hint">程序读取的数据比公开样例提供的更多。请先对照上方“标准输入”调整 input() 次数；如果样例本身不完整，请联系管理员修正。</p>}{result.cases?.map((item, index) => <div className={item.status === 'AC' ? 'passed' : 'failed'} key={item.id ?? index}><strong>样例 {index + 1} · {item.status}</strong><span>{item.duration_ms} ms</span>{item.stdout !== undefined && <pre>{item.stdout || '（无输出）'}</pre>}{item.stderr && <pre className="stderr">{item.stderr}</pre>}</div>)}</div>
 }
 
+function HiddenCaseResults({ item }: { item: ExerciseSessionItem }) {
+  const hiddenCases = item.question.programming?.cases.filter((testCase) => !testCase.is_sample) ?? []
+  const results = item.answer.details?.cases ?? []
+  if (!hiddenCases.length) return null
+  const resultById = new Map(results.filter((result) => result.id != null).map((result) => [result.id, result]))
+  return <div className="hidden-case-results">
+    {hiddenCases.map((testCase, index) => {
+      const result = testCase.id != null ? resultById.get(testCase.id) : results[index]
+      const status = result?.status ?? '未知'
+      return <article className={`hidden-case-result ${status === 'AC' ? 'passed' : 'failed'}`} key={testCase.id ?? index}>
+        <header><strong>测试点 {index + 1} · {status}</strong><span>{result?.duration_ms != null ? `${result.duration_ms} ms` : '耗时未知'}{result?.weight != null ? ` · ${result.weight} 分` : ''}</span></header>
+        <div className="hidden-case-data">
+          <section><h4>标准输入</h4><pre>{testCase.input_data || '（无输入）'}</pre></section>
+          <section><h4>期望输出</h4><pre>{testCase.expected_output || '（无输出）'}</pre></section>
+          <section><h4>实际输出</h4><pre>{result?.stdout === undefined ? '该历史记录未保存运行输出' : result.stdout || '（无输出）'}</pre></section>
+          {result?.stderr && <section className="hidden-case-error"><h4>错误信息</h4><pre>{result.stderr}</pre></section>}
+        </div>
+      </article>
+    })}
+  </div>
+}
+
 function ResultPanel({ item }: { item: ExerciseSessionItem }) {
   const full = item.answer.awarded_points === item.points
-  return <section className={`exercise-result-panel ${full ? 'correct' : 'incorrect'}`}><header>{full ? <CheckCircle2 /> : <XCircle />}<strong>{full ? '回答正确' : '需要再想一想'}</strong><span>{item.answer.awarded_points ?? 0} / {item.points} 分</span></header>{item.question.type === 'true_false' && <p>正确答案：{item.question.correct_bool ? '正确' : '错误'}</p>}{item.question.type === 'fill_blank' && <ol>{(item.question.blanks || []).map((blank) => <li key={blank.position}>第 {blank.position} 空：{blank.accepted_answers?.join(' / ')}</li>)}</ol>}{item.question.type === 'programming' && <><p>隐藏测试点：通过 {item.answer.details?.passed ?? 0} / {item.answer.details?.total ?? 0}，状态 {item.answer.status}</p>{item.answer.status === 'Syntax Error' && <p className="code-hint">请检查括号、冒号和缩进；for、if、while 或 def 后的代码块必须缩进。</p>}</>}{item.question.explanation_markdown && <><h3>答案解析</h3><MarkdownText value={item.question.explanation_markdown} /></>}{item.question.programming?.reference_solution && <><h3>参考程序</h3><pre className="reference-code">{item.question.programming.reference_solution}</pre></>}</section>
+  return <section className={`exercise-result-panel ${full ? 'correct' : 'incorrect'}`}><header>{full ? <CheckCircle2 /> : <XCircle />}<strong>{full ? '回答正确' : '需要再想一想'}</strong><span>{item.answer.awarded_points ?? 0} / {item.points} 分</span></header>{item.question.type === 'true_false' && <p>正确答案：{item.question.correct_bool ? '正确' : '错误'}</p>}{item.question.type === 'fill_blank' && <ol>{(item.question.blanks || []).map((blank) => <li key={blank.position}>第 {blank.position} 空：{blank.accepted_answers?.join(' / ')}</li>)}</ol>}{item.question.type === 'programming' && <><p>隐藏测试点：通过 {item.answer.details?.passed ?? 0} / {item.answer.details?.total ?? 0}，状态 {item.answer.status}</p>{item.answer.status === 'Syntax Error' && <p className="code-hint">请检查括号、冒号和缩进；for、if、while 或 def 后的代码块必须缩进。</p>}<HiddenCaseResults item={item} /></>}{item.question.explanation_markdown && <><h3>答案解析</h3><MarkdownText value={item.question.explanation_markdown} /></>}{item.question.programming?.reference_solution && <><h3>参考程序</h3><pre className="reference-code">{item.question.programming.reference_solution}</pre></>}</section>
 }
