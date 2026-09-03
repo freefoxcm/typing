@@ -199,7 +199,13 @@ export type ExerciseSessionItem = {
     code: string
     status: string
     awarded_points?: number
-    details?: { correct?: boolean; blank_correct?: boolean[]; passed?: number; total?: number; cases?: { id?: number; status: string; duration_ms?: number; weight?: number }[] }
+    details?: {
+      correct?: boolean
+      blank_correct?: boolean[]
+      passed?: number
+      total?: number
+      cases?: { id?: number; status: string; duration_ms?: number; weight?: number; stdout?: string; stderr?: string }[]
+    }
   }
 }
 export type ExerciseSession = {

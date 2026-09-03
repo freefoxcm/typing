@@ -548,6 +548,78 @@ describe('ExercisePage', () => {
     expect(mockedApi.mock.calls.filter(([path]) => path === '/api/exercises/sessions/7/syntax-check')).toHaveLength(0)
   })
 
+  it('shows every hidden test input, expected output, actual output, and error after completion', async () => {
+    const programming = makeProgrammingSession()
+    programming.status = 'completed'
+    programming.score = 0
+    programming.items[0].question.programming!.reference_solution = 'print("reference")'
+    programming.items[0].question.programming!.cases.push(...Array.from({ length: 5 }, (_, index) => ({
+      id: 10 + index,
+      input_data: index === 4 ? '' : `hidden input ${index + 1}\n`,
+      expected_output: index === 3 ? '' : `expected ${index + 1}\n`,
+      is_sample: false,
+      weight: 5,
+    })))
+    programming.items[0].answer = {
+      ...programming.items[0].answer,
+      code: 'print("wrong")',
+      status: 'WA',
+      awarded_points: 0,
+      details: {
+        passed: 0,
+        total: 5,
+        cases: Array.from({ length: 5 }, (_, index) => ({
+          id: 10 + index,
+          status: index === 2 ? 'RE' : 'WA',
+          duration_ms: index + 1,
+          weight: 5,
+          stdout: index === 1 ? '' : `actual ${index + 1}\n`,
+          stderr: index === 2 ? 'ValueError: bad value\n' : '',
+        })),
+      },
+    }
+    mockedApi.mockResolvedValue(programming)
+    renderPage()
+
+    expect(await screen.findByText('隐藏测试点：通过 0 / 5，状态 WA')).toBeInTheDocument()
+    expect(screen.getAllByText(/测试点 \d · (WA|RE)/)).toHaveLength(5)
+    expect(screen.getByText('hidden input 1')).toBeInTheDocument()
+    expect(screen.getByText('expected 1')).toBeInTheDocument()
+    expect(screen.getByText('actual 1')).toBeInTheDocument()
+    expect(screen.getByText('ValueError: bad value')).toBeInTheDocument()
+    expect(screen.getByText('（无输入）')).toBeInTheDocument()
+    expect(screen.getAllByText('（无输出）')).toHaveLength(2)
+    expect(screen.getByText('print("reference")')).toBeInTheDocument()
+  })
+
+  it('distinguishes historical missing output from an empty program output', async () => {
+    const programming = makeProgrammingSession()
+    programming.status = 'completed'
+    programming.score = 0
+    programming.items[0].question.programming!.cases.push(
+      { id: 10, input_data: '1\n', expected_output: '1\n', is_sample: false, weight: 10 },
+      { id: 11, input_data: '2\n', expected_output: '2\n', is_sample: false, weight: 15 },
+    )
+    programming.items[0].answer = {
+      ...programming.items[0].answer,
+      status: 'WA',
+      awarded_points: 0,
+      details: {
+        passed: 0,
+        total: 2,
+        cases: [
+          { id: 10, status: 'WA', duration_ms: 1, weight: 10 },
+          { id: 11, status: 'WA', duration_ms: 2, weight: 15, stdout: '', stderr: '' },
+        ],
+      },
+    }
+    mockedApi.mockResolvedValue(programming)
+    renderPage()
+
+    expect(await screen.findByText('该历史记录未保存运行输出')).toBeInTheDocument()
+    expect(screen.getByText('（无输出）')).toBeInTheDocument()
+  })
+
   it('flushes a programming draft before saving and exiting', async () => {
     const programming = makeProgrammingSession()
     mockedApi.mockImplementation(async (path) => path === '/api/exercises/sessions/7' ? programming : { ok: true })
