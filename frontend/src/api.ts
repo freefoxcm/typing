@@ -23,46 +23,77 @@ function errorMessage(detail: unknown): string {
   return detail == null ? '' : String(detail)
 }
 
-async function fetchApi(path: string, init: RequestInit): Promise<Response> {
+export type ApiRequestInit = RequestInit & { timeoutMs?: number }
+
+// The deadline includes reading the response body. Never automatically replay writes.
+async function request<T>(path: string, init: ApiRequestInit, read: (response: Response) => Promise<T>): Promise<T> {
+  const { timeoutMs = init.body instanceof FormData ? 120000 : 15000, signal, ...options } = init
+  const controller = new AbortController()
+  let rejectAbort!: (reason: unknown) => void
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
+  const cancel = () => {
+    controller.abort()
+    rejectAbort(new DOMException('Aborted', 'AbortError'))
+  }
+  signal?.addEventListener('abort', cancel, { once: true })
+  const timer = setTimeout(() => {
+    rejectAbort(new ApiError('请求超时，请检查网络后重试；写入结果尚未确认', 0))
+    controller.abort()
+  }, timeoutMs)
+  const headers = new Headers(options.headers)
+  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   try {
-    return await fetch(path, init)
+    if (signal?.aborted) cancel()
+    return await Promise.race([
+      aborted,
+      (async () => {
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+        const response = await fetch(path, { ...options, headers, credentials: 'same-origin', signal: controller.signal })
+        return read(response)
+      })(),
+    ])
   } catch (error) {
+    if (error instanceof ApiError) throw error
     if (typeof error === 'object' && error && 'name' in error && error.name === 'AbortError') throw error
     const offline = typeof navigator !== 'undefined' && navigator.onLine === false
     throw new ApiError(offline ? '网络连接已断开，请检查网络后重试' : '无法连接服务器，请检查网络或稍后重试', 0)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', cancel)
   }
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetchApi(path, { ...init, headers, credentials: 'same-origin' })
-  if (response.status === 204) return undefined as T
-  const contentType = response.headers.get('content-type') ?? ''
-  const body = contentType.includes('json') ? await response.json() : await response.text()
-  if (!response.ok) {
-    const detail = typeof body === 'object' ? body.detail : body
-    const message = errorMessage(detail)
-    throw new ApiError(message || '请求失败', response.status)
+async function jsonResponse(response: Response): Promise<unknown> {
+  if (!(response.headers.get('content-type') ?? '').toLowerCase().includes('json')) {
+    throw new ApiError('服务器响应格式异常，请稍后重试；操作结果尚未确认', response.ok ? 0 : response.status)
   }
-  return body as T
+  let body
+  try { body = await response.json() }
+  catch (error) {
+    if (error instanceof SyntaxError) throw new ApiError('服务器响应不完整，请稍后重试；操作结果尚未确认', 0)
+    throw error
+  }
+  if (!response.ok) throw new ApiError(errorMessage(body?.detail) || '请求失败', response.status)
+  return body
+}
+
+export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  return request(path, init, async (response) => {
+    if (response.status === 204) return undefined as T
+    return await jsonResponse(response) as T
+  })
 }
 
 export const jsonBody = (value: unknown): RequestInit => ({ body: JSON.stringify(value) })
 
-export async function downloadApi(path: string, init: RequestInit = {}): Promise<{ blob: Blob; filename: string }> {
-  const headers = new Headers(init.headers)
-  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetchApi(path, { ...init, headers, credentials: 'same-origin' })
-  if (!response.ok) {
-    const contentType = response.headers.get('content-type') ?? ''
-    const body = contentType.includes('json') ? await response.json() : await response.text()
-    const detail = typeof body === 'object' && body && 'detail' in body ? body.detail : body
-    throw new ApiError(errorMessage(detail) || '下载失败', response.status)
-  }
-  const disposition = response.headers.get('content-disposition') ?? ''
-  const match = /filename="?([^";]+)"?/i.exec(disposition)
-  return { blob: await response.blob(), filename: match?.[1] || 'question-sets.zip' }
+export async function downloadApi(path: string, init: ApiRequestInit = {}): Promise<{ blob: Blob; filename: string }> {
+  return request(path, { timeoutMs: 120000, ...init }, async (response) => {
+    if (!response.ok) await jsonResponse(response)
+    if ((response.headers.get('content-type') ?? '').toLowerCase().includes('text/html')) throw new ApiError('服务器返回了网页，下载未完成，请重试', 0)
+    const disposition = response.headers.get('content-disposition') ?? ''
+    const match = /filename="?([^";]+)"?/i.exec(disposition)
+    return { blob: await response.blob(), filename: match?.[1] || 'question-sets.zip' }
+  })
 }
 
 export function saveDownload({ blob, filename }: { blob: Blob; filename: string }) {

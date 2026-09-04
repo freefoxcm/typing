@@ -2,11 +2,12 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { AlertCircle, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Code2, LoaderCircle, Save, Send, WifiOff, XCircle } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, jsonBody } from '../api'
+import { useUnsavedChanges } from '../components/UnsavedChanges'
 import { inlineMarkdown, MarkdownText } from '../components/MarkdownText'
 import type { PythonFormatStatus, PythonSyntaxDiagnostic } from '../components/PythonCodeEditor'
 import type { ExerciseSession, ExerciseSessionItem } from '../types'
 
-type SampleResult = { status: string; cases?: { id?: number; status: string; duration_ms: number; stdout?: string; stderr?: string }[] }
+type SampleResult = { status: string; job_id?: string; cases?: { id?: number; status: string; duration_ms: number; stdout?: string; stderr?: string }[] }
 type TextEdit = { value: string; selectionStart: number; selectionEnd: number }
 type SyntaxCheckResult = { valid: boolean; diagnostics: PythonSyntaxDiagnostic[] }
 type SyntaxCheckState = { status: 'idle' | 'checking' | 'valid' | 'invalid' | 'unavailable'; diagnostics: PythonSyntaxDiagnostic[] }
@@ -75,6 +76,15 @@ export function ExercisePage() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [submissionLocked, setSubmissionLocked] = useState(false)
+  const submissionLockedRef = useRef(false)
+  const submittingRef = useRef(false)
+  const [resultRefreshNeeded, setResultRefreshNeeded] = useState(false)
+  const [resultRefreshing, setResultRefreshing] = useState(false)
+  const resultRefreshingRef = useRef(false)
+  const sampleJobsRef = useRef(new Map<number, string>())
+  const samplePollingRef = useRef(new Set<number>())
+  const mountedRef = useRef(true)
   const [sampleResults, setSampleResults] = useState<Record<number, SampleResult>>({})
   const [codeDrafts, setCodeDrafts] = useState<Record<number, string>>({})
   const [syntaxChecks, setSyntaxChecks] = useState<Record<number, SyntaxCheckState>>({})
@@ -103,6 +113,7 @@ export function ExercisePage() {
   const autoFormatRef = useRef(editorPreferences.autoFormat)
   autoSyntaxRef.current = editorPreferences.autoSyntax
   autoFormatRef.current = editorPreferences.autoFormat
+  useUnsavedChanges(() => pendingCodesRef.current.size > 0 || pendingAnswersRef.current.size > 0 || submissionLockedRef.current)
 
   useEffect(() => {
     try { window.localStorage.setItem(PYTHON_EDITOR_PREFERENCES_KEY, JSON.stringify(editorPreferences)) } catch { /* private storage can be unavailable */ }
@@ -135,27 +146,29 @@ export function ExercisePage() {
       codeDraftsRef.current = next
       return next
     })
-  }).catch((e) => setError(e.message)), [sessionId])
-  useEffect(() => { void load() }, [load])
+    setError('')
+    return data
+  }), [sessionId])
+  useEffect(() => { void load().catch((e) => setError(e.message)) }, [load])
   useEffect(() => {
     if (session?.status !== 'judging') return
-    const timer = window.setInterval(() => void load(), 1200)
+    let loading = false
+    const timer = window.setInterval(() => {
+      if (loading) return
+      loading = true
+      void load().catch((e) => setError(e.message)).finally(() => { loading = false })
+    }, 1200)
     return () => window.clearInterval(timer)
   }, [session?.status, load])
   useEffect(() => {
-    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!pendingCodesRef.current.size && !pendingAnswersRef.current.size) return
-      event.preventDefault()
-      event.returnValue = ''
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      for (const timer of codeTimersRef.current.values()) window.clearTimeout(timer)
+      for (const timer of syntaxTimersRef.current.values()) window.clearTimeout(timer)
+      for (const controller of syntaxControllersRef.current.values()) controller.abort()
+      for (const controller of formatControllersRef.current.values()) controller.abort()
     }
-    window.addEventListener('beforeunload', warnBeforeUnload)
-    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
-  }, [])
-  useEffect(() => () => {
-    for (const timer of codeTimersRef.current.values()) window.clearTimeout(timer)
-    for (const timer of syntaxTimersRef.current.values()) window.clearTimeout(timer)
-    for (const controller of syntaxControllersRef.current.values()) controller.abort()
-    for (const controller of formatControllersRef.current.values()) controller.abort()
   }, [])
   const item = session?.items[index]
   const unanswered = useMemo(() => session?.items.filter((candidate) => candidate.answer.status === 'unanswered').length ?? 0, [session])
@@ -403,6 +416,7 @@ export function ExercisePage() {
     }
   }
   const goToIndex = (nextIndex: number) => {
+    if (submissionLockedRef.current) return Promise.resolve()
     const transition = navigationChainRef.current.then(async () => {
       if (nextIndex === indexRef.current || !await flushPendingSaves() || !await persistPosition(nextIndex)) return
       indexRef.current = nextIndex
@@ -412,6 +426,7 @@ export function ExercisePage() {
     return transition
   }
   const saveAndExit = async () => {
+    if (submissionLockedRef.current) return
     try {
       await navigationChainRef.current
       if (!await flushPendingSaves()) return
@@ -425,43 +440,87 @@ export function ExercisePage() {
     }
   }
 
+  const pollSamples = async (target: ExerciseSessionItem, jobId: string) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700))
+      if (!mountedRef.current) return
+      const result = await api<SampleResult>(`/api/exercises/sample-runs/${jobId}`)
+      if (!mountedRef.current) return
+      if (result.status !== 'queued') {
+        sampleJobsRef.current.delete(target.id)
+        setSampleResults((current) => ({ ...current, [target.id]: result }))
+        return
+      }
+    }
+    setSampleResults((current) => ({ ...current, [target.id]: { status: 'waiting', job_id: jobId } }))
+  }
   const runSamples = async (target: ExerciseSessionItem) => {
+    if (samplePollingRef.current.has(target.id) || submissionLockedRef.current) return
+    samplePollingRef.current.add(target.id)
     setError(''); setSampleResults((current) => ({ ...current, [target.id]: { status: 'queued' } }))
     try {
+      const existingJob = sampleJobsRef.current.get(target.id)
+      if (existingJob) { await pollSamples(target, existingJob); return }
       let code = codeDraftsRef.current[target.id] ?? codeDrafts[target.id] ?? target.answer.code ?? target.question.programming?.starter_code ?? ''
       if (autoFormatRef.current) code = await requestPythonFormat(target, code)
       pendingCodesRef.current.set(target.id, code)
       if (!await persistCode(target.id, code)) throw new Error('代码保存失败，请重试')
       const queued = await api<{ job_id: string }>(`/api/exercises/sessions/${sessionId}/sample-runs`, { method: 'POST', ...jsonBody({ session_item_id: target.id, code }) })
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 700))
-        const result = await api<SampleResult>(`/api/exercises/sample-runs/${queued.job_id}`)
-        if (result.status !== 'queued') { setSampleResults((current) => ({ ...current, [target.id]: result })); return }
-      }
-      setSampleResults((current) => ({ ...current, [target.id]: { status: 'queued' } }))
-    } catch (e) { setError(e instanceof Error ? e.message : '运行样例失败'); setSampleResults((current) => ({ ...current, [target.id]: { status: 'failed' } })) }
+      sampleJobsRef.current.set(target.id, queued.job_id)
+      await pollSamples(target, queued.job_id)
+    } catch (e) {
+      if (!mountedRef.current) return
+      setError(e instanceof Error ? e.message : '运行样例失败')
+      const jobId = sampleJobsRef.current.get(target.id)
+      setSampleResults((current) => ({ ...current, [target.id]: { status: jobId ? 'waiting' : 'failed', job_id: jobId } }))
+    } finally { samplePollingRef.current.delete(target.id) }
   }
 
+  const refreshSubmission = async () => {
+    if (resultRefreshingRef.current) return
+    resultRefreshingRef.current = true; setResultRefreshing(true)
+    try {
+      const current = await load()
+      submissionLockedRef.current = false; setSubmissionLocked(false)
+      setResultRefreshNeeded(false)
+      setMessage(current.status === 'in_progress' ? '当前练习尚未提交，可以继续作答或提交。' : current.status === 'judging' ? '答案已提交，正在自动判题…' : '')
+    } catch (e) {
+      setResultRefreshNeeded(true)
+      setError(`暂时无法读取提交结果：${e instanceof Error ? e.message : '请检查网络'}。请重新确认提交结果。`)
+    } finally { resultRefreshingRef.current = false; setResultRefreshing(false) }
+  }
   const submit = async () => {
-    if (!session) return
+    if (!session || submittingRef.current || submissionLockedRef.current) return
     if (unanswered && !window.confirm(`还有 ${unanswered} 道题未作答，未答题将按 0 分计算。确认提交？`)) return
     if (!unanswered && !window.confirm('提交后不能再修改答案，确认提交整套练习？')) return
-    if (!await flushPendingSaves()) return
+    submittingRef.current = true
+    submissionLockedRef.current = true; setSubmissionLocked(true)
     setSubmitting(true); setError('')
     try {
-      const result = await api<{ status: string }>(`/api/exercises/sessions/${session.id}/submit`, { method: 'POST' })
-      await load()
-      if (result.status === 'judging') setMessage('客观题已提交，正在运行编程题隐藏测试点…')
-    } catch (e) { setError(e instanceof Error ? e.message : '提交失败') } finally { setSubmitting(false) }
+      await navigationChainRef.current
+      // Finish any blur-triggered formatting before draining the answer queue.
+      await Promise.all([...formatRequestsRef.current.values()].map((request) => request.promise))
+      if (!await flushPendingSaves()) {
+        submissionLockedRef.current = false; setSubmissionLocked(false)
+        return
+      }
+      await api<{ status: string }>(`/api/exercises/sessions/${session.id}/submit`, { method: 'POST' })
+      setResultRefreshNeeded(true)
+      await refreshSubmission()
+    } catch (e) {
+      setResultRefreshNeeded(true)
+      setError(`提交结果尚未确认：${e instanceof Error ? e.message : '网络异常'}。请先重新确认提交结果。`)
+    } finally { submittingRef.current = false; setSubmitting(false) }
   }
 
   if (!session || !item) return <div className="page"><p className={error ? 'notice error' : 'notice'}>{error || '正在准备习题…'}</p></div>
   const complete = session.status === 'completed'
-  const editable = session.status === 'in_progress'
+  const editable = session.status === 'in_progress' && !submissionLocked
   const abandoned = session.status === 'abandoned'
   return <div className="page exercise-page">
     <header className="exercise-header">{editable ? <button className="back-link exercise-save-exit" onClick={() => void saveAndExit()}><ArrowLeft />保存并退出</button> : <Link className="back-link" to="/"><ArrowLeft />返回首页</Link>}<div><p className="eyebrow">{complete ? '练习结果' : abandoned ? '练习已放弃' : session.mode === 'set' ? '整套练习' : session.mode === 'random' ? '随机练习' : '错题重练'}</p><h1>{session.title}</h1></div><div className="exercise-score">{complete ? <><strong>{session.score}</strong><span>/ {session.max_score} 分</span></> : <><strong>{index + 1}</strong><span>/ {session.items.length}</span></>}</div></header>
     {error && <p className="notice error">{error}</p>}{message && <p className="notice success">{message}</p>}
+    {resultRefreshNeeded && <div className="notice" role="status">提交状态确认前已暂停编辑。<button className="ghost" disabled={resultRefreshing} onClick={() => void refreshSubmission()}>{resultRefreshing ? '正在确认…' : '重新确认提交结果'}</button></div>}
     {session.status === 'judging' && <div className="judging-banner"><Clock3 /><div><strong>正在自动判题</strong><p>隐藏测试点在隔离环境中运行，结果会自动刷新。</p></div></div>}
     {abandoned && <div className="abandoned-banner"><XCircle /><div><strong>本次练习已放弃</strong><p>已保存的作答记录仍会保留，但不能继续修改、提交或查看正确答案。</p></div></div>}
     {editable && <div className={`exercise-save-state ${saveState}`} aria-live="polite"><Save />{saveState === 'saving' ? '正在保存…' : saveState === 'error' ? '保存失败，请重试' : '所有答案已保存'}</div>}
@@ -482,14 +541,14 @@ export function ExercisePage() {
         {item.question.type === 'fill_blank' ? <FillBlankStem item={item} complete={complete} disabled={!editable} onChange={(blank_answers) => void save(item, { blank_answers })} /> : <MarkdownText value={item.question.stem_markdown} />}
         {item.question.stem_image_asset_id && <img className="exercise-stem-image" src={`/api/question-assets/${item.question.stem_image_asset_id}`} alt="题目配图" />}
         {item.question.show_source_crop && item.question.source_asset_id && <img className="exercise-source-image" src={`/api/question-assets/${item.question.source_asset_id}`} alt="完整原题截图" />}
-        {item.question.type === 'single_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="radio" name={`question-${item.id}`} checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={() => void save(item, { selected_option_ids: [option.id!] })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
-        {item.question.type === 'multiple_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="checkbox" checked={item.answer.selected_option_ids.includes(option.id!)} disabled={complete || session.status !== 'in_progress'} onChange={(e) => void save(item, { selected_option_ids: e.target.checked ? [...item.answer.selected_option_ids, option.id!] : item.answer.selected_option_ids.filter((id) => id !== option.id) })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
-        {item.question.type === 'true_false' && <div className="judgment-options"><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === true ? 'selected' : ''} onClick={() => void save(item, { bool_answer: true })}><CheckCircle2 />正确</button><button disabled={complete || session.status !== 'in_progress'} className={item.answer.bool_answer === false ? 'selected' : ''} onClick={() => void save(item, { bool_answer: false })}><XCircle />错误</button></div>}
+        {item.question.type === 'single_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="radio" name={`question-${item.id}`} checked={item.answer.selected_option_ids.includes(option.id!)} disabled={!editable} onChange={() => void save(item, { selected_option_ids: [option.id!] })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
+        {item.question.type === 'multiple_choice' && <div className="answer-options">{item.question.options.map((option) => <label className={complete && option.correct ? 'correct-option' : ''} key={option.id}><input type="checkbox" checked={item.answer.selected_option_ids.includes(option.id!)} disabled={!editable} onChange={(e) => void save(item, { selected_option_ids: e.target.checked ? [...item.answer.selected_option_ids, option.id!] : item.answer.selected_option_ids.filter((id) => id !== option.id) })} /><strong>{option.label}</strong><MarkdownText value={option.content_markdown} /></label>)}</div>}
+        {item.question.type === 'true_false' && <div className="judgment-options"><button disabled={!editable} className={item.answer.bool_answer === true ? 'selected' : ''} onClick={() => void save(item, { bool_answer: true })}><CheckCircle2 />正确</button><button disabled={!editable} className={item.answer.bool_answer === false ? 'selected' : ''} onClick={() => void save(item, { bool_answer: false })}><XCircle />错误</button></div>}
         {item.question.type === 'programming' && item.question.programming && <ProgrammingAnswer
           sessionId={session.id}
           item={item}
           complete={complete}
-          sessionStatus={session.status}
+          sessionStatus={submissionLocked ? 'judging' : session.status}
           code={codeDrafts[item.id] ?? item.answer.code ?? item.question.programming.starter_code ?? ''}
           sampleResult={sampleResults[item.id]}
           syntaxCheck={syntaxChecks[item.id] ?? { status: 'idle', diagnostics: [] }}
@@ -573,9 +632,9 @@ function ProgrammingAnswer({ sessionId, item, complete, sessionStatus, code, sam
     onChange={onCodeChange}
     onBlur={onSave}
     onRun={editable ? onRun : undefined}
-    runDisabled={!code.trim() || !samples.length || sampleResult?.status === 'queued'}
-    runDisabledReason={!code.trim() ? '请先输入代码' : !samples.length ? '该题没有可运行的公开样例' : sampleResult?.status === 'queued' ? '公开样例正在运行' : undefined}
-    runLabel={sampleResult?.status === 'queued' ? '运行中…' : '运行样例'}
+    runDisabled={sampleResult?.status === 'queued' || sampleResult?.status !== 'waiting' && (!code.trim() || !samples.length)}
+    runDisabledReason={sampleResult?.status === 'waiting' ? undefined : !code.trim() ? '请先输入代码' : !samples.length ? '该题没有可运行的公开样例' : sampleResult?.status === 'queued' ? '公开样例正在运行' : undefined}
+    runLabel={sampleResult?.status === 'queued' ? '运行中…' : sampleResult?.status === 'waiting' ? '继续查询样例结果' : '运行样例'}
     runLoading={sampleResult?.status === 'queued'}
     autoCompletionEnabled={autoCompletionEnabled}
     onAutoCompletionChange={editable ? onAutoCompletionChange : undefined}
@@ -606,6 +665,7 @@ function questionTypeLabel(type: string) { return ({ single_choice: '单选题',
 
 function SampleResults({ result }: { result?: SampleResult }) {
   if (!result || result.status === 'queued') return null
+  if (result.status === 'waiting') return <p className="notice">样例任务已提交，暂未取得结果。点击“继续查询样例结果”即可恢复查询，不会重复运行。</p>
   const indentationError = result.cases?.some((item) => /IndentationError|TabError/.test(item.stderr || ''))
   const eofError = result.cases?.some((item) => /EOFError:\s*EOF when reading a line/.test(item.stderr || ''))
   return <div className="sample-results"><h3>样例运行结果</h3>{indentationError && <p className="code-hint">Python 的 for、if、while 或 def 语句后的代码需要缩进。可以在编辑器中按 Tab 添加 4 个空格。</p>}{eofError && <p className="code-hint">程序读取的数据比公开样例提供的更多。请先对照上方“标准输入”调整 input() 次数；如果样例本身不完整，请联系管理员修正。</p>}{result.cases?.map((item, index) => <div className={item.status === 'AC' ? 'passed' : 'failed'} key={item.id ?? index}><strong>样例 {index + 1} · {item.status}</strong><span>{item.duration_ms} ms</span>{item.stdout !== undefined && <pre>{item.stdout || '（无输出）'}</pre>}{item.stderr && <pre className="stderr">{item.stderr}</pre>}</div>)}</div>
