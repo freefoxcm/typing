@@ -2,6 +2,7 @@ import asyncio
 import json
 import base64
 import threading
+import pytest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -328,7 +329,8 @@ def test_set_recognition_builds_partial_preview_when_one_candidate_is_invalid(mo
         assert result["diagnostics"]["invalid_count"] == 1
 
 
-def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
+@pytest.mark.parametrize("review_method", ["POST", "PATCH"])
+def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path, review_method):
     with make_client(tmp_path) as client:
         admin_login(client)
         create_child(client)
@@ -347,7 +349,7 @@ def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
 
         updated = client.put(f"/api/admin/questions/{question_id}", json={**payload, "reviewed": True, "explanation_markdown": "已修改"})
         assert updated.status_code == 200 and updated.json()["reviewed"] is False
-        reviewed = client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True})
+        reviewed = client.request(review_method, f"/api/admin/questions/{question_id}/review", json={"reviewed": True})
         assert reviewed.status_code == 200 and reviewed.json()["reviewed"] is True
 
         png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
@@ -361,7 +363,7 @@ def test_fill_blank_lifecycle_review_and_source_image_replacement(tmp_path):
         assert stem_asset_id and stem_asset_id != source_asset_id
         assert stem_image.json()["source_asset_id"] == source_asset_id
         assert stem_image.json()["reviewed"] is False
-        assert client.patch(f"/api/admin/questions/{question_id}/review", json={"reviewed": True}).status_code == 200
+        assert client.request(review_method, f"/api/admin/questions/{question_id}/review", json={"reviewed": True}).status_code == 200
         assert client.post(f"/api/admin/question-sets/{question_set['id']}/publish").status_code == 200
 
         child_login(client)
@@ -476,7 +478,8 @@ def test_objective_set_submission_hides_answers_and_drives_wrong_book(tmp_path):
         assert report["unresolved_wrong_count"] == 0
 
 
-def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path):
+@pytest.mark.parametrize("position_method", ["POST", "PATCH"])
+def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path, position_method):
     with make_client(tmp_path) as client:
         admin_login(client)
         child_id = create_child(client)
@@ -488,11 +491,13 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         assert session["current_item_sort_order"] == 0
         first = session["items"][0]
         second = session["items"][1]
-        moved = client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]})
+        assert client.request(position_method, f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}, headers={"Origin": "https://untrusted.example"}).status_code == 403
+        assert client.get(f"/api/exercises/sessions/{session['id']}").json()["current_item_sort_order"] == 0
+        moved = client.request(position_method, f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]})
         assert moved.status_code == 200
         assert moved.json() == {"session_item_id": second["id"], "sort_order": second["sort_order"]}
         assert client.get(f"/api/exercises/sessions/{session['id']}").json()["current_item_sort_order"] == second["sort_order"]
-        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": 999999}).status_code == 404
+        assert client.request(position_method, f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": 999999}).status_code == 404
         option_id = first["question"]["options"][0]["id"]
         assert client.patch(f"/api/exercises/sessions/{session['id']}/answers/{first['id']}", json={
             "selected_option_ids": [option_id], "bool_answer": None, "code": "",
@@ -509,13 +514,13 @@ def test_active_session_can_resume_and_abandon_before_starting_another(tmp_path)
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小雨", "pin": "5678"}).status_code == 200
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").status_code == 404
-        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 404
+        assert client.request(position_method, f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 404
         client.post("/api/auth/logout")
         assert client.post("/api/auth/child/login", json={"name": "小宇", "pin": "1234"}).status_code == 200
 
         abandoned = client.post(f"/api/exercises/sessions/{session['id']}/abandon")
         assert abandoned.json()["status"] == "abandoned"
-        assert client.patch(f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 409
+        assert client.request(position_method, f"/api/exercises/sessions/{session['id']}/position", json={"session_item_id": second["id"]}).status_code == 409
         assert client.post(f"/api/exercises/sessions/{session['id']}/abandon").json()["status"] == "abandoned"
         assert client.get("/api/exercises/active-sessions").json() == []
         stored = client.get(f"/api/exercises/sessions/{session['id']}").json()

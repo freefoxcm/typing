@@ -90,6 +90,7 @@ class ErrorItem(BaseModel):
 
 
 class AttemptCreate(BaseModel):
+    request_id: str | None = Field(default=None, min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     prompt_id: int
     duration_ms: int = Field(ge=100, le=86_400_000)
     speed_char_count: int | None = Field(default=None, ge=0, le=5000)
@@ -97,6 +98,7 @@ class AttemptCreate(BaseModel):
 
 
 class WordAttemptCreate(BaseModel):
+    request_id: str | None = Field(default=None, min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     word_id: int = Field(gt=0)
     duration_ms: int = Field(ge=100, le=86_400_000)
     speed_char_count: int | None = Field(default=None, ge=0, le=120)

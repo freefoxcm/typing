@@ -154,7 +154,7 @@ describe('AdminPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '保存新 PIN' }))
     expect(within(dialog).getByRole('button', { name: '正在保存…' })).toBeDisabled()
     expect(within(dialog).getByRole('button', { name: '关闭 PIN 修改窗口' })).toBeDisabled()
-    expect(mockedApi).toHaveBeenCalledWith('/api/admin/children/1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pin: '1234' }) }))
+    expect(mockedApi).toHaveBeenCalledWith('/api/admin/children/1', expect.objectContaining({ method: 'POST', body: JSON.stringify({ pin: '1234' }) }))
     finishPatch({ id: 1, name: '小宇', active: true })
     expect(await screen.findByRole('status')).toHaveTextContent('PIN 已修改')
     expect(screen.queryByRole('dialog', { name: '修改 小宇 的 PIN' })).not.toBeInTheDocument()
@@ -165,7 +165,7 @@ describe('AdminPage', () => {
   it('keeps the PIN modal and entered value available after a failed request', async () => {
     const baseApi = mockedApi.getMockImplementation()!
     mockedApi.mockImplementation(async (...args) => {
-      if (args[0] === '/api/admin/children/1' && args[1]?.method === 'PATCH') throw new Error('无法连接服务器，请检查网络或稍后重试')
+      if (args[0] === '/api/admin/children/1' && args[1]?.method === 'POST') throw new Error('无法连接服务器，请检查网络或稍后重试')
       return baseApi(...args)
     })
     render(<AdminPage />)

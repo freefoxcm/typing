@@ -118,8 +118,9 @@ describe('ExercisePage', () => {
     const inputOption = screen.getByRole('radio', { name: /input/ })
     fireEvent.click(printOption)
     fireEvent.click(inputOption)
-    await waitFor(() => expect(saveRequest).toBe(2))
+    await waitFor(() => expect(saveRequest).toBe(1))
     await act(async () => finishFirst())
+    await waitFor(() => expect(saveRequest).toBe(2))
     expect(screen.getByText('正在保存…')).toBeInTheDocument()
     await act(async () => finishSecond())
     await waitFor(() => expect(screen.getByText('所有答案已保存')).toBeInTheDocument())
@@ -152,6 +153,69 @@ describe('ExercisePage', () => {
     const image = await screen.findByAltText('题目配图')
     expect(image).toHaveAttribute('src', '/api/question-assets/88')
     expect(screen.queryByAltText('完整原题截图')).not.toBeInTheDocument()
+  })
+
+  it('waits for an objective answer before saving position and exiting', async () => {
+    let finishSave = () => {}
+    const pending = new Promise((resolve) => { finishSave = () => resolve({ ok: true }) })
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return activeSession
+      if (path.endsWith('/answers/71')) return pending
+      return { sort_order: 0 }
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('radio', { name: /input/ }))
+    fireEvent.click(screen.getByRole('button', { name: '保存并退出' }))
+    await act(async () => {})
+    expect(mockedApi).not.toHaveBeenCalledWith('/api/exercises/sessions/7/position', expect.anything())
+    expect(screen.queryByText('学生首页')).not.toBeInTheDocument()
+    await act(async () => finishSave())
+    expect(await screen.findByText('学生首页')).toBeInTheDocument()
+  })
+
+  it('keeps a failed objective answer pending and retries it before exit', async () => {
+    let fail = true
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return activeSession
+      if (path.endsWith('/answers/71') && fail) throw new Error('连接中断')
+      return { sort_order: 0 }
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('radio', { name: /input/ }))
+    await screen.findByText('保存失败，请重试')
+    const unload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '保存并退出' }))
+    await act(async () => {})
+    expect(screen.queryByText('学生首页')).not.toBeInTheDocument()
+    expect(mockedApi).not.toHaveBeenCalledWith('/api/exercises/sessions/7/position', expect.anything())
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: '保存并退出' }))
+    expect(await screen.findByText('学生首页')).toBeInTheDocument()
+    const writes = mockedApi.mock.calls.filter(([path]) => path.endsWith('/answers/71'))
+    expect(writes).toHaveLength(3)
+    expect(JSON.parse(writes[2][1]!.body as string).selected_option_ids).toEqual([32])
+  })
+
+  it('preserves an answer edited while the position request is in flight', async () => {
+    const resumed = structuredClone(activeSession)
+    resumed.items.push({ ...structuredClone(resumed.items[0]), id: 72, sort_order: 1 })
+    let finishPosition = () => {}
+    const pending = new Promise((resolve) => { finishPosition = () => resolve({ sort_order: 1 }) })
+    mockedApi.mockImplementation(async (path) => {
+      if (path === '/api/exercises/sessions/7') return resumed
+      if (path.endsWith('/position')) return pending
+      return { ok: true }
+    })
+    renderPage()
+    await screen.findByRole('radio', { name: /input/ })
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }))
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/position', expect.anything()))
+    fireEvent.click(screen.getByRole('radio', { name: /input/ }))
+    await act(async () => finishPosition())
+    await waitFor(() => expect(screen.getByRole('button', { name: '第 2 题' })).toHaveClass('active'))
+    expect(screen.getByRole('button', { name: '第 1 题' })).toHaveClass('answered')
   })
 
   it('renders multiple fill blanks and saves answers by position', async () => {
@@ -287,9 +351,10 @@ describe('ExercisePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '第 2 题' }))
     expect(await screen.findByText('目标位置')).toBeInTheDocument()
     expect(mockedApi).toHaveBeenCalledWith('/api/exercises/sessions/7/position', expect.objectContaining({
-      method: 'PATCH', body: JSON.stringify({ session_item_id: 72 }),
+      method: 'POST', body: JSON.stringify({ session_item_id: 72 }),
     }))
     expect(screen.getByRole('button', { name: '第 2 题' })).toHaveClass('active')
+    expect(screen.queryByText('位置保存失败')).not.toBeInTheDocument()
   })
 
   it('keeps Python indentation on Enter and supports Tab indentation', () => {

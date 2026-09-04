@@ -46,7 +46,8 @@ def create_child(payload: ChildCreate, db: Session = Depends(get_db)):
     return {"id": child.id, "name": child.name, "active": child.active}
 
 
-@router.patch("/children/{child_id}")
+@router.post("/children/{child_id}")
+@router.patch("/children/{child_id}", include_in_schema=False)
 def update_child(child_id: int, payload: ChildUpdate, db: Session = Depends(get_db)):
     child = db.get(ChildProfile, child_id)
     if not child:

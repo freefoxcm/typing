@@ -1,3 +1,4 @@
+import { useRefreshRecovery } from '../components/RefreshRecovery'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   closestCenter, DndContext, DragOverlay, KeyboardSensor, PointerSensor,
@@ -182,6 +183,7 @@ function QuestionSetActionsMenu({ item, recognitionJob, onUploadPdf, onRecognize
 }
 
 export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?: AdminNotifier }) {
+  const { refreshAfterSave, refreshNotice } = useRefreshRecovery()
   const [sets, setSets] = useState<QuestionSetSummary[]>([])
   const [jobs, setJobs] = useState<ImportJob[]>([])
   const [llm, setLlm] = useState<LlmStatus | null>(null)
@@ -243,7 +245,10 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
   }, [notify, recognitionDetail?.id, recognitionDetail?.result, recognitionDetail?.status, recognitionJobs, recognitionPreviewId])
 
   const action = async (work: () => Promise<unknown>, success: string) => {
-    try { await work(); await reload(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    try { await work() } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    notify('success', success)
+    await refreshAfterSave(reload)
+    return true
   }
 
   const createSet = (event: React.FormEvent) => {
@@ -259,7 +264,7 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
     try {
       const body = new FormData(); body.append('file', file)
       await api('/api/admin/question-imports', { method: 'POST', body })
-      await reload(); notify('success', 'PDF 已进入识别队列')
+      await refreshAfterSave(reload); notify('success', 'PDF 已进入识别队列')
     } catch (e) { notify('error', e instanceof Error ? e.message : '上传失败') } finally { setUploading(false) }
   }
 
@@ -305,11 +310,19 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
     const path = question.id ? `/api/admin/questions/${question.id}` : `/api/admin/question-sets/${editor.setId}/questions`
     try {
       let saved = await api<ExerciseQuestion>(path, { method: question.id ? 'PUT' : 'POST', ...jsonBody(question) })
-      if (review) saved = await api<ExerciseQuestion>(`/api/admin/questions/${saved.id}/review`, { method: 'PATCH', ...jsonBody({ reviewed: true }) })
+      setEditor((current) => current ? { ...current, question: cloneQuestion(saved) } : current)
+      if (review) {
+        try { saved = await api<ExerciseQuestion>(`/api/admin/questions/${saved.id}/review`, { method: 'POST', ...jsonBody({ reviewed: true }) }) }
+        catch (e) {
+          notify('error', `草稿已保存，但复核失败：${e instanceof Error ? e.message : '请重试'}`)
+          await refreshAfterSave(reload)
+          return
+        }
+      }
       const currentIndex = editor.queueIds.indexOf(saved.id)
       const nextId = advance && currentIndex >= 0 ? editor.queueIds[currentIndex + 1] : undefined
       const next = nextId == null ? undefined : sets.find((item) => item.id === editor.setId)?.questions?.find((item) => item.id === nextId)
-      await reload()
+      await refreshAfterSave(reload)
       if (advance) {
         if (next) setEditor((current) => current ? { ...current, question: cloneQuestion(next) } : current)
         else setEditor(null)
@@ -335,7 +348,7 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
     const body = new FormData(); body.append('file', file)
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/source-image`, { method: 'PUT', body })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); notify('success', '原题图片已替换，题目已恢复为待复核')
+    await refreshAfterSave(reload); notify('success', '原题图片已替换，题目已恢复为待复核')
     return updated
   }
 
@@ -343,14 +356,14 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
     const body = new FormData(); body.append('file', file)
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/stem-image`, { method: 'PUT', body })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); notify('success', '题干配图已更新，题目已恢复为待复核')
+    await refreshAfterSave(reload); notify('success', '题干配图已更新，题目已恢复为待复核')
     return updated
   }
 
   const removeStemImage = async (questionId: number) => {
     const updated = await api<ExerciseQuestion>(`/api/admin/questions/${questionId}/stem-image`, { method: 'DELETE' })
     setEditor((current) => current ? { ...current, question: cloneQuestion(updated) } : current)
-    await reload(); notify('success', '题干配图已移除，题目已恢复为待复核')
+    await refreshAfterSave(reload); notify('success', '题干配图已移除，题目已恢复为待复核')
     return updated
   }
 
@@ -360,7 +373,7 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
       const job = await api<RecognitionJob>(path, { method: 'POST' })
       setRecognitionPreviewId(job.id)
       setRecognitionDetail(job)
-      await reload()
+      await refreshAfterSave(reload)
       notify('success', job.scope === 'set' ? '整套题目已进入重新识别队列' : '当前题目已进入重新识别队列')
     } catch (e) { notify('error', e instanceof Error ? e.message : '创建重新识别任务失败') }
   }
@@ -458,6 +471,7 @@ export function QuestionLibraryPanel({ notify = ignoreNotification }: { notify?:
   return <>
     <header className="section-title"><div><p className="eyebrow">习题题库</p><h2>题套、识别与自动判题</h2><p>PDF 识别结果先进入草稿，逐题复核后再发布给学生。</p></div></header>
     {loadError && <p className="notice error" role="alert">{loadError}</p>}
+    {refreshNotice}
     <section className={`card pdf-import-card library-disclosure-card${importPanelOpen ? ' expanded' : ' collapsed'}`}>
       <header className="pdf-import-heading"><button type="button" className="course-disclosure pdf-import-disclosure" aria-expanded={importPanelOpen} aria-label={`${importPanelOpen ? '收起' : '展开'} PDF 智能识别`} onClick={() => setImportPanelOpen((current) => !current)}><ChevronDown className="disclosure-chevron" /><div><h3>PDF 智能识别</h3><p>{llm?.configured ? `已配置 ${llm.model} · ${llm.base_url} · 每批 ${llm.batch_pages} 页 · 思考级别：${llm.reasoning_effort || '模型默认'}` : '尚未配置 IMPORT_LLM 模型，PDF 导入不可用。'}</p></div></button>
       {importPanelOpen && <label className={`file-picker${!llm?.configured ? ' disabled' : ''}`}><FileUp />{uploading ? '正在上传…' : '上传 PDF'}<input type="file" accept="application/pdf,.pdf" disabled={!llm?.configured || uploading} onChange={(e) => void uploadPdf(e.target.files?.[0])} /></label>}
