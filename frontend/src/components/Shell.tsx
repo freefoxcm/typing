@@ -4,14 +4,16 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import type { Me } from '../types'
 import { SiteFooter } from './SiteFooter'
+import { useConfirmLeave } from './UnsavedChanges'
 
 export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   const navigate = useNavigate()
+  const { confirmLeave, resumeProtection } = useConfirmLeave()
   const [logoutError, setLogoutError] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
   const loggingOutRef = useRef(false)
   const logout = async () => {
-    if (loggingOutRef.current) return
+    if (loggingOutRef.current || !confirmLeave()) return
     loggingOutRef.current = true; setLoggingOut(true); setLogoutError('')
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 15000)
@@ -20,6 +22,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
       navigate('/login')
       window.location.reload()
     } catch (error) {
+      resumeProtection()
       setLogoutError(`未能确认退出登录：${controller.signal.aborted ? '请求超时' : error instanceof Error ? error.message : '网络异常'}。请重试。`)
     } finally {
       window.clearTimeout(timeout)

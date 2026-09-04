@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeft, BookOpen, Code2, Download, FileQuestion, Keyb
 import { api, jsonBody } from '../api'
 import type { AdminNotifier } from '../components/AdminToast'
 import { MarkdownText } from '../components/MarkdownText'
+import { useRefreshRecovery } from '../components/RefreshRecovery'
 import { errorLabel } from '../typing'
 import type { Child, ExerciseAdminReport, LearningAnalysis, LearningAnalysisIssue, LearningAnalysisProgrammingFailure, LearningAnalysisQuestionIssue, LearningAnalysisTypingIssue, LearningAnalysisWordIssue, Report, ReportOverview, ReportOverviewRow } from '../types'
 
@@ -45,6 +46,8 @@ export function AdminReportsPanel({ children, notify = ignoreNotification }: { c
   const [resetting, setResetting] = useState(false)
   const resetTriggerRef = useRef<HTMLButtonElement>(null)
   const resetInputRef = useRef<HTMLInputElement>(null)
+  const resettingRef = useRef(false)
+  const { refreshAfterSave, refreshNotice } = useRefreshRecovery()
 
   const loadOverview = useCallback(async () => {
     setLoading(true); setError('')
@@ -105,30 +108,34 @@ export function AdminReportsPanel({ children, notify = ignoreNotification }: { c
     setResetOpen(false); setResetName(''); setResetError('')
   }, [childId])
   const resetLearningData = async () => {
-    if (!selected || resetName.trim() !== selected.child_name) return
+    if (resettingRef.current || !selected || resetName.trim() !== selected.child_name) return
+    resettingRef.current = true
     setResetting(true); setResetError('')
     try {
       await api(`/api/admin/children/${selected.child_id}/reset-learning-data`, { method: 'POST', ...jsonBody({ confirm_name: resetName.trim() }) })
-      const [overviewData, detailData] = await Promise.all([
-        api<ReportOverview>(`/api/admin/reports/overview?days=${days}`),
-        detailTab === 'exercise'
-          ? api<ExerciseAdminReport>(`/api/admin/exercise-reports/summary?days=${days}&child_id=${selected.child_id}`)
-          : api<Report>(`/api/admin/reports/summary?days=${days}&mode=${detailTab}&child_id=${selected.child_id}`),
-      ])
-      setOverview(overviewData)
-      if (detailTab === 'exercise') setExerciseReport(detailData as ExerciseAdminReport)
-      else setReport(detailData as Report)
       setResetOpen(false); setResetName('')
       notify('success', `${selected.child_name} 的学习数据已重置`)
       window.setTimeout(() => resetTriggerRef.current?.focus())
+      await refreshAfterSave(async () => {
+        const [overviewData, detailData] = await Promise.all([
+          api<ReportOverview>(`/api/admin/reports/overview?days=${days}`),
+          detailTab === 'exercise'
+            ? api<ExerciseAdminReport>(`/api/admin/exercise-reports/summary?days=${days}&child_id=${selected.child_id}`)
+            : api<Report>(`/api/admin/reports/summary?days=${days}&mode=${detailTab}&child_id=${selected.child_id}`),
+        ])
+        setOverview(overviewData)
+        if (detailTab === 'exercise') setExerciseReport(detailData as ExerciseAdminReport)
+        else setReport(detailData as Report)
+      })
     } catch (e) { setResetError(e instanceof Error ? e.message : '学习数据重置失败') }
-    finally { setResetting(false) }
+    finally { resettingRef.current = false; setResetting(false) }
   }
 
   return <>
     <header className="section-title"><div><p className="eyebrow">学习报告</p><h2>{view === 'global' ? '全局学情分析' : selected ? `${selected.child_name} 的学习详情` : '每位学生的学习进展'}</h2><p>{view === 'global' ? '从全体学生的共性薄弱点中提炼本周期教学重点。' : selected ? '分别查看打字、单词与习题表现。' : '先总览所有学生，再进入个人详情。'}</p></div><div className="report-header-actions">{view === 'students' && selected && <button ref={resetTriggerRef} className="danger-button report-reset-trigger" onClick={openReset}><Trash2 />重置学习数据</button>}<a className="ghost link-button" href={view === 'global' ? `/api/admin/learning-analysis/export.csv?days=${days}&section=${analysisTab}` : `/api/admin/reports/export.csv?${exportQuery}`}><Download />导出当前视图</a></div></header>
     <div className="report-view-tabs" role="tablist" aria-label="学情视图"><button role="tab" aria-selected={view === 'global'} onClick={() => setView('global')}><Users />全局学情</button><button role="tab" aria-selected={view === 'students'} onClick={() => setView('students')}><BookOpen />学生分析</button></div>
     {error && <p className="notice error">{error}</p>}
+    {refreshNotice}
     <div className="report-filters card">
       {view === 'students' && childId && <button className="ghost report-back" onClick={() => setChildId('')}><ArrowLeft />学生总览</button>}
       {view === 'students' && childId && <label>学生<select value={childId} onChange={(e) => setChildId(e.target.value)}>{children.map((child) => <option value={child.id} key={child.id}>{child.name}</option>)}</select></label>}

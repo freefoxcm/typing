@@ -6,6 +6,7 @@ import { calculateStats, errorsToList, keyToCharacter, shuffleBag } from '../typ
 import type { AttemptResult } from '../types'
 import { FingerGuide } from './FingerGuide'
 import { VirtualKeyboard } from './VirtualKeyboard'
+import { useUnsavedChanges } from './UnsavedChanges'
 
 export type PracticeRunnerItem = { id: number; content: string }
 type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'save_error' | 'transitioning' | 'complete'
@@ -53,6 +54,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const savingRef = useRef(false)
   const saveControllerRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
+  const confirmBack = useUnsavedChanges(() => pendingBodyRef.current !== null)
   const current = bag[bagIndex]
   const totalErrors = useMemo(() => [...errors.values()].reduce((sum, count) => sum + count, 0), [errors])
   const liveSpeedChars = Math.max(0, charIndex - (firstKeyCorrectRef.current ? 1 : 0))
@@ -61,16 +63,10 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   useEffect(() => {
     mountedRef.current = true
     setTimeout(() => surfaceRef.current?.focus(), 0)
-    const warn = (event: BeforeUnloadEvent) => {
-      if (!pendingBodyRef.current) return
-      event.preventDefault(); event.returnValue = ''
-    }
-    window.addEventListener('beforeunload', warn)
     return () => {
       mountedRef.current = false
       saveControllerRef.current?.abort()
       if (nextTimerRef.current) window.clearTimeout(nextTimerRef.current)
-      window.removeEventListener('beforeunload', warn)
     }
   }, [])
 
@@ -197,7 +193,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   return <div className="practice-page">
     <header className="practice-header">
       <Link to="/" className="back-link" onClick={(event) => {
-        if (pendingBodyRef.current && !window.confirm('本次成绩尚未确认保存，离开将丢失重试机会。确认离开？')) event.preventDefault()
+        if (!confirmBack()) event.preventDefault()
       }}><ArrowLeft /> {backLabel}</Link>
       <div><span>{contextLabel}</span><strong>{title}</strong></div>
       <div className="practice-actions">
