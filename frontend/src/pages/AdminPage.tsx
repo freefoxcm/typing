@@ -20,6 +20,7 @@ import { AdminToastViewport, type AdminNotifier, useAdminToasts } from '../compo
 import { AdminReportsPanel } from './AdminReportsPanel'
 import { WordLibraryPanel } from './WordLibraryPanel'
 import { QuestionLibraryPanel } from './QuestionLibraryPanel'
+import { useRefreshRecovery } from '../components/RefreshRecovery'
 
 type Tab = 'children' | 'library' | 'words' | 'questions' | 'import' | 'reports'
 type TransferTab = 'typing' | 'words' | 'questions'
@@ -31,6 +32,7 @@ export function AdminPage() {
 }
 
 function AdminPageContent({ notify }: { notify: AdminNotifier }) {
+  const { refreshAfterSave, refreshNotice } = useRefreshRecovery()
   const [tab, setTab] = useState<Tab>('children')
   const [children, setChildren] = useState<Child[]>([])
   const [courses, setCourses] = useState<Course[]>([])
@@ -41,7 +43,10 @@ function AdminPageContent({ notify }: { notify: AdminNotifier }) {
   useEffect(() => { Promise.all([loadChildren(), loadLibrary()]).catch((e) => setLoadError(e.message)) }, [loadChildren, loadLibrary])
 
   const action = async (work: () => Promise<unknown>, success: string, reload: () => Promise<unknown> = async () => {}) => {
-    try { await work(); await reload(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    try { await work() } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    notify('success', success)
+    await refreshAfterSave(reload)
+    return true
   }
 
   return (
@@ -59,6 +64,7 @@ function AdminPageContent({ notify }: { notify: AdminNotifier }) {
       </aside>
       <section className="admin-content">
         {loadError && <p className="notice error" role="alert">{loadError}</p>}
+        {refreshNotice}
         {tab === 'children' && <ChildrenPanel children={children} action={action} reload={loadChildren} />}
         {tab === 'library' && <LibraryPanel courses={courses} action={action} reload={loadLibrary} />}
         {tab === 'words' && <WordLibraryPanel notify={notify} />}
@@ -77,7 +83,17 @@ function ChildrenPanel({ children, action, reload }: { children: Child[]; action
   const [pinVisible, setPinVisible] = useState(false)
   const [pinSaving, setPinSaving] = useState(false)
   const pinTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const submit = (e: React.FormEvent) => { e.preventDefault(); void action(() => api('/api/admin/children', { method: 'POST', ...jsonBody({ name, pin, active: true }) }), '学生档案已创建', reload); setName(''); setPin('') }
+  const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (creatingRef.current) return
+    creatingRef.current = true; setCreating(true)
+    try {
+      const saved = await action(() => api('/api/admin/children', { method: 'POST', ...jsonBody({ name, pin, active: true }) }), '学生档案已创建', reload)
+      if (saved) { setName(''); setPin('') }
+    } finally { creatingRef.current = false; setCreating(false) }
+  }
   const closePinEditor = () => {
     if (pinSaving) return
     setPinEditor(null); setNextPin(''); setPinVisible(false)
@@ -87,7 +103,7 @@ function ChildrenPanel({ children, action, reload }: { children: Child[]; action
     event.preventDefault()
     if (!pinEditor || pinSaving || !/^\d{4,6}$/.test(nextPin)) return
     setPinSaving(true)
-    const saved = await action(() => api(`/api/admin/children/${pinEditor.id}`, { method: 'PATCH', ...jsonBody({ pin: nextPin }) }), 'PIN 已修改', reload)
+    const saved = await action(() => api(`/api/admin/children/${pinEditor.id}`, { method: 'POST', ...jsonBody({ pin: nextPin }) }), 'PIN 已修改', reload)
     setPinSaving(false)
     if (saved) {
       setPinEditor(null); setNextPin(''); setPinVisible(false)
@@ -95,8 +111,8 @@ function ChildrenPanel({ children, action, reload }: { children: Child[]; action
     }
   }
   return <><header className="section-title"><div><p className="eyebrow">学生档案</p><h2>谁在练习？</h2><p>每个学生都有独立的 PIN 和学习记录。</p></div></header>
-    <form className="inline-form card" onSubmit={submit}><label>昵称<input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：小宇" required /></label><label>PIN<input value={pin} inputMode="numeric" pattern="\d{4,6}" onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="4–6 位数字" required /></label><button className="primary"><Plus />添加学生</button></form>
-    <div className="data-list">{children.map((child) => <article className="data-row" key={child.id}><div className="avatar">{child.name.slice(0, 1)}</div><div className="grow"><h3>{child.name}</h3><p>{child.attempts ?? 0} 条练习记录 · {child.active ? '可以登录' : '已停用'}</p></div><button className="ghost" onClick={(event) => { pinTriggerRef.current = event.currentTarget; setNextPin(''); setPinVisible(false); setPinEditor(child) }}><RefreshCcw />修改 PIN</button><button className="ghost" onClick={() => void action(() => api(`/api/admin/children/${child.id}`, { method: 'PATCH', ...jsonBody({ active: !child.active }) }), child.active ? '档案已停用' : '档案已启用', reload)}>{child.active ? '停用' : '启用'}</button><button className="danger-button" onClick={() => window.confirm(`删除 ${child.name} 及全部成绩？此操作不可恢复。`) && void action(() => api(`/api/admin/children/${child.id}`, { method: 'DELETE' }), '档案已删除', reload)}><Trash2 /></button></article>)}</div>
+    <form className="inline-form card" onSubmit={submit}><label>昵称<input disabled={creating} value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：小宇" required /></label><label>PIN<input disabled={creating} value={pin} inputMode="numeric" pattern="\d{4,6}" onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="4–6 位数字" required /></label><button className="primary" disabled={creating}><Plus />添加学生</button></form>
+    <div className="data-list">{children.map((child) => <article className="data-row" key={child.id}><div className="avatar">{child.name.slice(0, 1)}</div><div className="grow"><h3>{child.name}</h3><p>{child.attempts ?? 0} 条练习记录 · {child.active ? '可以登录' : '已停用'}</p></div><button className="ghost" onClick={(event) => { pinTriggerRef.current = event.currentTarget; setNextPin(''); setPinVisible(false); setPinEditor(child) }}><RefreshCcw />修改 PIN</button><button className="ghost" onClick={() => void action(() => api(`/api/admin/children/${child.id}`, { method: 'POST', ...jsonBody({ active: !child.active }) }), child.active ? '档案已停用' : '档案已启用', reload)}>{child.active ? '停用' : '启用'}</button><button className="danger-button" onClick={() => window.confirm(`删除 ${child.name} 及全部成绩？此操作不可恢复。`) && void action(() => api(`/api/admin/children/${child.id}`, { method: 'DELETE' }), '档案已删除', reload)}><Trash2 /></button></article>)}</div>
     {pinEditor && <PinEditorModal child={pinEditor} pin={nextPin} visible={pinVisible} saving={pinSaving} onPinChange={setNextPin} onToggleVisibility={() => setPinVisible((current) => !current)} onClose={closePinEditor} onSubmit={savePin} />}
   </>
 }
@@ -187,7 +203,17 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
     if (next.has(lessonId)) next.delete(lessonId); else next.add(lessonId)
     return next
   })
-  const createCourse = (e: React.FormEvent) => { e.preventDefault(); void action(() => api('/api/admin/courses', { method: 'POST', ...jsonBody({ title, description, sort_order: courses.length, active: true }) }), '课程已创建', reload); setTitle(''); setDescription('') }
+  const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
+  const createCourse = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (creatingRef.current) return
+    creatingRef.current = true; setCreating(true)
+    try {
+      const saved = await action(() => api('/api/admin/courses', { method: 'POST', ...jsonBody({ title, description, sort_order: courses.length, active: true }) }), '课程已创建', reload)
+      if (saved) { setTitle(''); setDescription('') }
+    } finally { creatingRef.current = false; setCreating(false) }
+  }
   const createLesson = (course: Course) => { const value = window.prompt('新关卡名称'); if (value) void action(() => api('/api/admin/lessons', { method: 'POST', ...jsonBody({ course_id: course.id, title: value, description: '', sort_order: course.lessons.length, active: true }) }), '关卡已创建', reload) }
   const createPrompt = (lesson: Lesson) => { const value = window.prompt('输入练习内容（支持英文、代码和换行）'); if (value) void action(() => api('/api/admin/prompts', { method: 'POST', ...jsonBody({ lesson_id: lesson.id, content: value, sort_order: lesson.prompts?.length ?? 0, active: true }) }), '练习内容已添加', reload) }
   const finishReorder = async ({ active, over }: DragEndEvent) => {
@@ -210,7 +236,7 @@ function LibraryPanel({ courses, action, reload }: { courses: Course[]; action: 
     setReordering(false)
   }
   return <><header className="section-title"><div><p className="eyebrow">打字词库</p><h2>设计练习路径</h2><p>按课程、关卡、练习条目组织内容。</p></div></header>
-    <form className="inline-form card" onSubmit={createCourse}><label>课程名称<input value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary"><Plus />新建课程</button></form>
+    <form className="inline-form card" onSubmit={createCourse}><label>课程名称<input disabled={creating} value={title} onChange={(e) => setTitle(e.target.value)} required /></label><label className="grow">说明<input disabled={creating} value={description} onChange={(e) => setDescription(e.target.value)} /></label><button className="primary" disabled={creating}><Plus />新建课程</button></form>
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
@@ -338,8 +364,7 @@ function ImportPanel({ courses, reload, action }: { courses: Course[]; reload: (
       form.append('file', bundleFile)
       form.append('decisions', JSON.stringify(decisions))
       imported = await api<QuestionBundleImportResult>('/api/admin/question-set-bundles/import', { method: 'POST', body: form })
-      await loadQuestionSets()
-    }, '题套迁移包已导入').then((ok) => {
+    }, '题套迁移包已导入', loadQuestionSets).then((ok) => {
       if (ok && imported) {
         setBundleImportResult(imported)
         setBundleFile(null); setBundlePreview(null); setBundleActions({})

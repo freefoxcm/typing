@@ -366,7 +366,8 @@ def save_answer(session_id: int, item_id: int, payload: AnswerWrite, principal: 
     return {"ok": True, "status": status}
 
 
-@router.patch("/sessions/{session_id}/position")
+@router.post("/sessions/{session_id}/position")
+@router.patch("/sessions/{session_id}/position", include_in_schema=False)
 def save_session_position(session_id: int, payload: SessionPositionWrite, principal: Principal = Depends(require_child), db: Session = Depends(get_db)):
     session = _owned_session(db, session_id, principal.actor_id)
     if session.status != "in_progress":

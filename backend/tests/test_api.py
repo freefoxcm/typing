@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -132,7 +133,8 @@ def test_cpm_uses_half_up_rounding():
     assert calculate_cpm(1, 960) == 63
 
 
-def test_child_login_uses_name_without_exposing_roster(tmp_path):
+@pytest.mark.parametrize('update_method', ['POST', 'PATCH'])
+def test_child_login_uses_name_without_exposing_roster(tmp_path, update_method):
     with make_client(tmp_path) as client:
         assert client.get('/api/auth/children').status_code == 404
         admin_login(client)
@@ -152,11 +154,29 @@ def test_child_login_uses_name_without_exposing_roster(tmp_path):
         assert wrong_pin.json() == missing.json() == {'detail': '姓名或 PIN 不正确'}
 
         admin_login(client)
-        assert client.patch(f'/api/admin/children/{child_id}', json={'active': False}).status_code == 200
+        assert client.request(update_method, f'/api/admin/children/{child_id}', json={'active': False}).status_code == 200
         client.post('/api/auth/logout')
         inactive = client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'})
         assert inactive.status_code == 401
         assert inactive.json() == {'detail': '姓名或 PIN 不正确'}
+
+        admin_login(client)
+        assert client.request(update_method, f'/api/admin/children/{child_id}', json={'active': True, 'pin': '5678'}).status_code == 200
+        client.post('/api/auth/logout')
+        assert client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'}).status_code == 401
+        assert client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '5678'}).status_code == 200
+
+
+@pytest.mark.parametrize('path', ['/api/admin/children/0', '/api/admin/questions/0/review'])
+def test_admin_post_compatibility_keeps_role_and_origin_checks(tmp_path, path):
+    with make_client(tmp_path) as client:
+        assert client.post(path, json={}).status_code == 401
+        admin_login(client)
+        assert client.post(path, json={}, headers={'Origin': 'https://untrusted.example'}).status_code == 403
+        client.post('/api/admin/children', json={'name': '小宇', 'pin': '1234', 'active': True})
+        client.post('/api/auth/logout')
+        assert client.post('/api/auth/child/login', json={'name': '小宇', 'pin': '1234'}).status_code == 200
+        assert client.post(path, json={}).status_code == 403
 
 
 def test_import_is_transactional_and_visible(tmp_path):

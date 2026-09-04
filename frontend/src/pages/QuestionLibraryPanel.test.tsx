@@ -477,6 +477,7 @@ describe('QuestionLibraryPanel', () => {
     await waitFor(() => expect(screen.queryByRole('form', { name: '题目编辑器' })).not.toBeInTheDocument())
     expect(notify).toHaveBeenCalledWith('success', '当前过滤队列已复核完成')
     expect(mockedApi.mock.calls.filter(([path]) => /\/review$/.test(path))).toHaveLength(2)
+    expect(mockedApi.mock.calls.filter(([path]) => /\/review$/.test(path)).every(([, options]) => options?.method === 'POST')).toBe(true)
   })
 
   it('reorders sets and questions and saves complete id lists', async () => {

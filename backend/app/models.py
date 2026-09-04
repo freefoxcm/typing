@@ -114,6 +114,7 @@ class PracticeAttempt(Base):
     __table_args__ = (
         Index("ix_attempt_child_created", "child_id", "created_at"),
         Index("ix_attempt_lesson_created", "lesson_id", "created_at"),
+        Index("uq_attempt_child_request", "child_id", "request_id", unique=True),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     child_id: Mapped[int] = mapped_column(ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True)
@@ -123,6 +124,8 @@ class PracticeAttempt(Base):
     word_set_id: Mapped[Optional[int]] = mapped_column(ForeignKey("word_sets.id", ondelete="SET NULL"), nullable=True, index=True)
     word_id: Mapped[Optional[int]] = mapped_column(ForeignKey("words.id", ondelete="SET NULL"), nullable=True, index=True)
     prompt_snapshot: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer)
     char_count: Mapped[int] = mapped_column(Integer)
     speed_char_count: Mapped[int] = mapped_column(Integer)

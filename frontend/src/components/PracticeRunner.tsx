@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Eye, EyeOff, Pause, Play, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, jsonBody } from '../api'
+import { api } from '../api'
 import { calculateStats, errorsToList, keyToCharacter, shuffleBag } from '../typing'
 import type { AttemptResult } from '../types'
 import { FingerGuide } from './FingerGuide'
 import { VirtualKeyboard } from './VirtualKeyboard'
 
 export type PracticeRunnerItem = { id: number; content: string }
-type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'transitioning' | 'complete'
+type RunState = 'ready' | 'running' | 'paused' | 'saving' | 'save_error' | 'transitioning' | 'complete'
 const ITEM_TRANSITION_DELAY_MS = 500
 const ROUND_TRANSITION_DELAY_MS = 5000
 
@@ -49,14 +49,29 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const roundSpeedCharsRef = useRef(0)
   const roundErrorsRef = useRef(0)
   const roundDurationRef = useRef(0)
+  const pendingBodyRef = useRef<string | null>(null)
+  const savingRef = useRef(false)
+  const saveControllerRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
   const current = bag[bagIndex]
   const totalErrors = useMemo(() => [...errors.values()].reduce((sum, count) => sum + count, 0), [errors])
   const liveSpeedChars = Math.max(0, charIndex - (firstKeyCorrectRef.current ? 1 : 0))
   const liveStats = calculateStats(charIndex, totalErrors, elapsed, liveSpeedChars)
 
   useEffect(() => {
+    mountedRef.current = true
     setTimeout(() => surfaceRef.current?.focus(), 0)
-    return () => { if (nextTimerRef.current) window.clearTimeout(nextTimerRef.current) }
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!pendingBodyRef.current) return
+      event.preventDefault(); event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => {
+      mountedRef.current = false
+      saveControllerRef.current?.abort()
+      if (nextTimerRef.current) window.clearTimeout(nextTimerRef.current)
+      window.removeEventListener('beforeunload', warn)
+    }
   }, [])
 
   useEffect(() => {
@@ -66,6 +81,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   }, [runState])
 
   const resetPrompt = useCallback(() => {
+    if (pendingBodyRef.current || savingRef.current) return
     if (nextTimerRef.current) window.clearTimeout(nextTimerRef.current)
     setCharIndex(0); setErrors(new Map()); setElapsed(0); setResult(null); setMessage(''); setRunState('ready')
     startRef.current = null; pauseRef.current = null; pausedTotalRef.current = 0; firstKeyCorrectRef.current = null
@@ -85,14 +101,23 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   }, [bag.length, bagIndex, current, items, resetPrompt])
 
   const finish = useCallback(async (duration: number, currentErrors: Map<string, number>) => {
-    if (!current) return
-    setRunState('saving')
-    try {
+    if (!current || savingRef.current) return
+    if (!pendingBodyRef.current) {
+      const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')
       const speedCharCount = Math.max(0, current.content.length - (firstKeyCorrectRef.current ? 1 : 0))
+      pendingBodyRef.current = JSON.stringify({ request_id: requestId, [saveIdKey]: current.id, duration_ms: Math.max(100, Math.round(duration)), speed_char_count: speedCharCount, errors: errorsToList(currentErrors) })
+    }
+    savingRef.current = true
+    setRunState('saving'); setMessage('')
+    const controller = new AbortController()
+    saveControllerRef.current = controller
+    const timeout = window.setTimeout(() => controller.abort(), 15000)
+    try {
       const saved = await api<AttemptResult>(savePath, {
-        method: 'POST',
-        ...jsonBody({ [saveIdKey]: current.id, duration_ms: Math.max(100, Math.round(duration)), speed_char_count: speedCharCount, errors: errorsToList(currentErrors) }),
+        method: 'POST', signal: controller.signal, body: pendingBodyRef.current,
       })
+      if (!mountedRef.current) return
+      pendingBodyRef.current = null
       const nextChars = roundCharsRef.current + current.content.length
       const nextSpeedChars = roundSpeedCharsRef.current + saved.speed_char_count
       const nextErrors = roundErrorsRef.current + saved.errors
@@ -107,7 +132,13 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
         nextTimerRef.current = window.setTimeout(advancePrompt, ITEM_TRANSITION_DELAY_MS)
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '成绩保存失败'); setRunState('complete')
+      if (!mountedRef.current) return
+      setMessage(controller.signal.aborted ? '保存超时，本次成绩仍保留在当前页面，请重试保存' : `${error instanceof Error ? error.message : '成绩保存失败'}。本次成绩仍保留在当前页面，请重试保存`)
+      setRunState('save_error')
+    } finally {
+      window.clearTimeout(timeout)
+      savingRef.current = false
+      saveControllerRef.current = null
     }
   }, [advancePrompt, bag.length, bagIndex, current, saveIdKey, savePath])
 
@@ -123,7 +154,7 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const onKeyDown = (event: KeyboardEvent) => {
     if (!current) return
     if (event.key === 'Escape') { event.preventDefault(); togglePause(); return }
-    if (runState === 'paused' || runState === 'saving' || runState === 'transitioning' || runState === 'complete') return
+    if (runState === 'paused' || runState === 'saving' || runState === 'save_error' || runState === 'transitioning' || runState === 'complete') return
     const expected = current.content[charIndex]
     const actual = keyToCharacter(event, expected)
     if (actual === null) return
@@ -165,12 +196,14 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
   const showHints = hints && runState !== 'complete'
   return <div className="practice-page">
     <header className="practice-header">
-      <Link to="/" className="back-link"><ArrowLeft /> {backLabel}</Link>
+      <Link to="/" className="back-link" onClick={(event) => {
+        if (pendingBodyRef.current && !window.confirm('本次成绩尚未确认保存，离开将丢失重试机会。确认离开？')) event.preventDefault()
+      }}><ArrowLeft /> {backLabel}</Link>
       <div><span>{contextLabel}</span><strong>{title}</strong></div>
       <div className="practice-actions">
         <button onClick={() => setHints((value) => !value)} className="ghost">{hints ? <EyeOff /> : <Eye />} {hints ? '隐藏提示' : '显示提示'}</button>
-        <button onClick={togglePause} className="ghost" disabled={runState === 'ready' || runState === 'complete' || runState === 'saving' || runState === 'transitioning'}>{runState === 'paused' ? <Play /> : <Pause />} {runState === 'paused' ? '继续' : '暂停'}</button>
-        <button onClick={resetPrompt} className="ghost"><RotateCcw /> 重练</button>
+        <button onClick={togglePause} className="ghost" disabled={runState === 'ready' || runState === 'complete' || runState === 'saving' || runState === 'save_error' || runState === 'transitioning'}>{runState === 'paused' ? <Play /> : <Pause />} {runState === 'paused' ? '继续' : '暂停'}</button>
+        <button onClick={resetPrompt} className="ghost" disabled={runState === 'saving' || runState === 'save_error'}><RotateCcw /> 重练</button>
       </div>
     </header>
     <div className={`practice-stage ${showHints ? 'with-finger-guide' : ''}`}>
@@ -195,7 +228,11 @@ export function PracticeRunner<T extends PracticeRunnerItem>({
       </div>
       {showHints && <FingerGuide expected={expected} />}
     </div>
-    {message && <p className="notice error">{message}</p>}
+    {message && <p className="notice error" role="alert">{message}</p>}
+    {runState === 'save_error' && <div className="button-row"><button className="primary" onClick={() => void finish(elapsed, errors)}>重试保存成绩</button><button className="ghost" onClick={() => {
+      if (!window.confirm('本次成绩尚未确认保存，放弃后不能再重试保存。确认重练？')) return
+      pendingBodyRef.current = null; resetPrompt()
+    }}>放弃本次成绩并重练</button></div>}
     <div className="bag-progress"><span>本轮进度 {bagIndex + 1} / {bag.length}</span><div><i style={{ width: `${((bagIndex + 1) / bag.length) * 100}%` }} /></div></div>
     <VirtualKeyboard expected={expected} visible={showHints} />
     <p className="keyboard-tip">提示：按 Esc 可暂停。错误按键不会前进，找到正确键后继续。</p>

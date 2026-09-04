@@ -40,3 +40,5 @@ def test_cpm_migration_versions_and_backfills_existing_attempts(tmp_path, monkey
     assert columns["speed_char_count"] == 1
     assert columns["metric_version"] == 1
     assert columns["cpm"] == 0
+    assert columns["request_id"] == 0
+    assert columns["request_fingerprint"] == 0

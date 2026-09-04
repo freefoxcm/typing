@@ -714,7 +714,8 @@ def update_question(question_id: int, payload: QuestionWrite, _principal: Princi
     return question_dict(db.get(Question, question_id))
 
 
-@router.patch("/api/admin/questions/{question_id}/review")
+@router.post("/api/admin/questions/{question_id}/review")
+@router.patch("/api/admin/questions/{question_id}/review", include_in_schema=False)
 def review_question(question_id: int, payload: ReviewWrite, _principal: Principal = Depends(require_admin), db: Session = Depends(get_db)):
     item = db.get(Question, question_id)
     if not item:

@@ -1,3 +1,4 @@
+import { useRefreshRecovery } from '../components/RefreshRecovery'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   closestCenter,
@@ -124,6 +125,7 @@ function SortableWordSetCard({ item, expanded, disabled, children }: { item: Wor
 }
 
 export function WordLibraryPanel({ notify = ignoreNotification }: { notify?: AdminNotifier }) {
+  const { refreshAfterSave, refreshNotice } = useRefreshRecovery()
   const [sets, setSets] = useState<WordSetSummary[]>([])
   const [llm, setLlm] = useState<LlmStatus | null>(null)
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set())
@@ -157,7 +159,10 @@ export function WordLibraryPanel({ notify = ignoreNotification }: { notify?: Adm
 
   const action = async (work: () => Promise<unknown>, success: string) => {
     setError('')
-    try { await work(); await load(); notify('success', success); return true } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    try { await work() } catch (e) { notify('error', e instanceof Error ? e.message : '操作失败'); return false }
+    notify('success', success)
+    await refreshAfterSave(load)
+    return true
   }
   const createSet = (event: React.FormEvent) => {
     event.preventDefault()
@@ -219,6 +224,7 @@ export function WordLibraryPanel({ notify = ignoreNotification }: { notify?: Adm
   }
 
   return <>
+    {refreshNotice}
     {error && <p className="notice error" role="alert">{error}</p>}
     <header className="section-title"><div><p className="eyebrow">单词词库</p><h2>管理记忆词表</h2><p>完整词条可立即练习，缺失资料会自动排队补全。</p></div></header>
     <div className={`llm-status card ${llm?.configured ? 'configured' : 'not-configured'}`}><div className="llm-status-copy"><strong>LLM {llm?.configured ? '已配置' : '未配置'}</strong><span>{llm?.configured ? `${llm.model} · ${llm.base_url} · 思考级别：${llm.reasoning_effort || '模型默认'}` : '请在 .env 中设置 LLM_API_KEY 和 LLM_MODEL，重启后自动处理等待项。'}</span></div><button className="ghost" onClick={() => void refreshStatus()} disabled={refreshing} aria-busy={refreshing}><RefreshCcw className={refreshing ? 'is-spinning' : ''} />{refreshing ? '正在刷新…' : '刷新补全状态'}</button></div>

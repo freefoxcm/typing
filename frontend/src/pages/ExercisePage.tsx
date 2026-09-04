@@ -90,6 +90,8 @@ export function ExercisePage() {
   const codeTimersRef = useRef(new Map<number, number>())
   const codeSavesRef = useRef(new Map<number, { code: string; promise: Promise<boolean> }>())
   const activeAnswerSavesRef = useRef(0)
+  const pendingAnswersRef = useRef(new Map<number, ExerciseSessionItem['answer']>())
+  const answerSavesRef = useRef(new Map<number, Promise<boolean>>())
   const syntaxTimersRef = useRef(new Map<number, number>())
   const syntaxControllersRef = useRef(new Map<number, AbortController>())
   const syntaxVersionsRef = useRef(new Map<number, number>())
@@ -142,7 +144,7 @@ export function ExercisePage() {
   }, [session?.status, load])
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!pendingCodesRef.current.size) return
+      if (!pendingCodesRef.current.size && !pendingAnswersRef.current.size) return
       event.preventDefault()
       event.returnValue = ''
     }
@@ -158,20 +160,33 @@ export function ExercisePage() {
   const item = session?.items[index]
   const unanswered = useMemo(() => session?.items.filter((candidate) => candidate.answer.status === 'unanswered').length ?? 0, [session])
 
-  const updateLocal = (itemId: number, patch: Partial<ExerciseSessionItem['answer']>) => setSession((current) => {
-    if (!current) return current
+  const updateLocal = (itemId: number, patch: Partial<ExerciseSessionItem['answer']>) => {
+    const current = sessionRef.current
+    if (!current) return
     const next = { ...current, items: current.items.map((candidate) => candidate.id === itemId ? { ...candidate, answer: { ...candidate.answer, ...patch } } : candidate) }
     sessionRef.current = next
-    return next
-  })
-  const save = async (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>) => {
-    const next = { ...target.answer, ...patch }
-    updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || (next.blank_answers || []).some((value) => value.trim()) || next.code.trim() ? 'answered' : 'unanswered' })
+    setSession(next)
+  }
+  const persistAnswer = (itemId: number): Promise<boolean> => {
+    const inFlight = answerSavesRef.current.get(itemId)
+    if (inFlight) return inFlight
+    const promise = sendPendingAnswers(itemId).finally(() => {
+      answerSavesRef.current.delete(itemId)
+    })
+    answerSavesRef.current.set(itemId, promise)
+    return promise
+  }
+  const sendPendingAnswers = async (itemId: number): Promise<boolean> => {
     activeAnswerSavesRef.current += 1
     setSaveState('saving')
     setError('')
     try {
-      await api(`/api/exercises/sessions/${sessionId}/answers/${target.id}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, blank_answers: next.blank_answers || [], code: next.code }) })
+      // Serialize writes for each question so an older response cannot overwrite a newer answer.
+      while (pendingAnswersRef.current.has(itemId)) {
+        const next = pendingAnswersRef.current.get(itemId)!
+        await api(`/api/exercises/sessions/${sessionId}/answers/${itemId}`, { method: 'POST', ...jsonBody({ selected_option_ids: next.selected_option_ids, bool_answer: next.bool_answer, blank_answers: next.blank_answers || [], code: next.code }) })
+        if (pendingAnswersRef.current.get(itemId) === next) pendingAnswersRef.current.delete(itemId)
+      }
       return true
     } catch (e) {
       setError(e instanceof Error ? e.message : '答案保存失败')
@@ -179,10 +194,18 @@ export function ExercisePage() {
       return false
     } finally {
       activeAnswerSavesRef.current = Math.max(0, activeAnswerSavesRef.current - 1)
-      if (activeAnswerSavesRef.current === 0 && pendingCodesRef.current.size === 0) {
+      if (activeAnswerSavesRef.current === 0 && pendingAnswersRef.current.size > 0) setSaveState('error')
+      if (activeAnswerSavesRef.current === 0 && pendingCodesRef.current.size === 0 && pendingAnswersRef.current.size === 0) {
         setSaveState((current) => current === 'error' ? 'error' : 'saved')
       }
     }
+  }
+  const save = (target: ExerciseSessionItem, patch: Partial<ExerciseSessionItem['answer']>) => {
+    const answer = sessionRef.current?.items.find((candidate) => candidate.id === target.id)?.answer ?? target.answer
+    const next = { ...answer, ...patch }
+    updateLocal(target.id, { ...patch, status: next.selected_option_ids.length || next.bool_answer !== null || (next.blank_answers || []).some((value) => value.trim()) || next.code.trim() ? 'answered' : 'unanswered' })
+    pendingAnswersRef.current.set(target.id, next)
+    return persistAnswer(target.id)
   }
   const persistCode = async (itemId: number, code: string): Promise<boolean> => {
     const timer = codeTimersRef.current.get(itemId)
@@ -351,9 +374,10 @@ export function ExercisePage() {
   }
   const flushPendingSaves = async () => {
     const pending = [...pendingCodesRef.current.entries()]
-    if (!pending.length) return true
     const results = await Promise.all(pending.map(([itemId, code]) => persistCode(itemId, code)))
-    return results.every(Boolean) && pendingCodesRef.current.size === 0
+    if (!results.every(Boolean) || pendingCodesRef.current.size) return false
+    const answers = await Promise.all([...pendingAnswersRef.current.keys()].map(persistAnswer))
+    return answers.every(Boolean) && pendingAnswersRef.current.size === 0
   }
   const persistPosition = async (nextIndex: number) => {
     const current = sessionRef.current
@@ -362,12 +386,15 @@ export function ExercisePage() {
     setSaveState('saving')
     try {
       const saved = await api<{ session_item_id: number; sort_order: number }>(`/api/exercises/sessions/${current.id}/position`, {
-        method: 'PATCH', ...jsonBody({ session_item_id: target.id }),
+        method: 'POST', ...jsonBody({ session_item_id: target.id }),
       })
-      const updated = { ...current, current_item_sort_order: saved.sort_order ?? target.sort_order }
+      const updated = { ...(sessionRef.current ?? current), current_item_sort_order: saved.sort_order ?? target.sort_order }
       sessionRef.current = updated
       setSession(updated)
-      if (!pendingCodesRef.current.size && activeAnswerSavesRef.current === 0) setSaveState('saved')
+      if (!pendingCodesRef.current.size && !pendingAnswersRef.current.size && activeAnswerSavesRef.current === 0) {
+        setError('')
+        setSaveState('saved')
+      }
       return true
     } catch (e) {
       setError(e instanceof Error ? e.message : '当前位置保存失败')
@@ -389,6 +416,8 @@ export function ExercisePage() {
       await navigationChainRef.current
       if (!await flushPendingSaves()) return
       if (!await persistPosition(indexRef.current)) return
+      // An answer can be edited while the position request is still in flight.
+      if (!await flushPendingSaves()) return
       navigate('/')
     } catch (e) {
       setError(e instanceof Error ? e.message : '答案保存失败')
