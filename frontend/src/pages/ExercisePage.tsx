@@ -6,6 +6,7 @@ import { useUnsavedChanges } from '../components/UnsavedChanges'
 import { inlineMarkdown, MarkdownText } from '../components/MarkdownText'
 import type { PythonFormatStatus, PythonSyntaxDiagnostic } from '../components/PythonCodeEditor'
 import type { ExerciseSession, ExerciseSessionItem } from '../types'
+import { RewardCard, useReward } from '../components/RewardProvider'
 
 type SampleResult = { status: string; job_id?: string; cases?: { id?: number; status: string; duration_ms: number; stdout?: string; stderr?: string }[] }
 type TextEdit = { value: string; selectionStart: number; selectionEnd: number }
@@ -72,6 +73,8 @@ export function ExercisePage() {
   const { sessionId } = useParams()
   const navigate = useNavigate()
   const [session, setSession] = useState<ExerciseSession | null>(null)
+  const { refresh: refreshReward } = useReward()
+  useEffect(() => { if (session?.status === 'completed') void refreshReward() }, [session?.id, session?.status, refreshReward])
   const [index, setIndex] = useState(0)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -519,6 +522,7 @@ export function ExercisePage() {
   const abandoned = session.status === 'abandoned'
   return <div className="page exercise-page">
     <header className="exercise-header">{editable ? <button className="back-link exercise-save-exit" onClick={() => void saveAndExit()}><ArrowLeft />保存并退出</button> : <Link className="back-link" to="/"><ArrowLeft />返回首页</Link>}<div><p className="eyebrow">{complete ? '练习结果' : abandoned ? '练习已放弃' : session.mode === 'set' ? '整套练习' : session.mode === 'random' ? '随机练习' : '错题重练'}</p><h1>{session.title}</h1></div><div className="exercise-score">{complete ? <><strong>{session.score}</strong><span>/ {session.max_score} 分</span></> : <><strong>{index + 1}</strong><span>/ {session.items.length}</span></>}</div></header>
+    {complete && <RewardCard />}
     {error && <p className="notice error">{error}</p>}{message && <p className="notice success">{message}</p>}
     {resultRefreshNeeded && <div className="notice" role="status">提交状态确认前已暂停编辑。<button className="ghost" disabled={resultRefreshing} onClick={() => void refreshSubmission()}>{resultRefreshing ? '正在确认…' : '重新确认提交结果'}</button></div>}
     {session.status === 'judging' && <div className="judging-banner"><Clock3 /><div><strong>正在自动判题</strong><p>隐藏测试点在隔离环境中运行，结果会自动刷新。</p></div></div>}

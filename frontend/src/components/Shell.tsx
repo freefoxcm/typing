@@ -5,6 +5,7 @@ import { api } from '../api'
 import type { Me } from '../types'
 import { SiteFooter } from './SiteFooter'
 import { useConfirmLeave } from './UnsavedChanges'
+import { RewardProvider } from './RewardProvider'
 
 export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
   const navigate = useNavigate()
@@ -29,7 +30,7 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
       loggingOutRef.current = false; setLoggingOut(false)
     }
   }
-  return (
+  const content = (
     <div className="app-shell">
       <header className="topbar">
         <Link className="brand" to={me.role === 'admin' ? '/admin' : '/'}><Keyboard /> 码力全开</Link>
@@ -44,4 +45,5 @@ export function Shell({ me, children }: { me: Me; children: React.ReactNode }) {
       <SiteFooter />
     </div>
   )
+  return me.role === 'child' ? <RewardProvider childId={me.actor_id}>{content}</RewardProvider> : content
 }

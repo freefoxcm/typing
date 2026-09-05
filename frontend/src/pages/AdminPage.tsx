@@ -21,8 +21,9 @@ import { AdminReportsPanel } from './AdminReportsPanel'
 import { WordLibraryPanel } from './WordLibraryPanel'
 import { QuestionLibraryPanel } from './QuestionLibraryPanel'
 import { useRefreshRecovery } from '../components/RefreshRecovery'
+import { RewardSettingsPanel } from './RewardSettingsPanel'
 
-type Tab = 'children' | 'library' | 'words' | 'questions' | 'import' | 'reports'
+type Tab = 'children' | 'library' | 'words' | 'questions' | 'import' | 'reports' | 'settings'
 type TransferTab = 'typing' | 'words' | 'questions'
 type AdminAction = (work: () => Promise<unknown>, success: string, reload?: () => Promise<unknown>) => Promise<boolean>
 
@@ -60,6 +61,7 @@ function AdminPageContent({ notify }: { notify: AdminNotifier }) {
           <button className={tab === 'questions' ? 'active' : ''} onClick={() => setTab('questions')}><FileQuestion />习题题库</button>
           <button className={tab === 'import' ? 'active' : ''} onClick={() => setTab('import')}><FileUp />导入导出</button>
           <button className={tab === 'reports' ? 'active' : ''} onClick={() => setTab('reports')}><BarChart3 />学习报告</button>
+          <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}><Pencil />彩蛋设置</button>
         </nav>
       </aside>
       <section className="admin-content">
@@ -71,6 +73,7 @@ function AdminPageContent({ notify }: { notify: AdminNotifier }) {
         {tab === 'questions' && <QuestionLibraryPanel notify={notify} />}
         {tab === 'import' && <ImportPanel courses={courses} reload={loadLibrary} action={action} />}
         {tab === 'reports' && <AdminReportsPanel children={children} notify={notify} />}
+        {tab === 'settings' && <RewardSettingsPanel />}
       </section>
     </div>
   )

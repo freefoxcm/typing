@@ -20,3 +20,12 @@ The original descriptive notices have been retained in the converted data where 
 - License: `MIT`
 
 KaTeX renders TeX-compatible mathematics in exercise content. Its license text is available at [LICENSES/KaTeX-MIT.txt](LICENSES/KaTeX-MIT.txt).
+
+## Three.js
+
+- Component: `backend/game_assets/kart-racer/vendor/three.min.js`, version 0.180.0
+- Upstream project: <https://github.com/mrdoob/three.js>
+- Copyright: 2010–2025 three.js authors
+- License: `MIT`
+
+The locally bundled engine renders the reward kart game without a CDN. Its license is retained at [three.LICENSE.txt](backend/game_assets/kart-racer/vendor/three.LICENSE.txt).

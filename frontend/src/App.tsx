@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { UnsavedChangesProvider } from './components/UnsavedChanges'
 import { api, ApiError } from './api'
@@ -10,6 +10,7 @@ import { PracticePage } from './pages/PracticePage'
 import { ExercisePage } from './pages/ExercisePage'
 import { WordPracticePage } from './pages/WordPracticePage'
 import type { Me } from './types'
+const RewardPlayPage = lazy(() => import('./pages/RewardPlayPage').then(module => ({ default: module.RewardPlayPage })))
 
 function AppRoutes() {
   const [me, setMe] = useState<Me | null | undefined>(undefined)
@@ -29,6 +30,7 @@ function AppRoutes() {
   if (me === undefined && authError) return <div className="loading-screen"><p className="notice error" role="alert">暂时无法确认登录状态：{authError}</p><button onClick={() => setAttempt((value) => value + 1)}>重试连接</button></div>
   if (me === undefined) return <div className="loading-screen"><div className="loading-keys"><kbd>F</kbd><kbd>J</kbd></div><p>正在准备键盘…</p></div>
   return <Routes>
+    <Route path="/rewards/play" element={me?.role === 'child' ? <Shell me={me}><Suspense fallback={<p className="page">正在打开游戏时光…</p>}><RewardPlayPage /></Suspense></Shell> : <Navigate to="/login" replace />} />
     <Route path="/login" element={me ? <Navigate to={me.role === 'admin' ? '/admin' : '/'} replace /> : <LoginPage onLogin={setMe} />} />
     <Route path="/" element={me?.role === 'child' ? <Shell me={me}><ChildHomePage me={me} /></Shell> : <Navigate to={me?.role === 'admin' ? '/admin' : '/login'} replace />} />
     <Route path="/practice/:lessonId" element={me?.role === 'child' ? <Shell me={me}><PracticePage /></Shell> : <Navigate to="/login" replace />} />
