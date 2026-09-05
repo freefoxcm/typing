@@ -6,7 +6,7 @@ from typing import Any
 
 import black
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -25,6 +25,7 @@ from ..models import (
     WrongQuestion,
 )
 from ..security import Principal, require_child
+from ..easter_eggs import award_completed
 
 
 router = APIRouter(prefix="/api/exercises", tags=["exercises"])
@@ -577,11 +578,18 @@ def _update_wrong(db: Session, child_id: int, item: ExerciseSessionItem, full_cr
 
 
 def _finish(session: ExerciseSession, db: Session) -> None:
+    # Claim completion before updating wrong questions or issuing the daily reward.
+    claim = db.execute(update(ExerciseSession).where(ExerciseSession.id == session.id, ExerciseSession.completed_at.is_(None)).values(completed_at=datetime.utcnow()).execution_options(synchronize_session=False))
+    if not claim.rowcount:
+        db.rollback()
+        db.refresh(session)
+        return
     session.score = sum((item.answer.awarded_points if item.answer else 0) for item in session.items)
     session.status = "completed"
     session.completed_at = datetime.utcnow()
     for item in session.items:
         _update_wrong(db, session.child_id, item, bool(item.answer and item.answer.awarded_points == item.points))
+    award_completed(db, session)
     db.commit()
 
 
@@ -620,7 +628,7 @@ def submit_session(session_id: int, principal: Principal = Depends(require_child
         answer.details_json = json.dumps({"job_id": job_id}, ensure_ascii=False)
         has_jobs = True
     session.submitted_at = datetime.utcnow()
-    session.status = "judging" if has_jobs else "completed"
+    session.status = "judging"
     db.commit()
     if has_jobs:
         return {"id": session.id, "status": "judging"}

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><!--REWARD_CONTEXT--><script src="_shared/bridge.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f7f1">
+  <title>码力全开 · 卡丁赛车</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <script defer src="vendor/three.min.js"></script>
+  <script defer src="js/tracks.js"></script>
+  <script defer src="js/core.js"></script>
+  <script defer src="js/world.js"></script>
+  <script defer src="js/audio.js"></script>
+  <script defer src="js/game.js"></script>
+<link rel="stylesheet" href="_shared/embedded.css"></head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0c5-5 9 5 15 0v11c-6 5-10-5-15 0"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="m12 4-6 5H3v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-muted" viewBox="0 0 24 24"><path d="m12 4-6 5H3v6h3l6 5V4Zm5 5 5 6m0-6-5 6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-wheel" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="m4 8 5 3m6 0 5-3m-8 7v6"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m14 2-11 12h8l-1 8 11-12h-8l1-8Z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M7 3h10v7a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 4 4m10-7h4v3a4 4 0 0 1-4 4m-5 3v6m-5 0h10"/></symbol>
+  </svg>
+  <header class="site-header">
+    <a class="brand" href="./index.html" aria-label="风驰卡丁车首页">
+      <span class="brand-mark"><svg><use href="#i-wheel"/></svg></span>
+      <span><strong>BREEZE<span> KART</span></strong><small>风 驰 卡 丁 车</small></span>
+    </a>
+    <nav class="header-nav" aria-label="主导航"><span class="nav-active">开始竞速</span><button id="guide-button">驾驶指南 <span>↗</span></button></nav>
+    <div class="header-actions">
+      <span class="local-badge"><i></i> 随时出发</span>
+      <button id="sound-button" class="icon-button" aria-label="关闭声音" title="声音"><svg><use href="#i-sound"/></svg></button>
+      <button id="fullscreen-button" class="icon-button" aria-label="全屏游戏" title="全屏"><svg><use href="#i-expand"/></svg></button>
+    </div>
+  </header>
+  <main id="app">
+    <section class="intro" id="intro">
+      <div><p class="eyebrow"><span></span> A LITTLE DRIFT. A LOT OF JOY.</p><h1>把快乐，开到<span>全速。</span><svg class="title-star" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 0 24 14 38 8 28 20 40 25 25 26 23 40 17 27 4 35 12 22 0 16 15 16Z"/></svg></h1><p class="intro-copy">戴好头盔，挑一条喜欢的路。下一个弯，就是你的主场。</p></div>
+      <div class="intro-stamp"><svg><use href="#i-flag"/></svg><span>GOOD VIBES.<br>GREAT RIDES.</span></div>
+    </section>
+    <div class="game-layout">
+      <section id="stage" class="stage" aria-label="3D 卡丁车赛车场景">
+        <canvas id="game-canvas" tabindex="0" aria-label="游戏画面，使用方向键驾驶，Shift 漂移，空格氮气"></canvas>
+        <div class="preview-top menu-only"><span class="mode-pill"><svg><use href="#i-flag"/></svg> 自由竞速</span><span class="live-label"><i></i> LIVE PREVIEW</span></div>
+        <div class="preview-bottom menu-only"><div><span id="preview-english" class="eyebrow">SUNSHINE COAST</span><h2 id="preview-title">晴风海岸</h2><p id="preview-description">海风刚好，沿着蓝色海岸全速出发。</p></div><span class="preview-number" id="preview-number">01<span> / 03</span></span></div>
+        <div id="loading" class="loading"><span class="spinner"></span><p>正在给轮胎充气…</p></div>
+        <div id="error-panel" class="error-panel" hidden><svg><use href="#i-wheel"/></svg><h2>赛车场暂时无法启动</h2><p id="error-message">请使用支持 WebGL 的新版浏览器，并启用硬件加速。</p><button onclick="location.reload()" class="primary-button">重新加载</button></div>
+        <div id="race-hud" class="race-hud" hidden>
+          <div class="hud-top"><div class="position-panel"><span class="hud-label">POSITION</span><div><strong id="position">6</strong><span> / 6</span></div></div><div class="lap-panel"><span class="hud-label">LAP</span><strong><span id="lap">1</span><small> / 3</small></strong></div><div class="time-panel"><span class="hud-label">比赛用时</span><strong id="race-time">00:00.000</strong><span id="lap-time" class="lap-time">本圈 00:00.000</span></div><button id="pause-button" class="icon-button" aria-label="暂停比赛"><svg><use href="#i-pause"/></svg></button></div>
+          <ol id="leaderboard" class="leaderboard" aria-label="实时排名"></ol>
+          <div class="map-panel"><span id="map-title">晴风海岸</span><canvas id="minimap" width="280" height="240" aria-label="赛道与车手位置小地图"></canvas><span class="map-caption"><i></i> 你的位置</span></div>
+          <div class="speed-panel"><div class="speed-top"><strong id="speed">0</strong><span>KM/H</span></div><div class="speed-ticks"><i id="speed-bar"></i></div><span id="drive-status">准备出发</span></div>
+          <div class="nitro-panel" id="nitro-panel"><div id="drift-feedback" class="drift-feedback" aria-hidden="true"><strong>DRIFT</strong><span>漂移集气</span></div><div class="nitro-top"><span><svg><use href="#i-bolt"/></svg> NITRO</span><span><kbd>SPACE</kbd> 释放</span></div><div class="nitro-slots"><div class="nitro-slot" id="nitro-1"><svg><use href="#i-bolt"/></svg><span>N₂O</span></div><div class="nitro-slot" id="nitro-2"><svg><use href="#i-bolt"/></svg><span>N₂O</span></div></div><div class="charge-track"><i id="charge-bar"></i></div><span id="charge-label">按住 Shift 转弯 · 漂移集气</span></div>
+          <div class="race-shortcuts"><kbd>↑</kbd> 加速 <kbd>← →</kbd> 转向 <kbd>SHIFT</kbd> 漂移 <kbd>R</kbd> 复位</div>
+        </div>
+        <div id="countdown" class="countdown" hidden aria-live="assertive"><span>READY TO RACE</span><strong>3</strong><p>按住 ↑ 或 W，准备出发</p></div>
+        <div id="toast" class="toast" role="status" hidden></div>
+        <div id="wrong-way" class="wrong-way" hidden>↶ 逆行啦！请掉头返回赛道</div>
+        <div id="boost-vignette" class="boost-vignette"></div>
+        <div id="pause-overlay" class="overlay" hidden><section class="dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><span class="dialog-icon"><svg><use href="#i-pause"/></svg></span><p class="eyebrow">TAKE A BREATHER</p><h2 id="pause-title">歇一会儿，再出发。</h2><p>赛道和对手都在等你。</p><button id="resume-button" class="primary-button">继续比赛 <svg><use href="#i-arrow"/></svg></button><button id="restart-button" class="secondary-button">重新开始</button><button id="menu-button" class="text-button">返回选赛道</button></section></div>
+        <div id="results-overlay" class="overlay" hidden><section class="dialog results-dialog" role="dialog" aria-modal="true" aria-labelledby="results-title"><span class="dialog-icon"><svg><use href="#i-trophy"/></svg></span><p class="eyebrow">THAT WAS A GREAT RIDE</p><h2 id="results-title">漂亮完赛！</h2><p id="result-subtitle">下一个弯，继续超越。</p><div class="result-stats"><div><span>完赛名次</span><strong id="result-place">1<small> / 6</small></strong></div><div><span>比赛用时</span><strong id="result-time">00:00.000</strong></div></div><p id="record-label" class="record-label"></p><ol id="result-laps" class="result-laps"></ol><button id="again-button" class="primary-button">再跑一场 <svg><use href="#i-arrow"/></svg></button><button id="results-menu-button" class="text-button">换一条赛道</button></section></div>
+      </section>
+      <aside id="setup" class="setup">
+        <div class="setup-heading"><span class="eyebrow">LET'S RACE</span><span class="step-label">01 — 03</span></div>
+        <h2>今天，去哪兜风？</h2>
+        <div id="track-list" class="track-list" role="group" aria-label="选择赛道"></div>
+        <div class="kart-options"><div><span class="option-label">选个好心情</span><small>你的赛车颜色</small></div><div class="color-options" role="group" aria-label="赛车颜色"><button class="color-choice selected" data-color="#f17b46" style="--swatch:#f17b46" aria-label="日落橙" aria-pressed="true"></button><button class="color-choice" data-color="#3fafa7" style="--swatch:#3fafa7" aria-label="薄荷绿" aria-pressed="false"></button><button class="color-choice" data-color="#8596d3" style="--swatch:#8596d3" aria-label="晴空蓝" aria-pressed="false"></button></div></div>
+        <div class="race-details"><span><svg><use href="#i-wheel"/></svg> 6 位车手</span><span><svg><use href="#i-flag"/></svg> 3 圈竞速</span></div>
+        <button id="start-button" class="primary-button" disabled>开始比赛 <svg><use href="#i-arrow"/></svg></button>
+        <p class="best-time"><svg><use href="#i-trophy"/></svg><span id="best-time">新的赛道，等你留下纪录</span></p>
+      </aside>
+    </div>
+    <section id="control-strip" class="control-strip" aria-label="快捷操作提示"><div class="control-title"><svg><use href="#i-wheel"/></svg><span>上手很简单<small>快乐不设门槛</small></span></div><div class="control-item"><div class="key-group"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div><span>驾驶赛车<small>方向键也可以</small></span></div><div class="control-item"><kbd>SHIFT</kbd><span>漂移过弯<small>按住转向，积攒氮气</small></span></div><div class="control-item"><kbd>SPACE</kbd><span>氮气加速<small>直道超车，就现在</small></span></div><button id="more-guide" class="text-button">完整指南 <span>↗</span></button></section>
+    <footer id="footer"><span>为每一个想兜风的你而造。</span><span>NO DOWNLOAD. JUST DRIVE. <i>✳</i></span><span>原创街机竞速 · v1.0</span></footer>
+  </main>
+  <div id="guide-overlay" class="overlay global-overlay" hidden><section class="dialog guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guide-title"><button id="close-guide" class="icon-button close-button" aria-label="关闭驾驶指南"><svg><use href="#i-close"/></svg></button><p class="eyebrow">A QUICK PIT STOP</p><h2 id="guide-title">每一个弯，都能很漂亮。</h2><p>和 5 位电脑车手比赛，顺着赛道完成 3 圈。</p><dl class="guide-controls"><div><dt><kbd>W / ↑</kbd></dt><dd>加速前进</dd></div><div><dt><kbd>S / ↓</kbd></dt><dd>刹车，停下后倒车</dd></div><div><dt><kbd>A D / ← →</kbd></dt><dd>左右转向</dd></div><div><dt><kbd>SHIFT + 转向</kbd></dt><dd>提速后漂移，持续漂移可集满一瓶氮气</dd></div><div><dt><kbd>SPACE</kbd></dt><dd>消耗一瓶氮气，获得短时加速；最多存两瓶</dd></div><div><dt><kbd>R</kbd> <kbd>ESC</kbd></dt><dd>回到赛道 / 暂停比赛</dd></div></dl><div class="guide-tip"><svg><use href="#i-bolt"/></svg><p>入弯前稍微松开油门，按住 Shift 配合转向。出弯再用氮气，会跑得更快。</p></div><p class="guide-footnote">电脑键盘游玩 · 离开窗口自动暂停 · 声音可随时关闭</p><button id="guide-done" class="primary-button">记住了，去兜风 <svg><use href="#i-arrow"/></svg></button></section></div>
+  <noscript><p class="noscript">队长，请开启浏览器 JavaScript 后再开始比赛。</p></noscript>
+</body>
+</html>

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import type { Course, ExerciseSessionSummary, Me, QuestionSetSummary, WordSetSummary } from '../types'
 import { ExerciseHomeSection } from './ExerciseHomeSection'
+import { RewardCard } from '../components/RewardProvider'
 
 type PracticeArea = 'words' | 'typing' | 'exercises'
 
@@ -80,6 +81,7 @@ export function ChildHomePage({ me }: { me: Me }) {
         <div><Gauge /><span><strong>{best}</strong>{bestEntry?.version === 1 ? '历史最快字符/分钟' : '最快字符/分钟'}</span></div>
         <div><BookOpen /><span><strong>{courses.length + wordSets.length + questionSets.length}</strong>可选练习</span></div>
       </section>
+      <RewardCard compact />
       {error && <p className="notice error">{error}</p>}
       {courses.length === 0 && wordSets.length === 0 && questionSets.length === 0 && activeExerciseSessions.length === 0 && !error && <div className="empty-state"><BookOpen /><h2>还没有可练习的内容</h2><p>请管理员进入后台添加课程、单词集或习题题套。</p></div>}
       {availableAreas.length > 0 && <section className="practice-hub" aria-label="练习模式">

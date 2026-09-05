@@ -1,0 +1,6 @@
+{
+  "name": "typing-reward-browser-tests",
+  "private": true,
+  "scripts": { "test": "node rewards.browser.cjs && node rewards.resilience.cjs" },
+  "devDependencies": { "@playwright/test": "1.63.0" }
+}

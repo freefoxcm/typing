@@ -10,7 +10,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import Settings, get_settings
 from .database import Base, create_db
-from .routers import admin, admin_exercises, admin_words, auth, exercises, library, practice
+from .routers import admin, admin_exercises, admin_words, auth, exercises, library, practice, easter_eggs
 from .seed import bootstrap
 from .question_imports import question_import_worker
 from .question_recognition import question_recognition_worker
@@ -74,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_words.router)
     app.include_router(admin_exercises.router)
     app.include_router(exercises.router)
+    app.include_router(easter_eggs.router)
 
     dist = Path(settings.frontend_dist)
     assets = dist / "assets"

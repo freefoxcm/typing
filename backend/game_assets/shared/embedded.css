@@ -1,0 +1,25 @@
+@import url('tokens.css');
+/* One application chrome; game engines keep their own rendering and layout. */
+html,body{margin:0!important;background:var(--paper)!important;color:var(--ink)!important;font-family:var(--reward-font)!important;min-width:300px}
+body>.header,body>.site-header,.intro,main>footer,#footer,.game-layout>aside:not(.setup),.control-strip,.game-bottom #fullscreen,.world-section .eyebrow,.world-section .map-label{display:none!important}
+body>main,body>#app{max-width:none!important;margin:0!important;padding:12px!important}
+.game-layout{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:16px!important;margin:0!important}
+.game-screen,.stage{border-radius:14px!important;border:1px solid var(--line)!important;box-shadow:none!important}
+.game-top,.game-bottom{background:var(--paper)!important;color:var(--ink)!important;padding:10px 12px!important}
+.world-section{margin-top:20px!important}.world-section h2{font-size:20px!important}.world-section h2 span{font-size:12px!important}
+.world-grid{gap:12px!important}.world-card,.setup,.dialog,.story-card{background:var(--paper)!important;border:1px solid var(--line)!important;border-radius:16px!important;color:var(--ink)!important;box-shadow:var(--shadow)!important}
+button,kbd{font-family:var(--reward-font)!important}button{border-radius:10px!important}
+.primary,.primary-button{background:var(--coral)!important;color:white!important;border:0!important;box-shadow:0 4px 0 #bd3d2b!important;font-weight:700!important}
+.secondary-button,.text-button,.level-buttons button{color:var(--navy)!important}.track-card.selected,.level-buttons button.current{border-color:var(--teal)!important;background:#edf7f6!important}
+.start-overlay{background:rgba(255,253,247,.95)!important;color:var(--ink)!important}.start-overlay h2,.start-overlay p,.overlay-tag,.overlay-hint{color:var(--ink)!important}
+.overlay-tag,.eyebrow{color:var(--coral)!important}.hud{background:rgba(23,63,95,.92)!important;color:white!important}
+.controls{background:#edf2f2!important;border-radius:12px!important;margin:10px 0!important}.game-bottom{border-radius:0 0 12px 12px!important}
+.stage{height:min(65vh,650px)!important;min-height:400px!important}.racing .stage{height:calc(100dvh - 24px)!important;min-height:400px!important}
+.setup{padding:20px!important}.setup-heading,.setup>.eyebrow,.setup>h2{display:none!important}.setup .track-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.setup .track-card{margin:0!important}
+.setup .kart-options{margin:14px 0!important}.setup .primary-button{margin-top:12px!important}.racing .setup{display:none!important}
+.dialog h2{font-size:24px!important}.dialog p{color:var(--muted)!important}.dialog-icon{background:#fff1b9!important;color:var(--navy)!important}
+dialog{max-width:min(500px,calc(100vw - 32px))!important;max-height:calc(100dvh - 32px)!important;overflow:auto!important;font-family:var(--reward-font)!important;border-color:var(--line)!important}dialog p{color:var(--muted)!important}
+.hud-label{font-size:11px!important;letter-spacing:.08em!important}.leaderboard li{font-size:11px!important}.race-shortcuts{font-size:11px!important}.hud-player small,.hud-stats{font-family:var(--reward-font)!important}.start-overlay{background:rgba(255,253,247,.86)!important}.stage .hud-top{padding:12px;border-radius:12px;background:linear-gradient(90deg,#173f5f9c,transparent)}
+.game-locked-hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);padding:10px 18px;background:var(--navy);color:white;border-radius:12px;z-index:1000;font-size:14px;pointer-events:none}
+@media(max-width:700px){.world-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.setup .track-list{grid-template-columns:1fr}.stage{min-height:340px!important}.world-art{height:90px!important}.world-copy{padding:12px!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}

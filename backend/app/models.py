@@ -308,6 +308,37 @@ class ExerciseSession(Base):
     items: Mapped[list["ExerciseSessionItem"]] = relationship(back_populates="session", cascade="all, delete-orphan", order_by="ExerciseSessionItem.sort_order")
 
 
+class EasterEggSettings(Base):
+    __tablename__ = "easter_egg_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class EasterEggReward(Base):
+    __tablename__ = "easter_egg_rewards"
+    __table_args__ = (UniqueConstraint("child_id", "reward_date", name="uq_reward_child_date"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    child_id: Mapped[int] = mapped_column(ForeignKey("child_profiles.id", ondelete="CASCADE"), index=True)
+    reward_date: Mapped[str] = mapped_column(String(10))
+    source_session_id: Mapped[Optional[int]] = mapped_column(ForeignKey("exercise_sessions.id", ondelete="SET NULL"), nullable=True)
+    config_json: Mapped[str] = mapped_column(Text)
+    games_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="available")
+    display_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EasterEggPlaySession(Base):
+    __tablename__ = "easter_egg_play_sessions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reward_id: Mapped[int] = mapped_column(ForeignKey("easter_egg_rewards.id", ondelete="CASCADE"), unique=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    game_id: Mapped[str] = mapped_column(String(32))
+    instance_id: Mapped[str] = mapped_column(String(64))
+    lease_until: Mapped[datetime] = mapped_column(DateTime)
+
+
 class ExerciseSessionItem(Base):
     __tablename__ = "exercise_session_items"
     __table_args__ = (UniqueConstraint("session_id", "sort_order", name="uq_exercise_session_item_order"),)

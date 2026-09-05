@@ -6,6 +6,7 @@ WORKDIR /build/frontend
 COPY frontend/package*.json frontend/.npmrc ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
+COPY backend/game_assets/shared/tokens.css /build/backend/game_assets/shared/tokens.css
 RUN npx tsc -p tsconfig.build.json && npx vite build --config vite.config.js
 
 FROM python:3.13-slim AS runtime
